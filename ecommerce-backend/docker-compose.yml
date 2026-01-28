@@ -1,0 +1,131 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-django-insecure-dev-key}
+      - DJANGO_DEBUG=True
+      - DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend
+      - ENVIRONMENT_NAME=local
+      - DB_CONNECTION={"dbname":"ecommerce","username":"postgres","password":"postgres","host":"db","port":"5432"}
+      - REDIS_CONNECTION=redis://redis:6379
+      - HASHID_FIELD_SALT=dev-salt
+      - STRIPE_CHECKS_ENABLED=False
+      - EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    networks:
+      - backend-network
+
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A apps.tasks worker -l info
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-django-insecure-dev-key}
+      - DB_CONNECTION={"dbname":"ecommerce","username":"postgres","password":"postgres","host":"db","port":"5432"}
+      - REDIS_CONNECTION=redis://redis:6379
+      - HASHID_FIELD_SALT=dev-salt
+    depends_on:
+      - backend
+      - redis
+    volumes:
+      - .:/app
+    networks:
+      - backend-network
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A apps.tasks beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-django-insecure-dev-key}
+      - DB_CONNECTION={"dbname":"ecommerce","username":"postgres","password":"postgres","host":"db","port":"5432"}
+      - REDIS_CONNECTION=redis://redis:6379
+      - HASHID_FIELD_SALT=dev-salt
+    depends_on:
+      - backend
+      - redis
+    networks:
+      - backend-network
+
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=ecommerce
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "5432:5432"
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Optional: PgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@admin.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+    networks:
+      - backend-network
+    profiles:
+      - tools
+
+  # Optional: Redis Commander for Redis management
+  redis-commander:
+    image: rediscommander/redis-commander
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - backend-network
+    profiles:
+      - tools
+
+networks:
+  backend-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

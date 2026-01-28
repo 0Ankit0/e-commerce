@@ -1,0 +1,44 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+django = "==5.0.*"                               # Django framework core
+django-environ = "==0.11.*"                      # Django environment variable management
+djangorestframework = "==3.14.*"                 # Django REST framework for building APIs
+djangorestframework-simplejwt = "==5.2.*"        # JWT authentication for DRF
+psycopg2-binary = "==2.9.*"                      # PostgreSQL database adapter (binary)
+social-auth-app-django = "==5.0.*"               # Social authentication for Django
+social-auth-core = "==4.3.*"                     # Core social authentication
+dj-stripe = "==2.8.1"                            # Stripe integration for Django
+django-storages = "==1.13.*"                     # Storage backends for Django
+boto3 = "==1.23.*"                               # AWS SDK for Python
+django-ses = ">=3.5.2"                           # Amazon SES email backend for Django
+django-hosts = "==5.2.*"                         # Django hosts framework
+requests = "==2.28.*"                            # HTTP library for Python
+openai = ">=0.27.2"                              # OpenAI API client
+pydantic = ">=1.10.7"                            # Data validation and settings management
+django-extensions = "==3.2.*"                    # Additional Django management commands
+django-redis = "==5.4.*"                         # Redis integration for Django
+celery = ">=5.3.6"                               # Asynchronous task queue
+django-celery-results = ">=2.5.1"                # Celery result backend for Django
+django-celery-beat = ">=2.6.0"                   # Celery periodic task scheduler for Django
+redis = ">=4.5.0"                                # Redis client for Python
+sentry-sdk = "==1.36.*"                          # Sentry SDK for error tracking
+drf-yasg = "==1.21.*"                            # Swagger generation for DRF
+django-ratelimit = ">=4.0.0"                     # Rate limiting for Django views
+gunicorn = "==22.0.0"                            # WSGI HTTP server for UNIX
+whitenoise = "==6.3.*"                           # Static file serving for Django
+channels = ">=4.0.0"                             # Django Channels for WebSocket support
+channels-redis = ">=4.2.0"                       # Redis backend for Django Channels
+daphne = ">=4.0.0"                               # ASGI server for Django Channels
+
+[dev-packages]
+ruff = "*"
+mypy = "*"
+django-stubs = "*"
+pre-commit = "*"
+
+[requires]
+python_version = "3.12"
