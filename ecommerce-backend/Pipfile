@@ -33,6 +33,8 @@ whitenoise = "==6.3.*"                           # Static file serving for Djang
 channels = ">=4.0.0"                             # Django Channels for WebSocket support
 channels-redis = ">=4.2.0"                       # Redis backend for Django Channels
 daphne = ">=4.0.0"                               # ASGI server for Django Channels
+setuptools = "*"                                 # Package development and distribution
+django-hashid-field = "*"                        # Hashid field for Django models
 
 [dev-packages]
 ruff = "*"
