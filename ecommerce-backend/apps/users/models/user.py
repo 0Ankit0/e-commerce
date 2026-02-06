@@ -4,8 +4,6 @@ from django.db import models
 
 from apps.multitenancy.models import TenantMembership
 from common.acl.helpers import CommonGroups
-from common.models import ImageWithThumbnailMixin
-from common.storages import PublicS3Boto3StorageWithCDN, UniqueFilePathGenerator
 
 
 class UserManager(BaseUserManager):
@@ -22,6 +20,9 @@ class UserManager(BaseUserManager):
         user.save(using=self._db)
 
         user.groups.add(user_group)
+
+        # Import here to avoid circular dependency
+        from .user_profile import UserProfile
 
         UserProfile.objects.create(user=user)
 
@@ -74,31 +75,3 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def has_group(self, name):
         return self.groups.filter(name=name).exists()
-
-
-class UserAvatar(ImageWithThumbnailMixin, models.Model):
-    original = models.ImageField(
-        storage=PublicS3Boto3StorageWithCDN, upload_to=UniqueFilePathGenerator("avatars"), null=True
-    )
-    thumbnail = models.ImageField(
-        storage=PublicS3Boto3StorageWithCDN, upload_to=UniqueFilePathGenerator("avatars/thumbnails"), null=True
-    )
-
-    THUMBNAIL_SIZE = (128, 128)
-    ERROR_FIELD_NAME = "avatar"
-
-    def __str__(self) -> str:
-        return str(self.id)
-
-
-class UserProfile(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
-    first_name = models.CharField(max_length=40, blank=True, default="")
-    last_name = models.CharField(max_length=40, blank=True, default="")
-    avatar = models.OneToOneField(
-        UserAvatar, on_delete=models.SET_NULL, null=True, blank=True, related_name="user_profile"
-    )
-
-    def __str__(self) -> str:
-        full_name = f"{self.first_name} {self.last_name}".strip()
-        return full_name if full_name else self.user.email

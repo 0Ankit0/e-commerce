@@ -10,51 +10,10 @@ from rest_framework_simplejwt import serializers as jwt_serializers
 from rest_framework_simplejwt import tokens as jwt_tokens
 from rest_framework_simplejwt.serializers import PasswordField
 from rest_framework_simplejwt.settings import api_settings as jwt_api_settings
-from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.multitenancy.models import Tenant
-from common.decorators import context_user_required
-
-from . import jwt, models, notifications, tokens
-from .services import otp as otp_services
-from .services.users import get_role_names
-from .utils import generate_otp_auth_token
-
-UPLOADED_AVATAR_SIZE_LIMIT = 1 * 1024 * 1024
-
-
-class UserProfileSerializer(serializers.ModelSerializer):
-    id = rest.HashidSerializerCharField(source_field="users.User.id", source="user.id", read_only=True)
-    email = serializers.CharField(source="user.email", read_only=True)
-    roles = serializers.SerializerMethodField()
-    avatar = serializers.FileField(required=False)
-
-    class Meta:
-        model = models.UserProfile
-        fields = ("id", "first_name", "last_name", "email", "roles", "avatar")
-
-    @staticmethod
-    def validate_avatar(avatar):
-        if avatar and avatar.size > UPLOADED_AVATAR_SIZE_LIMIT:
-            raise exceptions.ValidationError({"avatar": _("Too large file")}, "too_large")
-
-        return avatar
-
-    def get_roles(self, obj):
-        return get_role_names(obj.user)
-
-    def to_representation(self, instance):
-        self.fields["avatar"] = serializers.FileField(source="avatar.thumbnail", default="")
-        return super().to_representation(instance)
-
-    def update(self, instance, validated_data):
-        avatar = validated_data.pop("avatar", None)
-        if avatar:
-            if not instance.avatar:
-                instance.avatar = models.UserAvatar()
-            instance.avatar.original = avatar
-            instance.avatar.save()
-        return super().update(instance, validated_data)
+from apps.users import jwt, models, notifications, tokens
+from apps.users.utils import generate_otp_auth_token
 
 
 class UserSignupSerializer(serializers.ModelSerializer):
@@ -305,75 +264,4 @@ class LogoutSerializer(serializers.Serializer):
     def create(self, validated_data):
         refresh = validated_data.pop("refresh")
         refresh.blacklist()
-        return {"ok": True}
-
-
-@context_user_required
-class GenerateOTPSerializer(serializers.Serializer):
-    base32 = serializers.CharField(read_only=True)
-    otpauth_url = serializers.CharField(read_only=True)
-
-    def create(self, validated_data):
-        otp_base32, otp_auth_url = otp_services.generate_otp(self.context_user)
-        return {"base32": otp_base32, "otpauth_url": otp_auth_url}
-
-
-@context_user_required
-class VerifyOTPSerializer(serializers.Serializer):
-    otp_verified = serializers.BooleanField(read_only=True)
-    otp_token = serializers.CharField(write_only=True)
-
-    def create(self, validated_data):
-        otp_services.verify_otp(self.context_user, validated_data.get("otp_token", ""))
-        return {"otp_verified": True}
-
-
-class ValidateOTPSerializer(serializers.Serializer):
-    user: models.User
-
-    otp_token = serializers.CharField(write_only=True)
-    otp_auth_token = serializers.CharField(required=False, write_only=True)
-    access = serializers.CharField(read_only=True)
-    refresh = serializers.CharField(read_only=True)
-
-    default_error_messages = {
-        "invalid_token": _(f"No valid token found in cookie '{settings.OTP_AUTH_TOKEN_COOKIE}'"),
-    }
-
-    def validate(self, attrs):
-        request = self.context["request"]
-
-        if not (
-            raw_otp_auth_token := request.COOKIES.get(settings.OTP_AUTH_TOKEN_COOKIE) or attrs.get("otp_auth_token")
-        ):
-            self.fail("invalid_token")
-
-        try:
-            otp_auth_token = jwt_tokens.AccessToken(raw_otp_auth_token)
-        except (jwt_exceptions.InvalidToken, jwt_exceptions.TokenError):
-            self.fail("invalid_token")
-
-        if not (user_id := otp_auth_token.get("user_id")):
-            self.fail("invalid_token")
-
-        try:
-            self.user = models.User.objects.get(id=user_id)
-        except models.User.DoesNotExist:
-            self.fail("invalid_token")
-
-        otp_services.validate_otp(self.user, attrs.get("otp_token", ""))
-
-        return attrs
-
-    def create(self, validated_data):
-        refresh = RefreshToken.for_user(self.user)
-        return {"refresh": str(refresh), "access": str(refresh.access_token)}
-
-
-@context_user_required
-class DisableOTPSerializer(serializers.Serializer):
-    ok = serializers.BooleanField(read_only=True)
-
-    def create(self, validated_data):
-        otp_services.disable_otp(self.context_user)
         return {"ok": True}

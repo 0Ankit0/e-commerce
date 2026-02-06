@@ -1,23 +1,27 @@
-import pytest
+from django.contrib.auth import get_user_model
+from django.test import TestCase
 
-from common.acl.helpers import CommonGroups
-
-from .. import models
-
-pytestmark = pytest.mark.django_db
+User = get_user_model()
 
 
-class TestUser:
-    def test_has_group_returns_false(self, user: models.User, group_factory):
-        admin_group = group_factory(name=CommonGroups.Admin)
+class UserModelTests(TestCase):
+    def test_create_user(self):
+        user = User.objects.create_user(email="test@example.com", password="password123")
+        self.assertEqual(user.email, "test@example.com")
+        self.assertTrue(user.check_password("password123"))
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.is_superuser)
 
-        user.groups.remove(admin_group)
+    def test_create_superuser(self):
+        admin = User.objects.create_superuser(email="admin@example.com", password="password123")
+        self.assertEqual(admin.email, "admin@example.com")
+        self.assertTrue(admin.is_staff)
+        self.assertTrue(admin.is_superuser)
 
-        assert not user.has_group(CommonGroups.Admin)
+    def test_create_user_invalid_email(self):
+        with self.assertRaises(ValueError):
+            User.objects.create_user(email="", password="password123")
 
-    def test_has_group_returns_true(self, user: models.User, group_factory):
-        admin_group = group_factory(name=CommonGroups.Admin)
-
-        user.groups.add(admin_group)
-
-        assert user.has_group(CommonGroups.Admin)
+    def test_string_representation(self):
+        user = User.objects.create_user(email="test@example.com", password="password123")
+        self.assertEqual(str(user), "test@example.com")
