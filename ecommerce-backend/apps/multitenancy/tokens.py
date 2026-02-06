@@ -1,8 +1,9 @@
-from datetime import UTC, datetime
+from datetime import datetime
 
-import six
+import six  # type: ignore[import-untyped]
 from django.conf import settings
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.utils import timezone
 from django.utils.crypto import constant_time_compare, salted_hmac
 from django.utils.http import base36_to_int, int_to_base36
 
@@ -36,11 +37,11 @@ class TenantInvitationTokenGenerator(PasswordResetTokenGenerator):
         )
 
     def _num_seconds(self, dt):
-        return int((dt - datetime(2001, 1, 1, tzinfo=UTC)).total_seconds())
+        return int((dt - datetime(2001, 1, 1, tzinfo=timezone.utc)).total_seconds())
 
     def _now(self):
         # Used for mocking in tests
-        return datetime.now(tz=UTC)
+        return timezone.now()
 
     def check_token(self, user_email, token, tenant_membership):
         """

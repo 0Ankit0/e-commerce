@@ -54,7 +54,7 @@ class SentryMiddleware:
 
     @staticmethod
     def _get_validation_error_first_detail(detail):
-        if isinstance(detail, (list, dict)):
+        if isinstance(detail, list | dict):
             return next(iter(detail), detail)
         return detail
 

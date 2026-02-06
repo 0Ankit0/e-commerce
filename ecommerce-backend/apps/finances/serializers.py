@@ -1,4 +1,6 @@
 import datetime
+from datetime import timedelta
+from typing import Any
 
 from django.conf import settings
 from django.contrib import messages
@@ -75,7 +77,7 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
         fields = ("id", "type", "card", "billing_details")
         exclude_fields = ("id",)
         read_only_fields = fields
-        swagger_schema_fields = {"properties": {key for key in fields if key not in [1, 2, 3]}}
+        swagger_schema_fields: dict[str, Any] = {"properties": {key for key in fields if key not in [1, 2, 3]}}
 
 
 class UpdateDefaultPaymentMethodSerializer(serializers.Serializer):
@@ -89,7 +91,7 @@ class SubscriptionItemProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.Product
         fields = ("id", "name")
-        swagger_schema_fields = {"properties": {}}
+        swagger_schema_fields: dict[str, Any] = {"properties": {}}
 
 
 class PriceSerializer(serializers.ModelSerializer):
@@ -138,7 +140,7 @@ class SubscriptionSchedulePhaseItemSerializer(serializers.Serializer):
 
 class StripeTimestampField(serializers.DateTimeField):
     def to_representation(self, value):
-        return super().to_representation(timezone.datetime.fromtimestamp(value, tz=datetime.UTC))
+        return super().to_representation(timezone.datetime.fromtimestamp(value, tz=datetime.UTC))  # type: ignore[attr-defined]
 
 
 class SubscriptionSchedulePhaseSerializer(serializers.Serializer):
@@ -218,9 +220,9 @@ class TenantSubscriptionScheduleSerializer(serializers.ModelSerializer):
         if subscriptions.is_current_schedule_phase_plan(schedule=instance, plan_config=constants.FREE_PLAN):
             current_phase["end_date"] = "now"
 
-        next_phase = {"items": [{"price": price.id}]}
+        next_phase: dict[str, Any] = {"items": [{"price": price.id}]}
         if can_activate_trial:
-            next_phase["trial_end"] = timezone.now() + timezone.timedelta(settings.SUBSCRIPTION_TRIAL_PERIOD_DAYS)
+            next_phase["trial_end"] = timezone.now() + timedelta(settings.SUBSCRIPTION_TRIAL_PERIOD_DAYS)
 
         updated_phases = [current_phase]
         if next_phase:

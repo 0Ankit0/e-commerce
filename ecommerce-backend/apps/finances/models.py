@@ -7,11 +7,11 @@ class Product(djstripe_models.Product):
     class Meta:
         proxy = True
 
-    objects = managers.ProductManager()
+    objects: managers.ProductManager = managers.ProductManager()
 
 
 class Price(djstripe_models.Price):
     class Meta:
         proxy = True
 
-    objects = managers.PriceManager()
+    objects: managers.PriceManager = managers.PriceManager()

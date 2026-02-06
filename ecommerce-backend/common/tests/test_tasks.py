@@ -1,7 +1,7 @@
-import datetime
 import json
 
 import pytest
+from django.utils import timezone
 
 from config import settings
 
@@ -22,7 +22,7 @@ class TestScheduledTasks:
     def test_schedule_task_entry(self, lambda_task_apply):
         task = LambdaTask(name="test-task", source="test-source", event_bus_name=settings.WORKERS_EVENT_BUS_NAME)
         task_data = {"test_param": "test-value"}
-        due_date = datetime.datetime.now()
+        due_date = timezone.now()
         event_scheduler_type = "backend.scheduler"
 
         task.apply(task_data, due_date=due_date)

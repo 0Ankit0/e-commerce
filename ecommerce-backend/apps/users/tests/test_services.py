@@ -1,4 +1,3 @@
-import datetime
 import io
 import json
 import os
@@ -8,6 +7,7 @@ from unittest.mock import call
 import boto3
 import pytest
 from django.conf import settings
+from django.utils import timezone
 from moto import mock_s3
 
 from apps.users.exceptions import OTPVerificationFailure
@@ -114,7 +114,7 @@ class TestExportUserArchive:
     @pytest.mark.usefixtures("file_cleanup", "s3_exports_bucket")
     @pytest.mark.freeze_time
     def test_user_archive_export_url_is_generated(self, user, export_user_archive):
-        timestamp = datetime.datetime.now().strftime("%d-%m-%y_%H-%M-%S")
+        timestamp = timezone.now().strftime("%d-%m-%y_%H-%M-%S")
         expected_obj_key = f"exports/{hashid.encode(user.id)}_{timestamp}.zip"
 
         export_url = export_user_archive.run()

@@ -1,4 +1,5 @@
 import importlib
+from typing import Any
 
 from celery import shared_task
 from django.conf import settings
@@ -6,7 +7,7 @@ from django.conf import settings
 from .services.export.services import user as user_services
 
 module_name, package = settings.LAMBDA_TASKS_BASE_HANDLER.rsplit(".", maxsplit=1)
-LambdaTask = getattr(importlib.import_module(module_name), package)
+LambdaTask: Any = getattr(importlib.import_module(module_name), package)
 
 
 class ExportUserData(LambdaTask):

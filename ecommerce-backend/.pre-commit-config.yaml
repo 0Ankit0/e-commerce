@@ -16,20 +16,21 @@ repos:
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.8.0
+  - repo: local
     hooks:
       - id: mypy
-        additional_dependencies:
-          - django-stubs
-          - djangorestframework-stubs
-        args: [--ignore-missing-imports]
+        name: mypy
+        entry: sh -c "cd ecommerce-backend && pipenv run mypy ."
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true
 
   - repo: local
     hooks:
       - id: django-check
         name: Django Check
-        entry: pipenv run python manage.py check
+        entry: sh -c "cd ecommerce-backend && pipenv run python manage.py check"
         language: system
         pass_filenames: false
         always_run: true

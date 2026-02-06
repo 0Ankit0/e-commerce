@@ -1,5 +1,7 @@
 from django.test import TestCase
-from apps.finances.models import Product, Price
+
+from apps.finances.models import Price, Product
+
 
 class FinancesModelTests(TestCase):
     def test_models_exist(self):

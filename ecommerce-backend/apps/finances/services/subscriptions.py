@@ -69,7 +69,7 @@ def get_valid_schedule_phases(schedule: djstripe_models.SubscriptionSchedule):
     return [
         phase
         for phase in schedule.phases
-        if timezone.datetime.fromtimestamp(phase["end_date"], tz=datetime.UTC) > timezone.now()
+        if timezone.datetime.fromtimestamp(phase["end_date"], tz=datetime.UTC) > timezone.now()  # type: ignore[attr-defined]
     ]
 
 
@@ -92,5 +92,5 @@ def is_current_schedule_phase_trialing(schedule: djstripe_models.SubscriptionSch
     if not current_phase["trial_end"]:
         return False
 
-    trial_end = timezone.datetime.fromtimestamp(current_phase["trial_end"], tz=datetime.UTC)
+    trial_end = timezone.datetime.fromtimestamp(current_phase["trial_end"], tz=datetime.UTC)  # type: ignore[attr-defined]
     return trial_end > timezone.now()

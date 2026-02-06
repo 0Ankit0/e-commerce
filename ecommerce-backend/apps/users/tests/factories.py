@@ -99,7 +99,7 @@ def image_factory(name: str, params: ImageFactoryParams | None = None) -> Upload
     return SimpleUploadedFile(
         name=name,
         content=image_field._make_data(params or {}),
-        content_type=mimetypes.guess_type(name)[0],
+        content_type=mimetypes.guess_type(name)[0] or "image/jpeg",
     )
 
 

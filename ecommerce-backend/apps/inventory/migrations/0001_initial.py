@@ -6,54 +6,88 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
-        ('catalog', '0001_initial'),
-        ('vendors', '0001_initial'),
+        ("catalog", "0001_initial"),
+        ("vendors", "0001_initial"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='Warehouse',
+            name="Warehouse",
             fields=[
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('id', hashid_field.field.HashidAutoField(alphabet='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890', min_length=7, prefix='', primary_key=True, serialize=False)),
-                ('name', models.CharField(max_length=255)),
-                ('address', models.CharField(max_length=500)),
-                ('city', models.CharField(max_length=100)),
-                ('state', models.CharField(max_length=100)),
-                ('pincode', models.CharField(max_length=20)),
-                ('contact_phone', models.CharField(max_length=20)),
-                ('latitude', models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
-                ('longitude', models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
-                ('is_default', models.BooleanField(default=False)),
-                ('is_active', models.BooleanField(default=True)),
-                ('vendor', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='warehouses', to='vendors.vendor')),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    hashid_field.field.HashidAutoField(
+                        alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+                        min_length=7,
+                        prefix="",
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("name", models.CharField(max_length=255)),
+                ("address", models.CharField(max_length=500)),
+                ("city", models.CharField(max_length=100)),
+                ("state", models.CharField(max_length=100)),
+                ("pincode", models.CharField(max_length=20)),
+                ("contact_phone", models.CharField(max_length=20)),
+                ("latitude", models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
+                ("longitude", models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
+                ("is_default", models.BooleanField(default=False)),
+                ("is_active", models.BooleanField(default=True)),
+                (
+                    "vendor",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="warehouses", to="vendors.vendor"
+                    ),
+                ),
             ],
             options={
-                'abstract': False,
+                "abstract": False,
             },
         ),
         migrations.CreateModel(
-            name='Inventory',
+            name="Inventory",
             fields=[
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('id', hashid_field.field.HashidAutoField(alphabet='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890', min_length=7, prefix='', primary_key=True, serialize=False)),
-                ('quantity', models.IntegerField(default=0)),
-                ('reserved_qty', models.IntegerField(default=0)),
-                ('reorder_level', models.IntegerField(default=10)),
-                ('reorder_qty', models.IntegerField(default=50)),
-                ('last_restocked_at', models.DateTimeField(blank=True, null=True)),
-                ('variant', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='inventory', to='catalog.productvariant')),
-                ('warehouse', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='inventory', to='inventory.warehouse')),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    hashid_field.field.HashidAutoField(
+                        alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+                        min_length=7,
+                        prefix="",
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("quantity", models.IntegerField(default=0)),
+                ("reserved_qty", models.IntegerField(default=0)),
+                ("reorder_level", models.IntegerField(default=10)),
+                ("reorder_qty", models.IntegerField(default=50)),
+                ("last_restocked_at", models.DateTimeField(blank=True, null=True)),
+                (
+                    "variant",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="inventory",
+                        to="catalog.productvariant",
+                    ),
+                ),
+                (
+                    "warehouse",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="inventory", to="inventory.warehouse"
+                    ),
+                ),
             ],
             options={
-                'verbose_name_plural': 'Inventory',
-                'unique_together': {('variant', 'warehouse')},
+                "verbose_name_plural": "Inventory",
+                "unique_together": {("variant", "warehouse")},
             },
         ),
     ]

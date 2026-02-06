@@ -1,6 +1,5 @@
 import sentry_sdk
 from sentry_sdk.integrations.django import DjangoIntegration
-from sentry_sdk.integrations.logging import ignore_logger
 from sentry_sdk.scope import add_global_event_processor
 
 # ignore_logger("rest.execution.utils")

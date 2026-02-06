@@ -51,11 +51,11 @@ class PriceManager(models.Manager):
     ):
         try:
             return self.get(product=product), False
-        except self.model.DoesNotExist:
+        except self.model.DoesNotExist:  # type: ignore[attr-defined]
             action = f"create:{plan_config.name}"
             idempotency_key = djstripe_settings.get_idempotency_key("plan_price", action, livemode)
             return (
-                self.model.create(
+                self.model.create(  # type: ignore[attr-defined]
                     idempotency_key=idempotency_key,
                     stripe_account=stripe_account,
                     product=product,

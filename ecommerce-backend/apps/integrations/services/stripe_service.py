@@ -22,7 +22,7 @@ class StripeService:
         self.tenant = tenant
 
     # Customer Management
-    def create_customer(self, email: str, name: str = None, metadata: dict = None) -> dict[str, Any]:
+    def create_customer(self, email: str, name: str | None = None, metadata: dict | None = None) -> dict[str, Any]:
         """Create a new Stripe customer."""
         try:
             customer = self.stripe.Customer.create(
@@ -100,7 +100,7 @@ class StripeService:
 
     # Payment Intents
     def create_payment_intent(
-        self, amount: int, currency: str = "usd", customer_id: str = None, metadata: dict = None
+        self, amount: int, currency: str = "usd", customer_id: str | None = None, metadata: dict | None = None
     ) -> dict[str, Any]:
         """Create a payment intent."""
         try:
@@ -134,10 +134,10 @@ class StripeService:
             raise
 
     # Subscriptions
-    def create_subscription(self, customer_id: str, price_id: str, trial_days: int = None) -> dict[str, Any]:
+    def create_subscription(self, customer_id: str, price_id: str, trial_days: int | None = None) -> dict[str, Any]:
         """Create a subscription for a customer."""
         try:
-            params = {
+            params: dict[str, Any] = {
                 "customer": customer_id,
                 "items": [{"price": price_id}],
             }
@@ -254,10 +254,10 @@ class StripeService:
             logger.error(f"Error listing products: {e}")
             return []
 
-    def list_prices(self, product_id: str = None, active: bool = True) -> list[dict[str, Any]]:
+    def list_prices(self, product_id: str | None = None, active: bool = True) -> list[dict[str, Any]]:
         """List prices, optionally filtered by product."""
         try:
-            params = {"active": active}
+            params: dict[str, Any] = {"active": active}
             if product_id:
                 params["product"] = product_id
 

@@ -1,2 +1,2 @@
-from .warehouse import WarehouseSerializer
 from .inventory import InventorySerializer
+from .warehouse import WarehouseSerializer

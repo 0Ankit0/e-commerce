@@ -45,13 +45,16 @@ def storage(mocker):
     with mock_s3():
         storage = S3Boto3Storage()
         session = boto3.session.Session()
-        with patch(
-            "storages.backends.s3boto3.S3Boto3Storage.connection",
-            new_callable=PropertyMock,
-        ) as mock_connection_property, patch(
-            "storages.backends.s3boto3.S3Boto3Storage.bucket",
-            new_callable=PropertyMock,
-        ) as mock_bucket_property:
+        with (
+            patch(
+                "storages.backends.s3boto3.S3Boto3Storage.connection",
+                new_callable=PropertyMock,
+            ) as mock_connection_property,
+            patch(
+                "storages.backends.s3boto3.S3Boto3Storage.bucket",
+                new_callable=PropertyMock,
+            ) as mock_bucket_property,
+        ):
 
             @lru_cache(None)
             def get_connection():

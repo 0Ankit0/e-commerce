@@ -83,6 +83,7 @@ class UserAdmin(BaseUserAdmin):
     ]
     actions = ["export_user_data"]
 
+    @admin.action(description=_("Export selected %(verbose_name_plural)s"))
     def export_user_data(self, request, queryset):
         data = {
             "user_ids": [str(user_id) for user_id in queryset.values_list("id", flat=True)],
@@ -91,5 +92,3 @@ class UserAdmin(BaseUserAdmin):
         tasks.export_user_data.apply_async((data["user_ids"], data["admin_email"]))
 
         self.message_user(request, "Exported user data will be sent to you via e-mail", messages.SUCCESS)
-
-    export_user_data.short_description = _("Export selected %(verbose_name_plural)s")

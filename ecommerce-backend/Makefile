@@ -42,6 +42,9 @@ test: ## Run tests
 test-coverage: ## Run tests with coverage
 	pipenv run pytest --cov=apps --cov-report=html
 
+type-check: ## Run type checks
+	pipenv run mypy .
+
 # Linting
 lint: ## Run linters
 	pipenv run ruff check .

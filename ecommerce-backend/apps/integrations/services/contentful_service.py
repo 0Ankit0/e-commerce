@@ -117,7 +117,7 @@ class ContentfulService:
         """Serialize a Contentful entry to a dictionary."""
         import contentful
 
-        fields = {}
+        fields: dict[str, Any] = {}
         for field_name, field_value in entry.fields().items():
             if isinstance(field_value, contentful.Link):
                 fields[field_name] = {"id": field_value.id, "type": "Link"}

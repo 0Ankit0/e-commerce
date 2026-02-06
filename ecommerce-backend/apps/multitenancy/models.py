@@ -1,3 +1,5 @@
+from typing import Any
+
 import hashid_field
 from django.conf import settings
 from django.db import IntegrityError, models, transaction
@@ -35,12 +37,12 @@ class Tenant(TimestampedMixin, models.Model):
       base slug to ensure uniqueness.
     """
 
-    id: str = hashid_field.HashidAutoField(primary_key=True)
-    creator: settings.AUTH_USER_MODEL = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    name: str = models.CharField(max_length=100, unique=False)
-    slug: str = models.SlugField(max_length=100, unique=True)
-    type: str = models.CharField(choices=constants.TenantType.choices)
-    members = models.ManyToManyField(
+    id = hashid_field.HashidAutoField(primary_key=True)
+    creator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    name = models.CharField(max_length=100, unique=False)
+    slug = models.SlugField(max_length=100, unique=True)
+    type = models.CharField(choices=constants.TenantType.choices)
+    members: Any = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
         through="TenantMembership",
         related_name="tenants",
@@ -122,12 +124,12 @@ class TenantMembership(TimestampedMixin, models.Model):
       combinations.
     """
 
-    id: str = hashid_field.HashidAutoField(primary_key=True)
+    id = hashid_field.HashidAutoField(primary_key=True)
     # User - Tenant connection fields
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="tenant_memberships", null=True
     )
-    creator: settings.AUTH_USER_MODEL = models.ForeignKey(
+    creator = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="created_tenant_memberships"
     )
     role = models.CharField(choices=constants.TenantUserRole.choices, default=constants.TenantUserRole.OWNER)
@@ -158,4 +160,5 @@ class TenantMembership(TimestampedMixin, models.Model):
         ]
 
     def __str__(self):
-        return f"{self.user.email} {self.tenant.name} {self.role}"
+        email = self.user.email if self.user else self.invitee_email_address
+        return f"{email} {self.tenant.name} {self.role}"

@@ -6,10 +6,11 @@ from celery import shared_task, states
 from celery.exceptions import Ignore
 from django.conf import settings
 from django.core.mail import EmailMessage
+from rest_framework import serializers
 
 
 class BaseEmail:
-    serializer_class = None
+    serializer_class: type[serializers.BaseSerializer] | None = None
 
     def get_serializer(self, *args, **kwargs):
         serializer_class = self.get_serializer_class()
@@ -29,7 +30,7 @@ class BaseEmail:
 
 
 class Email(BaseEmail):
-    name = None
+    name: str | None = None
 
     def __init__(self, to, data=None):
         self.to = to
@@ -88,15 +89,14 @@ def send_email(self, to: str | list[str], email_type: str, email_data: dict):
         )
         raise Ignore()
 
-    if isinstance(to, str):
-        to = (to,)
+    to_list: list[str] | tuple[str, ...] = (to,) if isinstance(to, str) else to
 
     rendered_email = json.loads(node_process.stdout)
     email = EmailMessage(
         rendered_email["subject"],
         rendered_email["html"],
         settings.EMAIL_FROM_ADDRESS,
-        to,
+        to_list,
         reply_to=settings.EMAIL_REPLY_ADDRESS,
     )
     email.content_subtype = "html"

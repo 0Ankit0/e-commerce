@@ -7,173 +7,398 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
-        ('inventory', '0001_initial'),
-        ('orders', '0001_initial'),
-        ('vendors', '0001_initial'),
+        ("inventory", "0001_initial"),
+        ("orders", "0001_initial"),
+        ("vendors", "0001_initial"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='Branch',
+            name="Branch",
             fields=[
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('id', hashid_field.field.HashidAutoField(alphabet='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890', min_length=7, prefix='', primary_key=True, serialize=False)),
-                ('name', models.CharField(max_length=255)),
-                ('code', models.CharField(max_length=50, unique=True)),
-                ('address', models.CharField(max_length=500)),
-                ('service_pincodes', models.JSONField(default=list)),
-                ('contact_phone', models.CharField(max_length=20)),
-                ('agent_capacity', models.PositiveIntegerField(default=10)),
-                ('is_active', models.BooleanField(default=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    hashid_field.field.HashidAutoField(
+                        alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+                        min_length=7,
+                        prefix="",
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("name", models.CharField(max_length=255)),
+                ("code", models.CharField(max_length=50, unique=True)),
+                ("address", models.CharField(max_length=500)),
+                ("service_pincodes", models.JSONField(default=list)),
+                ("contact_phone", models.CharField(max_length=20)),
+                ("agent_capacity", models.PositiveIntegerField(default=10)),
+                ("is_active", models.BooleanField(default=True)),
             ],
             options={
-                'abstract': False,
+                "abstract": False,
             },
         ),
         migrations.CreateModel(
-            name='Hub',
+            name="Hub",
             fields=[
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('id', hashid_field.field.HashidAutoField(alphabet='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890', min_length=7, prefix='', primary_key=True, serialize=False)),
-                ('name', models.CharField(max_length=255)),
-                ('code', models.CharField(max_length=50, unique=True)),
-                ('type', models.CharField(choices=[('origin', 'Origin'), ('transit', 'Transit'), ('destination', 'Destination')], max_length=20)),
-                ('address', models.CharField(max_length=500)),
-                ('city', models.CharField(max_length=100)),
-                ('state', models.CharField(max_length=100)),
-                ('pincode', models.CharField(max_length=20)),
-                ('latitude', models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
-                ('longitude', models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
-                ('contact_phone', models.CharField(max_length=20)),
-                ('is_active', models.BooleanField(default=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    hashid_field.field.HashidAutoField(
+                        alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+                        min_length=7,
+                        prefix="",
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("name", models.CharField(max_length=255)),
+                ("code", models.CharField(max_length=50, unique=True)),
+                (
+                    "type",
+                    models.CharField(
+                        choices=[("origin", "Origin"), ("transit", "Transit"), ("destination", "Destination")],
+                        max_length=20,
+                    ),
+                ),
+                ("address", models.CharField(max_length=500)),
+                ("city", models.CharField(max_length=100)),
+                ("state", models.CharField(max_length=100)),
+                ("pincode", models.CharField(max_length=20)),
+                ("latitude", models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
+                ("longitude", models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
+                ("contact_phone", models.CharField(max_length=20)),
+                ("is_active", models.BooleanField(default=True)),
             ],
             options={
-                'abstract': False,
+                "abstract": False,
             },
         ),
         migrations.CreateModel(
-            name='DeliveryAgent',
+            name="DeliveryAgent",
             fields=[
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('id', hashid_field.field.HashidAutoField(alphabet='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890', min_length=7, prefix='', primary_key=True, serialize=False)),
-                ('vehicle_number', models.CharField(max_length=50)),
-                ('vehicle_type', models.CharField(choices=[('bike', 'Bike'), ('van', 'Van'), ('truck', 'Truck')], max_length=20)),
-                ('status', models.CharField(choices=[('available', 'Available'), ('busy', 'Busy'), ('offline', 'Offline')], default='offline', max_length=20)),
-                ('capacity', models.IntegerField(default=50)),
-                ('current_load', models.IntegerField(default=0)),
-                ('current_lat', models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
-                ('current_lng', models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
-                ('last_location_at', models.DateTimeField(blank=True, null=True)),
-                ('branch', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='agents', to='logistics.branch')),
-                ('user', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='delivery_profile', to=settings.AUTH_USER_MODEL)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    hashid_field.field.HashidAutoField(
+                        alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+                        min_length=7,
+                        prefix="",
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("vehicle_number", models.CharField(max_length=50)),
+                (
+                    "vehicle_type",
+                    models.CharField(choices=[("bike", "Bike"), ("van", "Van"), ("truck", "Truck")], max_length=20),
+                ),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[("available", "Available"), ("busy", "Busy"), ("offline", "Offline")],
+                        default="offline",
+                        max_length=20,
+                    ),
+                ),
+                ("capacity", models.IntegerField(default=50)),
+                ("current_load", models.IntegerField(default=0)),
+                ("current_lat", models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
+                ("current_lng", models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
+                ("last_location_at", models.DateTimeField(blank=True, null=True)),
+                (
+                    "branch",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="agents", to="logistics.branch"
+                    ),
+                ),
+                (
+                    "user",
+                    models.OneToOneField(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="delivery_profile",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'abstract': False,
+                "abstract": False,
             },
         ),
         migrations.AddField(
-            model_name='branch',
-            name='hub',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='branches', to='logistics.hub'),
+            model_name="branch",
+            name="hub",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.CASCADE, related_name="branches", to="logistics.hub"
+            ),
         ),
         migrations.CreateModel(
-            name='LineHaulTrip',
+            name="LineHaulTrip",
             fields=[
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('id', hashid_field.field.HashidAutoField(alphabet='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890', min_length=7, prefix='', primary_key=True, serialize=False)),
-                ('trip_number', models.CharField(max_length=50, unique=True)),
-                ('vehicle_number', models.CharField(blank=True, max_length=50)),
-                ('driver_name', models.CharField(blank=True, max_length=100)),
-                ('status', models.CharField(choices=[('scheduled', 'Scheduled'), ('in_transit', 'In Transit'), ('arrived', 'Arrived'), ('completed', 'Completed'), ('cancelled', 'Cancelled')], default='scheduled', max_length=20)),
-                ('package_count', models.PositiveIntegerField(default=0)),
-                ('total_weight', models.DecimalField(decimal_places=3, default=0, max_digits=10)),
-                ('scheduled_departure', models.DateTimeField(blank=True, null=True)),
-                ('actual_departure', models.DateTimeField(blank=True, null=True)),
-                ('scheduled_arrival', models.DateTimeField(blank=True, null=True)),
-                ('actual_arrival', models.DateTimeField(blank=True, null=True)),
-                ('dest_hub', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='trips_dest', to='logistics.hub')),
-                ('origin_hub', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='trips_origin', to='logistics.hub')),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    hashid_field.field.HashidAutoField(
+                        alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+                        min_length=7,
+                        prefix="",
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("trip_number", models.CharField(max_length=50, unique=True)),
+                ("vehicle_number", models.CharField(blank=True, max_length=50)),
+                ("driver_name", models.CharField(blank=True, max_length=100)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("scheduled", "Scheduled"),
+                            ("in_transit", "In Transit"),
+                            ("arrived", "Arrived"),
+                            ("completed", "Completed"),
+                            ("cancelled", "Cancelled"),
+                        ],
+                        default="scheduled",
+                        max_length=20,
+                    ),
+                ),
+                ("package_count", models.PositiveIntegerField(default=0)),
+                ("total_weight", models.DecimalField(decimal_places=3, default=0, max_digits=10)),
+                ("scheduled_departure", models.DateTimeField(blank=True, null=True)),
+                ("actual_departure", models.DateTimeField(blank=True, null=True)),
+                ("scheduled_arrival", models.DateTimeField(blank=True, null=True)),
+                ("actual_arrival", models.DateTimeField(blank=True, null=True)),
+                (
+                    "dest_hub",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="trips_dest", to="logistics.hub"
+                    ),
+                ),
+                (
+                    "origin_hub",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="trips_origin", to="logistics.hub"
+                    ),
+                ),
             ],
             options={
-                'abstract': False,
+                "abstract": False,
             },
         ),
         migrations.CreateModel(
-            name='Shipment',
+            name="Shipment",
             fields=[
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('id', hashid_field.field.HashidAutoField(alphabet='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890', min_length=7, prefix='', primary_key=True, serialize=False)),
-                ('awb', models.CharField(max_length=50, unique=True)),
-                ('status', models.CharField(choices=[('created', 'Created'), ('awaiting_pickup', 'Awaiting Pickup'), ('picked_up', 'Picked Up'), ('in_transit', 'In Transit'), ('at_hub', 'At Hub'), ('out_for_delivery', 'Out for Delivery'), ('delivered', 'Delivered'), ('delivery_failed', 'Delivery Failed'), ('rto_initiated', 'RTO Initiated'), ('rto_in_transit', 'RTO In Transit'), ('rto_delivered', 'RTO Delivered'), ('cancelled', 'Cancelled')], default='created', max_length=30)),
-                ('type', models.CharField(choices=[('forward', 'Forward'), ('reverse', 'Reverse'), ('rto', 'RTO')], default='forward', max_length=20)),
-                ('weight', models.DecimalField(blank=True, decimal_places=3, max_digits=10, null=True)),
-                ('dimensions', models.JSONField(blank=True, default=dict)),
-                ('declared_value', models.DecimalField(blank=True, decimal_places=2, max_digits=12, null=True)),
-                ('is_cod', models.BooleanField(default=False)),
-                ('cod_amount', models.DecimalField(blank=True, decimal_places=2, max_digits=12, null=True)),
-                ('picked_up_at', models.DateTimeField(blank=True, null=True)),
-                ('delivered_at', models.DateTimeField(blank=True, null=True)),
-                ('agent', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, to='logistics.deliveryagent')),
-                ('branch', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, to='logistics.branch')),
-                ('order', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='shipments', to='orders.order')),
-                ('vendor', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to='vendors.vendor')),
-                ('vendor_order', models.OneToOneField(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='shipment', to='orders.vendororder')),
-                ('warehouse', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, to='inventory.warehouse')),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    hashid_field.field.HashidAutoField(
+                        alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+                        min_length=7,
+                        prefix="",
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("awb", models.CharField(max_length=50, unique=True)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("created", "Created"),
+                            ("awaiting_pickup", "Awaiting Pickup"),
+                            ("picked_up", "Picked Up"),
+                            ("in_transit", "In Transit"),
+                            ("at_hub", "At Hub"),
+                            ("out_for_delivery", "Out for Delivery"),
+                            ("delivered", "Delivered"),
+                            ("delivery_failed", "Delivery Failed"),
+                            ("rto_initiated", "RTO Initiated"),
+                            ("rto_in_transit", "RTO In Transit"),
+                            ("rto_delivered", "RTO Delivered"),
+                            ("cancelled", "Cancelled"),
+                        ],
+                        default="created",
+                        max_length=30,
+                    ),
+                ),
+                (
+                    "type",
+                    models.CharField(
+                        choices=[("forward", "Forward"), ("reverse", "Reverse"), ("rto", "RTO")],
+                        default="forward",
+                        max_length=20,
+                    ),
+                ),
+                ("weight", models.DecimalField(blank=True, decimal_places=3, max_digits=10, null=True)),
+                ("dimensions", models.JSONField(blank=True, default=dict)),
+                ("declared_value", models.DecimalField(blank=True, decimal_places=2, max_digits=12, null=True)),
+                ("is_cod", models.BooleanField(default=False)),
+                ("cod_amount", models.DecimalField(blank=True, decimal_places=2, max_digits=12, null=True)),
+                ("picked_up_at", models.DateTimeField(blank=True, null=True)),
+                ("delivered_at", models.DateTimeField(blank=True, null=True)),
+                (
+                    "agent",
+                    models.ForeignKey(
+                        blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, to="logistics.deliveryagent"
+                    ),
+                ),
+                (
+                    "branch",
+                    models.ForeignKey(
+                        blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, to="logistics.branch"
+                    ),
+                ),
+                (
+                    "order",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="shipments", to="orders.order"
+                    ),
+                ),
+                ("vendor", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to="vendors.vendor")),
+                (
+                    "vendor_order",
+                    models.OneToOneField(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="shipment",
+                        to="orders.vendororder",
+                    ),
+                ),
+                (
+                    "warehouse",
+                    models.ForeignKey(
+                        blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, to="inventory.warehouse"
+                    ),
+                ),
             ],
             options={
-                'abstract': False,
+                "abstract": False,
             },
         ),
         migrations.CreateModel(
-            name='Return',
+            name="Return",
             fields=[
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('id', hashid_field.field.HashidAutoField(alphabet='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890', min_length=7, prefix='', primary_key=True, serialize=False)),
-                ('return_number', models.CharField(max_length=50, unique=True)),
-                ('status', models.CharField(choices=[('requested', 'Requested'), ('approved', 'Approved'), ('rejected', 'Rejected'), ('picked_up', 'Picked Up'), ('received', 'Received'), ('refund_processed', 'Refund Processed'), ('completed', 'Completed'), ('cancelled', 'Cancelled')], default='requested', max_length=30)),
-                ('reason', models.CharField(choices=[('defective', 'Defective'), ('wrong_item', 'Wrong Item'), ('not_satisfied', 'Not Satisfied'), ('size_issue', 'Size Issue'), ('other', 'Other')], max_length=30)),
-                ('reason_text', models.TextField(blank=True)),
-                ('images', models.JSONField(blank=True, default=list)),
-                ('refund_amount', models.DecimalField(decimal_places=2, max_digits=12)),
-                ('approved_at', models.DateTimeField(blank=True, null=True)),
-                ('completed_at', models.DateTimeField(blank=True, null=True)),
-                ('order', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='returns', to='orders.order')),
-                ('order_item', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='orders.orderitem')),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='returns', to=settings.AUTH_USER_MODEL)),
-                ('vendor', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to='vendors.vendor')),
-                ('reverse_shipment', models.OneToOneField(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='return_request', to='logistics.shipment')),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    hashid_field.field.HashidAutoField(
+                        alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+                        min_length=7,
+                        prefix="",
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("return_number", models.CharField(max_length=50, unique=True)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("requested", "Requested"),
+                            ("approved", "Approved"),
+                            ("rejected", "Rejected"),
+                            ("picked_up", "Picked Up"),
+                            ("received", "Received"),
+                            ("refund_processed", "Refund Processed"),
+                            ("completed", "Completed"),
+                            ("cancelled", "Cancelled"),
+                        ],
+                        default="requested",
+                        max_length=30,
+                    ),
+                ),
+                (
+                    "reason",
+                    models.CharField(
+                        choices=[
+                            ("defective", "Defective"),
+                            ("wrong_item", "Wrong Item"),
+                            ("not_satisfied", "Not Satisfied"),
+                            ("size_issue", "Size Issue"),
+                            ("other", "Other"),
+                        ],
+                        max_length=30,
+                    ),
+                ),
+                ("reason_text", models.TextField(blank=True)),
+                ("images", models.JSONField(blank=True, default=list)),
+                ("refund_amount", models.DecimalField(decimal_places=2, max_digits=12)),
+                ("approved_at", models.DateTimeField(blank=True, null=True)),
+                ("completed_at", models.DateTimeField(blank=True, null=True)),
+                (
+                    "order",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="returns", to="orders.order"
+                    ),
+                ),
+                ("order_item", models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to="orders.orderitem")),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name="returns", to=settings.AUTH_USER_MODEL
+                    ),
+                ),
+                ("vendor", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to="vendors.vendor")),
+                (
+                    "reverse_shipment",
+                    models.OneToOneField(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="return_request",
+                        to="logistics.shipment",
+                    ),
+                ),
             ],
             options={
-                'abstract': False,
+                "abstract": False,
             },
         ),
         migrations.CreateModel(
-            name='ShipmentTracking',
+            name="ShipmentTracking",
             fields=[
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('id', hashid_field.field.HashidAutoField(alphabet='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890', min_length=7, prefix='', primary_key=True, serialize=False)),
-                ('status', models.CharField(max_length=50)),
-                ('location', models.CharField(max_length=255)),
-                ('remarks', models.TextField(blank=True)),
-                ('latitude', models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
-                ('longitude', models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
-                ('timestamp', models.DateTimeField(auto_now_add=True)),
-                ('shipment', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='tracking_logs', to='logistics.shipment')),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    hashid_field.field.HashidAutoField(
+                        alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+                        min_length=7,
+                        prefix="",
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("status", models.CharField(max_length=50)),
+                ("location", models.CharField(max_length=255)),
+                ("remarks", models.TextField(blank=True)),
+                ("latitude", models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
+                ("longitude", models.DecimalField(blank=True, decimal_places=6, max_digits=9, null=True)),
+                ("timestamp", models.DateTimeField(auto_now_add=True)),
+                (
+                    "shipment",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="tracking_logs",
+                        to="logistics.shipment",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-timestamp'],
+                "ordering": ["-timestamp"],
             },
         ),
     ]

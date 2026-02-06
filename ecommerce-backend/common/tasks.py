@@ -1,11 +1,12 @@
 import json
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
 import boto3
-import requests
+import requests  # type: ignore[import-untyped]
 from django.conf import settings
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class LambdaTask:
             data=data, source=self.source, detail_type=self.name, event_bus_name=self.event_bus_name
         )
 
-    def apply(self, data: dict, due_date: datetime = None):
+    def apply(self, data: dict, due_date: datetime | None = None):
         task_entry = self.get_entry(data)
 
         if due_date is not None:
@@ -59,22 +60,22 @@ class LambdaTask:
 
 
 class LambdaTaskLocalInvoke(LambdaTask):
-    def apply(self, data: dict, due_date: datetime = None):
+    def apply(self, data: dict, due_date: datetime | None = None):
         if due_date is None:
-            due_date = datetime.now(tz=UTC)
+            due_date = timezone.now()
 
         entry = self.get_entry(data)
         response = requests.post(
-            settings.LAMBDA_TASKS_LOCAL_URL, json={**entry, "Time": datetime.now().isoformat()}, timeout=10
+            settings.LAMBDA_TASKS_LOCAL_URL, json={**entry, "Time": timezone.now().isoformat()}, timeout=10
         )
         logger.info(f"Invoking local task: {entry=} at {due_date.isoformat()}")
         logger.info(f"Invoke local response status code: {response.status_code}")
 
 
 class LambdaTaskPrinter(LambdaTask):
-    def apply(self, data: dict, due_date=None):
+    def apply(self, data: dict, due_date: datetime | None = None):
         if due_date is None:
-            due_date = datetime.now()
+            due_date = timezone.now()
 
         entry = self.get_entry(data)
         logger.info(f"Put events: {entry=} at {due_date.isoformat()}")

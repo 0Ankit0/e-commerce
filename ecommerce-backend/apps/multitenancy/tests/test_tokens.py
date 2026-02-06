@@ -1,7 +1,8 @@
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from django.conf import settings
+from django.utils import timezone
 
 from ..tokens import tenant_invitation_token
 
@@ -28,7 +29,7 @@ class TestTenantInvitationTokenGenerator:
         token = tenant_invitation_token.make_token(user.email, tenant_membership)
 
         # Sleep for more than the timeout
-        expired_date = datetime.now(tz=UTC) + timedelta(seconds=2)
+        expired_date = timezone.now() + timedelta(seconds=2)
         with mocker.patch.object(tenant_invitation_token, "_now", return_value=expired_date):
             assert not tenant_invitation_token.check_token(user.email, token, tenant_membership)
         # Restore original timeout value

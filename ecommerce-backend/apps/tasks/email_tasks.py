@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from celery import shared_task
 from django.conf import settings
@@ -9,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task
-def send_email_task(to_email: str, subject: str, template_name: str, context: dict = None):
+def send_email_task(to_email: str, subject: str, template_name: str, context: dict[str, Any] | None = None):
     """Send an email using a template."""
     context = context or {}
 
@@ -44,7 +45,7 @@ def send_welcome_email(user_id: int):
             to_email=user.email,
             subject="Welcome to E-Commerce Platform",
             template_name="welcome",
-            context={"user": {"email": user.email, "first_name": user.first_name}},
+            context={"user": {"email": user.email, "first_name": user.profile.first_name}},
         )
         return {"status": "sent", "user_id": user_id}
     except User.DoesNotExist:
@@ -76,24 +77,28 @@ def send_password_reset_email(user_id: int, reset_token: str):
 @shared_task
 def send_tenant_invitation_email(invitation_id: int):
     """Send tenant invitation email."""
-    from apps.multitenancy.models import TenantInvitation
+    from apps.multitenancy.models import TenantMembership
 
     try:
-        invitation = TenantInvitation.objects.select_related("tenant", "invited_by").get(id=invitation_id)
-        invite_url = f"{settings.FRONTEND_URL}/accept-invitation?token={invitation.token}"
+        invitation = TenantMembership.objects.select_related("tenant", "creator").get(id=invitation_id)
+        from apps.multitenancy.tokens import tenant_invitation_token
 
+        token = tenant_invitation_token.make_token(invitation.invitee_email_address, invitation)
+        invite_url = f"{settings.FRONTEND_URL}/accept-invitation?token={token}"
+
+        email = invitation.user.email if invitation.user else invitation.invitee_email_address
         send_email_task.delay(
-            to_email=invitation.email,
+            to_email=email,
             subject=f"You're invited to join {invitation.tenant.name}",
             template_name="tenant_invitation",
             context={
                 "tenant_name": invitation.tenant.name,
-                "invited_by": invitation.invited_by.email,
+                "invited_by": invitation.creator.email if invitation.creator else "Someone",
                 "invite_url": invite_url,
                 "role": invitation.role,
             },
         )
         return {"status": "sent", "invitation_id": invitation_id}
-    except TenantInvitation.DoesNotExist:
+    except TenantMembership.DoesNotExist:
         logger.error(f"Invitation {invitation_id} not found")
         return {"error": "Invitation not found"}

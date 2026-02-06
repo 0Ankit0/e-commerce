@@ -1,10 +1,8 @@
-from rest_framework import viewsets, permissions
-from apps.vendors.models import Vendor, VendorDocument, BankAccount
-from apps.vendors.serializers import (
-    VendorSerializer, 
-    VendorDocumentSerializer, 
-    BankAccountSerializer
-)
+from rest_framework import permissions, viewsets
+
+from apps.vendors.models import BankAccount, Vendor, VendorDocument
+from apps.vendors.serializers import BankAccountSerializer, VendorDocumentSerializer, VendorSerializer
+
 
 class VendorViewSet(viewsets.ModelViewSet):
     queryset = Vendor.objects.all()
@@ -12,10 +10,12 @@ class VendorViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     lookup_field = "slug"
 
+
 class VendorDocumentViewSet(viewsets.ModelViewSet):
     queryset = VendorDocument.objects.all()
     serializer_class = VendorDocumentSerializer
     permission_classes = [permissions.IsAuthenticated]
+
 
 class BankAccountViewSet(viewsets.ModelViewSet):
     queryset = BankAccount.objects.all()

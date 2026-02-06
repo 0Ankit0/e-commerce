@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from asgiref.sync import async_to_sync
 from celery import shared_task
@@ -9,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task
-def create_notification(user_id: int, notification_type: str, data: dict = None):
+def create_notification(user_id: int, notification_type: str, data: dict | None = None):
     """Create a notification and send it via WebSocket."""
     from apps.notifications.models import Notification
 
@@ -64,15 +65,14 @@ def send_scheduled_notifications():
 
 
 @shared_task
-def broadcast_notification(notification_type: str, data: dict = None, tenant_id: str = None):
+def broadcast_notification(notification_type: str, data: dict | None = None, tenant_id: str | None = None):
     """Broadcast a notification to all users or all users in a tenant."""
     from apps.multitenancy.models import TenantMembership
     from apps.users.models import User
 
+    user_ids: Any
     if tenant_id:
-        user_ids = TenantMembership.objects.filter(tenant_id=tenant_id, is_active=True).values_list(
-            "user_id", flat=True
-        )
+        user_ids = TenantMembership.objects.filter(tenant_id=tenant_id).values_list("user_id", flat=True)
     else:
         user_ids = User.objects.filter(is_active=True).values_list("id", flat=True)
 
@@ -92,8 +92,8 @@ def mark_old_notifications_read(user_id: int, days: int = 30):
 
     cutoff_date = timezone.now() - timedelta(days=days)
 
-    updated = Notification.objects.filter(user_id=user_id, is_read=False, created_at__lt=cutoff_date).update(
-        is_read=True, read_at=timezone.now()
+    updated = Notification.objects.filter(user_id=user_id, read_at__isnull=True, created_at__lt=cutoff_date).update(
+        read_at=timezone.now()
     )
 
     logger.info(f"Marked {updated} old notifications as read for user {user_id}")

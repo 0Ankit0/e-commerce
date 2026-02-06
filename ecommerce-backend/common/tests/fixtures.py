@@ -11,7 +11,7 @@ def lambda_task_apply(mocker):
     def assert_task_applied(
         source: str,
         detail_type: str,
-        data: dict = None,
+        data: dict | None = None,
         event_bus=settings.WORKERS_EVENT_BUS_NAME,
     ):
         if data is None:

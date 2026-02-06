@@ -2,6 +2,7 @@
 ASGI routing configuration for WebSocket connections.
 Works alongside REST API for real-time features.
 """
+
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.security.websocket import AllowedHostsOriginValidator

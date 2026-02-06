@@ -1,8 +1,8 @@
-import datetime
 from unittest.mock import patch
 
 import calleee
 import pytest
+from django.utils import timezone
 from djstripe import models as djstripe_models
 from djstripe.enums import RefundFailureReason, RefundStatus
 
@@ -16,7 +16,7 @@ class TestCancelTrialSubscriptionOnPaymentFailure:
     def test_previously_trialing_subscription_is_canceled(
         self, webhook_event_factory, subscription_factory, monthly_plan_price, stripe_request
     ):
-        start_date = datetime.datetime.now(tz=datetime.UTC)
+        start_date = timezone.now()
         subscription = subscription_factory(
             start_date=start_date,
             trial_end=start_date,

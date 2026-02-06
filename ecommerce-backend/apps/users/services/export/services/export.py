@@ -1,32 +1,16 @@
-import datetime
 import io
 import json
 import zipfile
 
 import boto3
 from django.conf import settings
+from django.utils import timezone
 
 from utils import hashid
 
 from ....models import User
 from ..constants import ExportUserArchiveRootPaths
 from ..protocols import UserDataExportable, UserFilesExportable
-
-
-class CrudDemoItemDataExport(UserDataExportable):
-    export_key = "crud_demo_items"
-
-    @classmethod
-    def export(cls, user: User) -> list[str]:
-        return [
-            json.dumps(
-                {
-                    "id": hashid.encode(item.id),
-                    "name": item.name,
-                }
-            )
-            for item in user.cruddemoitem_set.all()
-        ]
 
 
 class DocumentDemoItemFileExport(UserFilesExportable):
@@ -59,7 +43,7 @@ class UserDataExport(UserDataExportable):
 
 
 class ExportUserArchive:
-    _DATA_EXPORTS: list[UserDataExportable] = [UserDataExport, CrudDemoItemDataExport]
+    _DATA_EXPORTS: list[UserDataExportable] = [UserDataExport]
     _FILES_EXPORTS: list[UserFilesExportable] = [DocumentDemoItemFileExport]
 
     def __init__(self, user: User):
@@ -104,7 +88,7 @@ class ExportUserArchive:
 
             for file_path in user_files:
                 with io.BytesIO() as buffer:
-                    s3.download_fileobj(settings.AWS_STORAGE_BUCKET_NAME, file_path.name, buffer)
+                    s3.download_fileobj(settings.AWS_STORAGE_BUCKET_NAME, file_path, buffer)
                     zf.writestr(f"{self._user_id}/{file_path}", buffer.getvalue())
 
         return archive_filename
@@ -123,5 +107,5 @@ class ExportUserArchive:
         return export_url
 
     def _get_user_archive_obj_key(self) -> str:
-        timestamp = datetime.datetime.now().strftime("%d-%m-%y_%H-%M-%S")
+        timestamp = timezone.now().strftime("%d-%m-%y_%H-%M-%S")
         return f"{ExportUserArchiveRootPaths.S3_ROOT.value}/{self._user_id}_{timestamp}.zip"

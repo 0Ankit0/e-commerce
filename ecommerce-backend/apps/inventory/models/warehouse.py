@@ -1,11 +1,13 @@
 import hashid_field
 from django.db import models
-from common.models import TimestampedMixin
+
 from apps.vendors.models import Vendor
+from common.models import TimestampedMixin
+
 
 class Warehouse(TimestampedMixin, models.Model):
     id = hashid_field.HashidAutoField(primary_key=True)
-    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name='warehouses')
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name="warehouses")
     name = models.CharField(max_length=255)
     address = models.CharField(max_length=500)
     city = models.CharField(max_length=100)

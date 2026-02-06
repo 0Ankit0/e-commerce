@@ -4,12 +4,12 @@
 <div class="mt-2 text-gray-700">
     {% for choice in field.field.choices %}
         <div class="flex items-center mb-2">
-            <input type="checkbox" 
-                   class="form-checkbox h-4 w-4 text-blue-600 transition duration-150 ease-in-out" 
-                   {% if choice.0 in field.value or choice.0|stringformat:"s" in field.value %} checked="checked"{% endif %} 
-                   name="{{ field.html_name }}" 
-                   id="id_{{ field.html_name }}_{{ forloop.counter }}" 
-                   value="{{ choice.0|unlocalize }}" 
+            <input type="checkbox"
+                   class="form-checkbox h-4 w-4 text-blue-600 transition duration-150 ease-in-out"
+                   {% if choice.0 in field.value or choice.0|stringformat:"s" in field.value %} checked="checked"{% endif %}
+                   name="{{ field.html_name }}"
+                   id="id_{{ field.html_name }}_{{ forloop.counter }}"
+                   value="{{ choice.0|unlocalize }}"
                    {{ field.field.widget.attrs|flatatt }}>
             <label class="ml-2" for="id_{{ field.html_name }}_{{ forloop.counter }}">
                 {{ choice.1|unlocalize }}

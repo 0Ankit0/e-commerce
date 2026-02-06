@@ -240,13 +240,17 @@ STATIC_URL = "/static/"
 
 AUTH_USER_MODEL = "users.User"
 
+FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:3000")
+
 AUTHENTICATION_BACKENDS = (
     "social_core.backends.google.GoogleOAuth2",
     "social_core.backends.facebook.FacebookOAuth2",
     "django.contrib.auth.backends.ModelBackend",
 )
 
-LOCALE_PATHS = []
+LOCALE_PATHS: list[str] = [
+    str(BASE_DIR) + "/locale",
+]
 
 REST_FRAMEWORK = {
     "EXCEPTION_HANDLER": "common.utils.custom_exception_handler",
@@ -341,7 +345,9 @@ SUBSCRIPTION_TRIAL_PERIOD_DAYS = env("SUBSCRIPTION_TRIAL_PERIOD_DAYS", default=7
 
 NOTIFICATIONS_STRATEGIES = ["InAppNotificationStrategy"]
 
-SHELL_PLUS_IMPORTS = []
+SHELL_PLUS_IMPORTS: list[str] = [
+    "import datetime",
+]
 
 AWS_STORAGE_BUCKET_NAME = env("AWS_STORAGE_BUCKET_NAME", default=None)
 AWS_EXPORTS_STORAGE_BUCKET_NAME = env("AWS_EXPORTS_STORAGE_BUCKET_NAME", default=None)
@@ -370,7 +376,7 @@ USER_DOCUMENTS_NUMBER_LIMIT = env.int("USER_DOCUMENTS_NUMBER_LIMIT", default=10)
 TENANT_INVITATION_TIMEOUT = env("TENANT_INVITATION_TIMEOUT", default=60 * 60 * 24 * 14)
 
 CELERY_RESULT_BACKEND = "django-db"
-CELERY_BROKER_URL = f'{env("REDIS_CONNECTION")}/0'
+CELERY_BROKER_URL = f"{env('REDIS_CONNECTION')}/0"
 CELERY_BROKER_TRANSPORT_OPTIONS = {
     "visibility_timeout": 3600,
 }

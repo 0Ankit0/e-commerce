@@ -1,14 +1,16 @@
 from celery import shared_task
-from django.core.mail import send_mail
 from django.conf import settings
+from django.core.mail import send_mail
+
 from apps.orders.models import Order
+
 
 @shared_task
 def send_order_confirmation(order_id):
     try:
-        order = Order.objects.select_related('user').get(id=order_id)
+        order = Order.objects.select_related("user").get(id=order_id)
         user_email = order.user.email
-        
+
         subject = f"Order Confirmation - Order #{order.id}"
         message = (
             f"Hi {order.user.get_full_name() or 'Customer'},\n\n"
@@ -17,7 +19,7 @@ def send_order_confirmation(order_id):
             f"We will notify you when your items are shipped.\n\n"
             f"Regards,\nE-Commerce Team"
         )
-        
+
         send_mail(
             subject=subject,
             message=message,

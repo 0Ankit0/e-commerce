@@ -1,4 +1,4 @@
-import six
+import six  # type: ignore[import-untyped]
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 
 
@@ -7,7 +7,7 @@ class AccountActivationTokenGenerator(PasswordResetTokenGenerator):
         return six.text_type(user.pk) + six.text_type(timestamp) + six.text_type(user.is_confirmed)
 
 
-class PasswordResetTokenGenerator(PasswordResetTokenGenerator):
+class CustomPasswordResetTokenGenerator(PasswordResetTokenGenerator):
     def _make_hash_value(self, user, timestamp):
         last_login = "" if user.last_login is None else user.last_login.replace(microsecond=0, tzinfo=None)
         keys = [user.pk, user.password, last_login, timestamp, user.is_confirmed]
@@ -15,4 +15,4 @@ class PasswordResetTokenGenerator(PasswordResetTokenGenerator):
 
 
 account_activation_token = AccountActivationTokenGenerator()
-password_reset_token = PasswordResetTokenGenerator()
+password_reset_token = CustomPasswordResetTokenGenerator()

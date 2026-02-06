@@ -61,7 +61,7 @@ class DocumentSerializer(serializers.ModelSerializer):
     def validate_file(self, value):
         if value.size > settings.UPLOADED_DOCUMENT_SIZE_LIMIT:
             raise serializers.ValidationError(
-                f"File size exceeds the limit of {settings.UPLOADED_DOCUMENT_SIZE_LIMIT / (1024*1024):.0f}MB"
+                f"File size exceeds the limit of {settings.UPLOADED_DOCUMENT_SIZE_LIMIT / (1024 * 1024):.0f}MB"
             )
         return value
 
@@ -76,7 +76,7 @@ class DocumentUploadSerializer(serializers.ModelSerializer):
     def validate_file(self, value):
         if value.size > settings.UPLOADED_DOCUMENT_SIZE_LIMIT:
             raise serializers.ValidationError(
-                f"File size exceeds the limit of {settings.UPLOADED_DOCUMENT_SIZE_LIMIT / (1024*1024):.0f}MB"
+                f"File size exceeds the limit of {settings.UPLOADED_DOCUMENT_SIZE_LIMIT / (1024 * 1024):.0f}MB"
             )
         return value
 

@@ -1,5 +1,7 @@
 import datetime
 import uuid
+from datetime import timedelta
+from typing import Any
 
 import factory
 from django.utils import timezone
@@ -54,7 +56,7 @@ class BalanceTransactionFactory(factory.django.DjangoModelFactory):
     available_on = factory.Faker("future_datetime", tzinfo=timezone.get_current_timezone())
     currency = "usd"
     fee = 0
-    fee_details = {}
+    fee_details: dict[str, Any] = {}
     net = factory.LazyAttribute(lambda obj: obj.amount)
     source = factory.Faker("pystr")
     reporting_category = enums.BalanceTransactionReportingCategory.charge
@@ -204,11 +206,11 @@ class SubscriptionFactory(factory.django.DjangoModelFactory):
     id = factory.Faker("uuid4")
     livemode = False
     collection_method = enums.InvoiceCollectionMethod.charge_automatically
-    start_date = datetime.datetime.now(tz=datetime.UTC)
+    start_date = timezone.now()
     trial_start = None
     trial_end = None
     current_period_start = factory.LazyAttribute(lambda o: o.start_date)
-    current_period_end = factory.LazyAttribute(lambda o: o.current_period_start + +datetime.timedelta(30))
+    current_period_end = factory.LazyAttribute(lambda o: o.current_period_start + timedelta(30))
 
     customer = factory.SubFactory(CustomerFactory)
     status = enums.SubscriptionStatus.active
@@ -231,15 +233,15 @@ class SubscriptionFactory(factory.django.DjangoModelFactory):
     class Params:
         trialing = factory.Trait(
             status=enums.SubscriptionStatus.trialing,
-            trial_start=datetime.datetime.now(tz=datetime.UTC),
-            trial_end=datetime.datetime.now(tz=datetime.UTC) + datetime.timedelta(30),
+            trial_start=timezone.now(),
+            trial_end=timezone.now() + timedelta(30),
         )
 
         trial_completed = factory.Trait(
             status=enums.SubscriptionStatus.trialing,
-            current_period_start=datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(2),
-            trial_start=datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(2),
-            trial_end=datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(1),
+            current_period_start=timezone.now() - timedelta(2),
+            trial_start=timezone.now() - timedelta(2),
+            trial_end=timezone.now() - timedelta(1),
         )
 
 
@@ -257,7 +259,7 @@ class SubscriptionScheduleFactory(factory.django.DjangoModelFactory):
     @factory.post_generation
     def phases(self, create, extracted, **kwargs):
         def unix_time(dt):
-            epoch = datetime.datetime.utcfromtimestamp(0).replace(tzinfo=datetime.UTC)
+            epoch = datetime.datetime.fromtimestamp(0, tz=datetime.UTC)
             return int((dt - epoch).total_seconds())
 
         if not create:
