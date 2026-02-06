@@ -1,0 +1,17 @@
+{% load crispy_forms_filters %}
+{% load l10n %}
+
+<div class="mt-2">
+    {% for choice in field.field.choices %}
+        <label for="id_{{ field.html_name }}_{{ forloop.counter }}" class="inline-flex items-center mr-6">
+            <input type="radio" 
+                   class="form-radio h-4 w-4 text-blue-600 transition duration-150 ease-in-out" 
+                   {% if choice.0|stringformat:"s" == field.value|default_if_none:""|stringformat:"s" %} checked="checked"{% endif %} 
+                   name="{{ field.html_name }}" 
+                   id="id_{{ field.html_name }}_{{ forloop.counter }}" 
+                   value="{{ choice.0|unlocalize }}" 
+                   {{ field.field.widget.attrs|flatatt }}>
+            <span class="ml-2 text-gray-700">{{ choice.1|unlocalize }}</span>
+        </label>
+    {% endfor %}
+</div>
