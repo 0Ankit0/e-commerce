@@ -54,7 +54,12 @@ THIRD_PARTY_APPS = [
     "social_django",
     "whitenoise",
     "channels",
+    "crispy_forms",
+    "crispy_tailwind",
 ]
+
+CRISPY_ALLOWED_TEMPLATE_PACKS = "tailwind"
+CRISPY_TEMPLATE_PACK = "tailwind"
 
 LOCAL_APPS = [
     "apps.content",
@@ -64,6 +69,12 @@ LOCAL_APPS = [
     "apps.integrations",
     "apps.multitenancy",
     "apps.websockets",
+    "apps.vendors",
+    "apps.catalog",
+    "apps.inventory",
+    "apps.orders",
+    "apps.payments",
+    "apps.logistics",
 ]
 
 INSTALLED_APPS = (

@@ -45,6 +45,13 @@ urlpatterns = [
                 path("content/", include("apps.content.urls")),
                 # Integrations (OpenAI)
                 path("integrations/", include("apps.integrations.urls")),
+                # E-Commerce Modules
+                path("vendors/", include("apps.vendors.api.urls")),
+                path("catalog/", include("apps.catalog.api.urls")),
+                path("inventory/", include("apps.inventory.api.urls")),
+                path("orders/", include("apps.orders.api.urls")),
+                path("payments/", include("apps.payments.api.urls")),
+                path("logistics/", include("apps.logistics.api.urls")),
             ]
         ),
     ),
