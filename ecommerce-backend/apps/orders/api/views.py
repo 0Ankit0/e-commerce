@@ -41,6 +41,15 @@ class OrderViewSet(viewsets.ModelViewSet):
         return Order.objects.filter(user=self.request.user)
 
     def create(self, request, *args, **kwargs):
+        # Check for Idempotency-Key
+        idempotency_key = request.headers.get("Idempotency-Key")
+        if idempotency_key:
+            # Check if order already exists for this user and key
+            existing_order = Order.objects.filter(user=request.user, idempotency_key=idempotency_key).first()
+            if existing_order:
+                serializer = self.get_serializer(existing_order)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+
         # Checkout flow: convert Cart to Order
         # We assume the user has a cart.
         try:
@@ -53,7 +62,13 @@ class OrderViewSet(viewsets.ModelViewSet):
 
         # Call service
         try:
+            # Pass idempotency_key to service if needed, or set it on order after creation
             order = create_order_from_cart(cart, request.user)
+
+            if idempotency_key:
+                order.idempotency_key = idempotency_key
+                order.save(update_fields=["idempotency_key"])
+
             serializer = self.get_serializer(order)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         except Exception as e:

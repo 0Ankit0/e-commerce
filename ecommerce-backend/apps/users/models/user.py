@@ -57,6 +57,30 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_active = models.BooleanField(default=True)
     is_superuser = models.BooleanField(default=False)
 
+    avatar_url = models.CharField(max_length=500, blank=True, null=True)
+
+    class UserType(models.TextChoices):
+        CUSTOMER = "customer", "Customer"
+        VENDOR = "vendor", "Vendor"
+        ADMIN = "admin", "Admin"
+        AGENT = "agent", "Delivery Agent"
+        HUB_OPERATOR = "hub_operator", "Hub Operator"
+
+    user_type = models.CharField(max_length=20, choices=UserType.choices, default=UserType.CUSTOMER)
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        INACTIVE = "inactive", "Inactive"
+        SUSPENDED = "suspended", "Suspended"
+        DELETED = "deleted", "Deleted"
+
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+
+    phone = models.CharField(max_length=20, unique=True, null=True, blank=True)
+    email_verified = models.BooleanField(default=False)
+    phone_verified = models.BooleanField(default=False)
+    # last_login_at is already handled by AbstractBaseUser.last_login
+
     otp_enabled = models.BooleanField(default=False)
     otp_verified = models.BooleanField(default=False)
     otp_base32 = models.CharField(max_length=255, blank=True, default="")
@@ -75,3 +99,10 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def has_group(self, name):
         return self.groups.filter(name=name).exists()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["email"]),
+            models.Index(fields=["phone"]),
+            models.Index(fields=["user_type", "status"]),
+        ]

@@ -62,3 +62,16 @@ class Product(TimestampedMixin, models.Model):
 
     def __str__(self):
         return self.name
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["vendor"]),
+            models.Index(fields=["category"]),
+            models.Index(fields=["status"]),
+            models.Index(fields=["is_featured"], condition=models.Q(is_featured=True), name="idx_products_featured"),
+            # GIN index for search would require contrib.postgres and additional setup, skipping for now or adding standard index?
+            # Standard Django doesn't support functional indexes easily without specific DB backends.
+            # I will add a standard index on name and slug.
+            models.Index(fields=["name"]),
+            models.Index(fields=["slug"]),
+        ]
