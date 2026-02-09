@@ -261,7 +261,7 @@ from typing import Any, Optional
 
 class AppException(Exception):
     """Base application exception."""
-    
+
     def __init__(
         self,
         code: str,
@@ -588,22 +588,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-      
+
       - name: Install dependencies
         run: npm ci
-      
+
       - name: Run linting
         run: npm run lint
-      
+
       - name: Run tests
         run: npm test -- --coverage
-      
+
       - name: Upload coverage
         uses: codecov/codecov-action@v3
 
@@ -612,10 +612,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Build Docker image
         run: docker build -t $ECR_REGISTRY/$SERVICE_NAME:$GITHUB_SHA .
-      
+
       - name: Push to ECR
         run: docker push $ECR_REGISTRY/$SERVICE_NAME:$GITHUB_SHA
 
@@ -668,7 +668,7 @@ router.get('/ready', async (req, res) => {
     redis: await checkRedis(),
     kafka: await checkKafka()
   };
-  
+
   const healthy = Object.values(checks).every(c => c);
   res.status(healthy ? 200 : 503).json({ ready: healthy, checks });
 });
@@ -705,11 +705,11 @@ export const authenticate = async (
   next: NextFunction
 ): Promise<void> => {
   const token = req.headers.authorization?.replace('Bearer ', '');
-  
+
   if (!token) {
     throw new UnauthorizedError('No token provided');
   }
-  
+
   try {
     const payload = await verifyJWT(token);
     req.user = payload;

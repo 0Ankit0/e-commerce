@@ -13,26 +13,26 @@ graph TB
     Vendor((Vendor<br>🏪))
     Admin((Admin<br>👨‍💼))
     Agent((Delivery Agent<br>🛵))
-    
+
     subgraph "E-Commerce Platform"
         System[E-Commerce System<br>Enables online shopping,<br>vendor management, and<br>order fulfillment]
     end
-    
+
     PaymentGW[Payment Gateway<br>📱 External System<br>Razorpay, Stripe]
     LogisticsPartner[Logistics Partner<br>🚚 External System<br>3PL Integration]
     NotificationSvc[Notification Services<br>📧 External System<br>SMS, Email, Push]
     MapsAPI[Maps Service<br>🗺️ External System<br>Google Maps]
-    
+
     Customer -->|Browses products,<br>places orders,<br>tracks deliveries| System
     Vendor -->|Manages products,<br>fulfills orders,<br>views analytics| System
     Admin -->|Manages platform,<br>users, and settings| System
     Agent -->|Delivers orders,<br>captures POD| System
-    
+
     System -->|Processes payments| PaymentGW
     System <-->|Creates shipments,<br>gets tracking| LogisticsPartner
     System -->|Sends notifications| NotificationSvc
     System -->|Gets directions,<br>calculates ETA| MapsAPI
-    
+
     style System fill:#438DD5,color:#fff
     style PaymentGW fill:#999,color:#fff
     style LogisticsPartner fill:#999,color:#fff
@@ -50,7 +50,7 @@ graph TB
     Vendor((Vendor 🏪))
     Admin((Admin 👨‍💼))
     Agent((Agent 🛵))
-    
+
     subgraph "E-Commerce Platform"
         subgraph "Frontend Applications"
             WebApp[Customer Web App<br>Container: Next.js<br>Provides shopping experience]
@@ -58,11 +58,11 @@ graph TB
             AdminDash[Admin Dashboard<br>Container: React<br>Platform management]
             AgentApp[Agent Mobile App<br>Container: React Native<br>Delivery management]
         end
-        
+
         subgraph "API Layer"
             Gateway[API Gateway<br>Container: Kong<br>Routing, Auth, Rate Limiting]
         end
-        
+
         subgraph "Microservices"
             UserSvc[User Service<br>Container: Node.js<br>Authentication & profiles]
             ProductSvc[Product Service<br>Container: Node.js<br>Catalog management]
@@ -71,59 +71,59 @@ graph TB
             LogSvc[Logistics Service<br>Container: Node.js<br>Shipping management]
             NotifSvc[Notification Service<br>Container: Python<br>Multi-channel notifications]
         end
-        
+
         subgraph "Data Stores"
             DB[(PostgreSQL<br>Database<br>Primary data store)]
             Redis[(Redis<br>Cache<br>Sessions, caching)]
             Elastic[(Elasticsearch<br>Search Engine<br>Product search)]
             S3[(S3<br>Object Store<br>Images, files)]
         end
-        
+
         subgraph "Message Bus"
             Kafka[Apache Kafka<br>Event Streaming<br>Async communication]
         end
     end
-    
+
     PaymentGW[Payment Gateway]
     SMS[SMS Provider]
     Email[Email Provider]
-    
+
     Customer --> WebApp
     Vendor --> VendorPortal
     Admin --> AdminDash
     Agent --> AgentApp
-    
+
     WebApp --> Gateway
     VendorPortal --> Gateway
     AdminDash --> Gateway
     AgentApp --> Gateway
-    
+
     Gateway --> UserSvc
     Gateway --> ProductSvc
     Gateway --> OrderSvc
     Gateway --> PaymentSvc
     Gateway --> LogSvc
-    
+
     UserSvc --> DB
     ProductSvc --> DB
     OrderSvc --> DB
     PaymentSvc --> DB
     LogSvc --> DB
-    
+
     UserSvc --> Redis
     ProductSvc --> Redis
     ProductSvc --> Elastic
     ProductSvc --> S3
-    
+
     OrderSvc --> Kafka
     PaymentSvc --> Kafka
     LogSvc --> Kafka
     Kafka --> NotifSvc
-    
+
     PaymentSvc --> PaymentGW
     NotifSvc --> SMS
     NotifSvc --> Email
-    
+
     style WebApp fill:#438DD5,color:#fff
     style VendorPortal fill:#438DD5,color:#fff
     style AdminDash fill:#438DD5,color:#fff
@@ -146,33 +146,33 @@ graph TB
     subgraph "API Gateway"
         Gateway[Kong API Gateway]
     end
-    
+
     subgraph "Order Service"
         subgraph "API Layer"
             OrderController[Order Controller<br>Component: Express Router<br>Handles HTTP requests]
             CartController[Cart Controller<br>Component: Express Router<br>Cart operations]
         end
-        
+
         subgraph "Business Logic"
             OrderManager[Order Manager<br>Component: Service<br>Order orchestration]
             CartManager[Cart Manager<br>Component: Service<br>Cart management]
             CheckoutManager[Checkout Manager<br>Component: Service<br>Checkout flow]
             PricingEngine[Pricing Engine<br>Component: Service<br>Price calculation]
         end
-        
+
         subgraph "Domain Layer"
             OrderRepo[Order Repository<br>Component: Repository<br>Order persistence]
             CartRepo[Cart Repository<br>Component: Repository<br>Cart persistence]
             OrderValidator[Order Validator<br>Component: Validator<br>Business rules]
         end
-        
+
         subgraph "Integration"
             PaymentClient[Payment Client<br>Component: HTTP Client<br>Payment service calls]
             InventoryClient[Inventory Client<br>Component: HTTP Client<br>Stock checks]
             EventPublisher[Event Publisher<br>Component: Kafka Producer<br>Order events]
         end
     end
-    
+
     subgraph "External"
         PaymentSvc[Payment Service]
         InventorySvc[Inventory Service]
@@ -180,29 +180,29 @@ graph TB
         DB[(PostgreSQL)]
         Redis[(Redis)]
     end
-    
+
     Gateway --> OrderController
     Gateway --> CartController
-    
+
     OrderController --> OrderManager
     CartController --> CartManager
     OrderManager --> CheckoutManager
     CheckoutManager --> PricingEngine
-    
+
     OrderManager --> OrderRepo
     OrderManager --> OrderValidator
     CartManager --> CartRepo
-    
+
     CheckoutManager --> PaymentClient
     CheckoutManager --> InventoryClient
     OrderManager --> EventPublisher
-    
+
     PaymentClient --> PaymentSvc
     InventoryClient --> InventorySvc
     EventPublisher --> Kafka
     OrderRepo --> DB
     CartRepo --> Redis
-    
+
     style OrderController fill:#85BBF0,color:#000
     style CartController fill:#85BBF0,color:#000
     style OrderManager fill:#85BBF0,color:#000
@@ -226,62 +226,62 @@ graph TB
     subgraph "API Gateway"
         Gateway[Kong API Gateway]
     end
-    
+
     subgraph "Logistics Service"
         subgraph "API Layer"
             ShipmentController[Shipment Controller<br>Handles shipment APIs]
             TrackingController[Tracking Controller<br>Handles tracking APIs]
             HubController[Hub Controller<br>Handles hub operations]
         end
-        
+
         subgraph "Business Logic"
             ShipmentManager[Shipment Manager<br>Shipment orchestration]
             RouteOptimizer[Route Optimizer<br>Route planning]
             AssignmentEngine[Assignment Engine<br>Agent assignment]
             LineHaulManager[Line Haul Manager<br>Inter-hub transfers]
         end
-        
+
         subgraph "Domain Layer"
             ShipmentRepo[Shipment Repository<br>Shipment persistence]
             TrackingRepo[Tracking Repository<br>Tracking history]
             HubRepo[Hub Repository<br>Hub data]
             AgentRepo[Agent Repository<br>Agent data]
         end
-        
+
         subgraph "Integration"
             MapsClient[Maps Client<br>Google Maps API]
             PartnerClient[Partner Client<br>3PL Integration]
             EventPublisher[Event Publisher<br>Kafka Producer]
         end
     end
-    
+
     subgraph "External"
         MapsAPI[Google Maps API]
         ThreePL[3PL Partner API]
         Kafka[Kafka]
         DB[(PostgreSQL)]
     end
-    
+
     Gateway --> ShipmentController
     Gateway --> TrackingController
     Gateway --> HubController
-    
+
     ShipmentController --> ShipmentManager
     TrackingController --> ShipmentManager
     HubController --> LineHaulManager
-    
+
     ShipmentManager --> RouteOptimizer
     ShipmentManager --> AssignmentEngine
-    
+
     ShipmentManager --> ShipmentRepo
     ShipmentManager --> TrackingRepo
     LineHaulManager --> HubRepo
     AssignmentEngine --> AgentRepo
-    
+
     RouteOptimizer --> MapsClient
     ShipmentManager --> PartnerClient
     ShipmentManager --> EventPublisher
-    
+
     MapsClient --> MapsAPI
     PartnerClient --> ThreePL
     EventPublisher --> Kafka
@@ -298,39 +298,39 @@ graph TB
     subgraph "API Gateway"
         Gateway[Kong API Gateway]
     end
-    
+
     subgraph "Payment Service"
         subgraph "API Layer"
             PaymentController[Payment Controller<br>Payment APIs]
             RefundController[Refund Controller<br>Refund APIs]
             WebhookHandler[Webhook Handler<br>Gateway callbacks]
         end
-        
+
         subgraph "Business Logic"
             PaymentManager[Payment Manager<br>Payment orchestration]
             RefundManager[Refund Manager<br>Refund processing]
             PayoutManager[Payout Manager<br>Vendor payouts]
             ReconciliationEngine[Reconciliation<br>Settlement matching]
         end
-        
+
         subgraph "Domain Layer"
             PaymentRepo[Payment Repository<br>Transaction storage]
             RefundRepo[Refund Repository<br>Refund storage]
             LedgerRepo[Ledger Repository<br>Financial records]
         end
-        
+
         subgraph "Gateway Adapters"
             RazorpayAdapter[Razorpay Adapter<br>Razorpay integration]
             StripeAdapter[Stripe Adapter<br>Stripe integration]
             PayPalAdapter[PayPal Adapter<br>PayPal integration]
         end
-        
+
         subgraph "Integration"
             EventPublisher[Event Publisher<br>Kafka Producer]
             BankClient[Bank Client<br>Bank transfers]
         end
     end
-    
+
     subgraph "External"
         Razorpay[Razorpay API]
         Stripe[Stripe API]
@@ -339,31 +339,31 @@ graph TB
         Kafka[Kafka]
         DB[(PostgreSQL)]
     end
-    
+
     Gateway --> PaymentController
     Gateway --> RefundController
     Razorpay --> WebhookHandler
     Stripe --> WebhookHandler
-    
+
     PaymentController --> PaymentManager
     RefundController --> RefundManager
     WebhookHandler --> PaymentManager
-    
+
     PaymentManager --> PaymentRepo
     RefundManager --> RefundRepo
     PayoutManager --> LedgerRepo
-    
+
     PaymentManager --> RazorpayAdapter
     PaymentManager --> StripeAdapter
     PaymentManager --> PayPalAdapter
-    
+
     RazorpayAdapter --> Razorpay
     StripeAdapter --> Stripe
     PayPalAdapter --> PayPal
-    
+
     PaymentManager --> EventPublisher
     PayoutManager --> BankClient
-    
+
     EventPublisher --> Kafka
     BankClient --> Bank
     PaymentRepo --> DB
@@ -398,7 +398,7 @@ graph TB
                 ALB[Application Load Balancer]
                 NAT[NAT Gateway]
             end
-            
+
             subgraph "Private Subnets - Application"
                 EKS[EKS Cluster]
                 subgraph "Pods"
@@ -406,21 +406,21 @@ graph TB
                     Services[Microservice Pods]
                 end
             end
-            
+
             subgraph "Private Subnets - Data"
                 RDS[(RDS PostgreSQL)]
                 ElastiCache[(ElastiCache Redis)]
                 OpenSearch[(OpenSearch)]
             end
         end
-        
+
         S3[(S3 Buckets)]
         CloudFront[CloudFront CDN]
         MSK[Amazon MSK - Kafka]
         SES[Amazon SES]
         SNS[Amazon SNS]
     end
-    
+
     Internet[Internet] --> CloudFront
     CloudFront --> ALB
     ALB --> Gateway
@@ -432,7 +432,7 @@ graph TB
     Services --> MSK
     Services --> SES
     Services --> SNS
-    
+
     style EKS fill:#FF9900,color:#fff
     style RDS fill:#3B48CC,color:#fff
     style S3 fill:#569A31,color:#fff

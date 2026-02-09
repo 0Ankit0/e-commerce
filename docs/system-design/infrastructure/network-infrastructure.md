@@ -13,14 +13,14 @@ graph TB
         Users[Users]
         Partners[Partner APIs]
     end
-    
+
     subgraph "AWS Edge Services"
         Route53[Route 53<br>DNS]
         CloudFront[CloudFront<br>CDN]
         WAF[AWS WAF]
         Shield[AWS Shield<br>DDoS Protection]
     end
-    
+
     subgraph "VPC - 10.0.0.0/16"
         subgraph "Public Subnets"
             subgraph "AZ-A 10.0.1.0/24"
@@ -28,44 +28,44 @@ graph TB
                 NAT_A[NAT Gateway]
                 Bastion_A[Bastion Host]
             end
-            
+
             subgraph "AZ-B 10.0.2.0/24"
                 ALB_B[ALB Node]
                 NAT_B[NAT Gateway]
             end
         end
-        
+
         subgraph "Private App Subnets"
             subgraph "AZ-A 10.0.10.0/24"
                 EKS_A[EKS Nodes]
             end
-            
+
             subgraph "AZ-B 10.0.11.0/24"
                 EKS_B[EKS Nodes]
             end
         end
-        
+
         subgraph "Private Data Subnets"
             subgraph "AZ-A 10.0.20.0/24"
                 RDS_A[(RDS Primary)]
                 Redis_A[(ElastiCache)]
             end
-            
+
             subgraph "AZ-B 10.0.21.0/24"
                 RDS_B[(RDS Standby)]
                 Redis_B[(ElastiCache)]
             end
         end
-        
+
         IGW[Internet Gateway]
-        
+
         subgraph "VPC Endpoints"
             S3_EP[S3 Endpoint]
             ECR_EP[ECR Endpoint]
             Secrets_EP[Secrets Manager Endpoint]
         end
     end
-    
+
     Users --> Route53
     Route53 --> CloudFront
     CloudFront --> Shield
@@ -73,20 +73,20 @@ graph TB
     WAF --> IGW
     IGW --> ALB_A
     IGW --> ALB_B
-    
+
     ALB_A --> EKS_A
     ALB_B --> EKS_B
-    
+
     EKS_A --> NAT_A
     EKS_B --> NAT_B
     NAT_A --> IGW
     NAT_B --> IGW
-    
+
     EKS_A --> RDS_A
     EKS_B --> RDS_A
     EKS_A --> Redis_A
     EKS_B --> Redis_B
-    
+
     EKS_A --> S3_EP
     EKS_B --> S3_EP
     EKS_A --> ECR_EP
@@ -116,24 +116,24 @@ graph LR
         subgraph "sg-alb"
             ALB[ALB Security Group]
         end
-        
+
         subgraph "sg-eks"
             EKS[EKS Security Group]
         end
-        
+
         subgraph "sg-rds"
             RDS[RDS Security Group]
         end
-        
+
         subgraph "sg-redis"
             Redis[Redis Security Group]
         end
-        
+
         subgraph "sg-bastion"
             Bastion[Bastion Security Group]
         end
     end
-    
+
     Internet[Internet 0.0.0.0/0] -->|443, 80| ALB
     ALB -->|3000-3010| EKS
     EKS -->|5432| RDS
@@ -165,12 +165,12 @@ graph TB
             PubIn[Inbound Rules]
             PubOut[Outbound Rules]
         end
-        
+
         subgraph "Private App Subnet NACL"
             PrivAppIn[Inbound Rules]
             PrivAppOut[Outbound Rules]
         end
-        
+
         subgraph "Private Data Subnet NACL"
             PrivDataIn[Inbound Rules]
             PrivDataOut[Outbound Rules]
@@ -196,22 +196,22 @@ graph TB
     subgraph "Application Load Balancer"
         Listener443[HTTPS Listener :443]
         Listener80[HTTP Listener :80]
-        
+
         subgraph "Target Groups"
             TG_Gateway[Kong Gateway TG<br>Port 8000]
             TG_Web[Web App TG<br>Port 3000]
         end
-        
+
         subgraph "Rules"
             R1["/api/* → Kong Gateway"]
             R2["/* → Web App"]
         end
     end
-    
+
     Listener443 --> R1
     Listener443 --> R2
     Listener80 -->|Redirect| Listener443
-    
+
     R1 --> TG_Gateway
     R2 --> TG_Web
 ```
@@ -237,7 +237,7 @@ graph TB
 graph TB
     subgraph "Route 53"
         HostedZone[Hosted Zone<br>ecommerce.com]
-        
+
         subgraph "Records"
             A_Root[A Record<br>ecommerce.com]
             A_API[A Record<br>api.ecommerce.com]
@@ -245,24 +245,24 @@ graph TB
             A_Admin[A Record<br>admin.ecommerce.com]
             CNAME_CDN[CNAME<br>cdn.ecommerce.com]
         end
-        
+
         subgraph "Health Checks"
             HC1[API Health Check]
             HC2[Web Health Check]
         end
     end
-    
+
     subgraph "Targets"
         CloudFront_Dist[CloudFront Distribution]
         ALB[Application Load Balancer]
     end
-    
+
     A_Root --> CloudFront_Dist
     A_API --> ALB
     A_Vendor --> ALB
     A_Admin --> ALB
     CNAME_CDN --> CloudFront_Dist
-    
+
     HC1 --> ALB
     HC2 --> ALB
 ```
@@ -280,13 +280,13 @@ sequenceDiagram
     participant ALB as Load Balancer
     participant Pod as K8s Pod
     participant DB as Database
-    
+
     User->>DNS: Resolve api.ecommerce.com
     DNS-->>User: ALB IP Address
-    
+
     User->>CDN: GET /static/image.jpg
     CDN-->>User: Cached Content (Cache Hit)
-    
+
     User->>WAF: POST /api/orders
     WAF->>WAF: Check Rules
     WAF->>ALB: Forward Request
@@ -309,21 +309,21 @@ graph TB
         ALB_A[ALB]
         RDS_A[(RDS Primary)]
     end
-    
+
     subgraph "Region B - DR (us-west-2)"
         VPC_B[VPC 10.1.0.0/16]
         ALB_B[ALB]
         RDS_B[(RDS Replica)]
     end
-    
+
     VPC_Peering[VPC Peering Connection]
     VPC_A <--> VPC_Peering
     VPC_Peering <--> VPC_B
-    
+
     Route53[Route 53<br>Health-Based Routing]
     Route53 -->|Active| ALB_A
     Route53 -.->|Failover| ALB_B
-    
+
     RDS_A -.->|Async Replication| RDS_B
 ```
 

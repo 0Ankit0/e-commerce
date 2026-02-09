@@ -16,7 +16,7 @@ graph TB
         DeliveryAgent((Delivery Agent))
         HubOperator((Hub Operator))
     end
-    
+
     subgraph External Systems
         PG[Payment Gateways<br>Razorpay/Stripe/PayPal]
         SMS[SMS Provider<br>Twilio/MSG91]
@@ -29,17 +29,17 @@ graph TB
         ERP[Vendor ERP Systems]
         Bank[Banking System]
     end
-    
+
     subgraph "E-Commerce Platform"
         Platform[E-Commerce<br>Platform]
     end
-    
+
     Customer -->|Browse, Order, Pay| Platform
     Vendor -->|Manage Products, Orders| Platform
     Admin -->|Configure, Monitor| Platform
     DeliveryAgent -->|Deliver, Update| Platform
     HubOperator -->|Process Shipments| Platform
-    
+
     Platform -->|Process Payments| PG
     Platform -->|Send SMS/OTP| SMS
     Platform -->|Send Emails| Email
@@ -62,44 +62,44 @@ graph LR
         Web[Web Browser]
         MobileApp[Mobile App]
     end
-    
+
     subgraph "E-Commerce Platform"
         API[API Gateway]
         Frontend[Web Frontend]
     end
-    
+
     subgraph "Payment Ecosystem"
         PG[Payment Gateway]
         CC[Credit Card Networks]
         UPI[UPI/NPCI]
         Wallet[Digital Wallets]
     end
-    
+
     subgraph "Communication"
         SMS[SMS Gateway]
         Email[Email Server]
         Push[Push Service]
     end
-    
+
     subgraph "Logistics Partners"
         LP1[3PL Partner 1]
         LP2[3PL Partner 2]
         LP3[Own Fleet]
     end
-    
+
     Web -->|HTTPS| Frontend
     MobileApp -->|REST/GraphQL| API
     Frontend --> API
-    
+
     API -->|Payment Request| PG
     PG --> CC
     PG --> UPI
     PG --> Wallet
-    
+
     API --> SMS
     API --> Email
     API --> Push
-    
+
     API <-->|Shipment Data| LP1
     API <-->|Shipment Data| LP2
     API <-->|Shipment Data| LP3
@@ -117,7 +117,7 @@ sequenceDiagram
     participant P as Platform
     participant PG as Payment Gateway
     participant Bank as Bank/Card Network
-    
+
     C->>P: Initiate Payment
     P->>PG: Create Order
     PG-->>P: Order ID
@@ -141,7 +141,7 @@ sequenceDiagram
     participant LP as Logistics Partner
     participant H as Hub
     participant DA as Delivery Agent
-    
+
     V->>P: Order Packed
     P->>LP: Create Shipment
     LP-->>P: AWB Number
@@ -185,30 +185,30 @@ graph TB
         Internet[Internet]
         CDN[CDN]
     end
-    
+
     subgraph "DMZ"
         WAF[Web Application Firewall]
         LB[Load Balancer]
         API[API Gateway]
     end
-    
+
     subgraph "Application Zone"
         App[Application Servers]
         Cache[Redis Cache]
         Queue[Message Queue]
     end
-    
+
     subgraph "Data Zone"
         DB[(Primary Database)]
         Replica[(Read Replicas)]
         Search[Search Engine]
     end
-    
+
     subgraph "External Services"
         PG[Payment Gateway]
         SMS[SMS Provider]
     end
-    
+
     Internet --> CDN
     CDN --> WAF
     WAF --> LB

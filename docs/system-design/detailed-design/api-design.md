@@ -15,10 +15,10 @@ graph TB
         Vendor[Vendor App]
         Admin[Admin App]
     end
-    
+
     subgraph "API Gateway"
         Gateway[Kong Gateway]
-        
+
         subgraph "Middleware"
             Auth[Authentication]
             RateLimit[Rate Limiting]
@@ -26,12 +26,12 @@ graph TB
             Transform[Response Transform]
         end
     end
-    
+
     subgraph "API Versions"
         V1[API v1]
         V2[API v2]
     end
-    
+
     subgraph "Services"
         UserAPI[User API]
         ProductAPI[Product API]
@@ -40,20 +40,20 @@ graph TB
         LogisticsAPI[Logistics API]
         VendorAPI[Vendor API]
     end
-    
+
     Web --> Gateway
     Mobile --> Gateway
     Vendor --> Gateway
     Admin --> Gateway
-    
+
     Gateway --> Auth
     Auth --> RateLimit
     RateLimit --> Logging
     Logging --> Transform
-    
+
     Transform --> V1
     Transform --> V2
-    
+
     V1 --> UserAPI
     V1 --> ProductAPI
     V1 --> OrderAPI
@@ -344,6 +344,7 @@ Content-Type: application/json
 ```http
 POST /api/v1/orders
 Authorization: Bearer {token}
+Idempotency-Key: {uuid} (optional)
 Content-Type: application/json
 
 {
@@ -498,6 +499,48 @@ Authorization: Bearer {token}
 
 ---
 
+## Recommendation API
+
+### Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/recommendations` | Get personalized recommendations |
+| POST | `/recommendations/events` | Track user interactions |
+
+### Request/Response Examples
+
+#### Get Recommendations
+```http
+GET /api/v1/recommendations?type=home&limit=5
+Authorization: Bearer {token}
+```
+
+**Response: 200 OK**
+```json
+{
+  "success": true,
+  "data": {
+    "strategy": "hybrid_personalization",
+    "recommendations": [
+      {
+        "id": "uuid",
+        "name": "Bluetooth Speaker",
+        "score": 0.89,
+        "reason": "Because you bought Wireless Headphones",
+        "price": {
+          "mrp": 59.99,
+          "sellingPrice": 49.99
+        },
+        "image": "https://cdn.example.com/images/speaker.jpg"
+      }
+    ]
+  }
+}
+```
+
+---
+
 ## Error Response Format
 
 ```json
@@ -559,14 +602,14 @@ sequenceDiagram
     participant Service
     participant Cache
     participant DB
-    
+
     Client->>Gateway: API Request
     Gateway->>Gateway: Rate Limit Check
     Gateway->>Auth: Validate Token
     Auth->>Cache: Check Session
     Cache-->>Auth: Session Data
     Auth-->>Gateway: User Context
-    
+
     Gateway->>Service: Forward Request
     Service->>Cache: Check Cache
     alt Cache Hit
@@ -576,7 +619,7 @@ sequenceDiagram
         DB-->>Service: Result
         Service->>Cache: Store in Cache
     end
-    
+
     Service-->>Gateway: Response
     Gateway->>Gateway: Transform Response
     Gateway-->>Client: JSON Response

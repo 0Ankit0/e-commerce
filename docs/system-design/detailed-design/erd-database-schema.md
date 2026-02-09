@@ -24,7 +24,7 @@ erDiagram
         timestamp updated_at
         timestamp last_login_at
     }
-    
+
     addresses {
         uuid id PK
         uuid user_id FK
@@ -43,7 +43,7 @@ erDiagram
         decimal longitude
         timestamp created_at
     }
-    
+
     vendors {
         uuid id PK
         uuid user_id FK
@@ -63,7 +63,7 @@ erDiagram
         timestamp created_at
         timestamp approved_at
     }
-    
+
     vendor_documents {
         uuid id PK
         uuid vendor_id FK
@@ -75,7 +75,7 @@ erDiagram
         timestamp uploaded_at
         timestamp verified_at
     }
-    
+
     bank_accounts {
         uuid id PK
         uuid vendor_id FK
@@ -87,7 +87,7 @@ erDiagram
         enum verification_status
         timestamp created_at
     }
-    
+
     warehouses {
         uuid id PK
         uuid vendor_id FK
@@ -103,7 +103,7 @@ erDiagram
         boolean is_active
         timestamp created_at
     }
-    
+
     categories {
         uuid id PK
         uuid parent_id FK
@@ -118,7 +118,7 @@ erDiagram
         jsonb attributes
         timestamp created_at
     }
-    
+
     brands {
         uuid id PK
         varchar name
@@ -128,7 +128,7 @@ erDiagram
         boolean is_active
         timestamp created_at
     }
-    
+
     products {
         uuid id PK
         uuid vendor_id FK
@@ -149,7 +149,7 @@ erDiagram
         timestamp updated_at
         timestamp published_at
     }
-    
+
     product_variants {
         uuid id PK
         uuid product_id FK
@@ -165,7 +165,7 @@ erDiagram
         boolean is_active
         timestamp created_at
     }
-    
+
     product_images {
         uuid id PK
         uuid product_id FK
@@ -176,7 +176,7 @@ erDiagram
         boolean is_primary
         timestamp created_at
     }
-    
+
     inventory {
         uuid id PK
         uuid variant_id FK
@@ -188,7 +188,7 @@ erDiagram
         timestamp last_restocked_at
         timestamp updated_at
     }
-    
+
     carts {
         uuid id PK
         uuid user_id FK
@@ -197,7 +197,7 @@ erDiagram
         timestamp created_at
         timestamp updated_at
     }
-    
+
     cart_items {
         uuid id PK
         uuid cart_id FK
@@ -206,7 +206,7 @@ erDiagram
         decimal price_at_add
         timestamp added_at
     }
-    
+
     orders {
         uuid id PK
         varchar order_number UK
@@ -231,7 +231,7 @@ erDiagram
         timestamp delivered_at
         timestamp cancelled_at
     }
-    
+
     order_items {
         uuid id PK
         uuid order_id FK
@@ -248,7 +248,7 @@ erDiagram
         enum status
         timestamp created_at
     }
-    
+
     vendor_orders {
         uuid id PK
         uuid order_id FK
@@ -262,7 +262,7 @@ erDiagram
         timestamp accepted_at
         timestamp packed_at
     }
-    
+
     payments {
         uuid id PK
         uuid order_id FK
@@ -279,7 +279,7 @@ erDiagram
         timestamp authorized_at
         timestamp captured_at
     }
-    
+
     refunds {
         uuid id PK
         uuid payment_id FK
@@ -293,7 +293,7 @@ erDiagram
         timestamp initiated_at
         timestamp processed_at
     }
-    
+
     shipments {
         uuid id PK
         varchar awb UK
@@ -314,7 +314,7 @@ erDiagram
         timestamp picked_up_at
         timestamp delivered_at
     }
-    
+
     shipment_tracking {
         uuid id PK
         uuid shipment_id FK
@@ -326,7 +326,7 @@ erDiagram
         decimal longitude
         timestamp timestamp
     }
-    
+
     hubs {
         uuid id PK
         varchar name
@@ -342,7 +342,7 @@ erDiagram
         boolean is_active
         timestamp created_at
     }
-    
+
     branches {
         uuid id PK
         uuid hub_id FK
@@ -355,7 +355,7 @@ erDiagram
         boolean is_active
         timestamp created_at
     }
-    
+
     delivery_agents {
         uuid id PK
         uuid branch_id FK
@@ -370,7 +370,7 @@ erDiagram
         timestamp last_location_at
         timestamp created_at
     }
-    
+
     line_haul_trips {
         uuid id PK
         varchar trip_number UK
@@ -387,7 +387,7 @@ erDiagram
         timestamp actual_arrival
         timestamp created_at
     }
-    
+
     returns {
         uuid id PK
         varchar return_number UK
@@ -406,7 +406,7 @@ erDiagram
         timestamp approved_at
         timestamp completed_at
     }
-    
+
     reviews {
         uuid id PK
         uuid product_id FK
@@ -425,52 +425,52 @@ erDiagram
     users ||--o| vendors : extends
     users ||--o{ orders : places
     users ||--o{ reviews : writes
-    
+
     vendors ||--o{ vendor_documents : has
     vendors ||--o{ bank_accounts : has
     vendors ||--o{ warehouses : has
     vendors ||--o{ products : sells
     vendors ||--o{ vendor_orders : receives
-    
+
     categories ||--o{ categories : has_subcategories
     categories ||--o{ products : contains
-    
+
     brands ||--o{ products : has
-    
+
     products ||--o{ product_variants : has
     products ||--o{ product_images : has
     products ||--o{ reviews : has
-    
+
     product_variants ||--o{ inventory : tracked_in
     product_variants ||--o{ cart_items : referenced_in
     product_variants ||--o{ order_items : ordered_in
-    
+
     warehouses ||--o{ inventory : stores
-    
+
     carts ||--o{ cart_items : contains
-    
+
     orders ||--o{ order_items : contains
     orders ||--o{ vendor_orders : splits_into
     orders ||--|{ payments : has
     orders ||--o{ shipments : ships_via
     orders ||--o{ returns : may_have
-    
+
     vendor_orders ||--o{ order_items : contains
     vendor_orders ||--o| shipments : ships_via
-    
+
     payments ||--o{ refunds : may_have
-    
+
     hubs ||--o{ branches : contains
     hubs ||--o{ line_haul_trips : origin_of
     hubs ||--o{ line_haul_trips : dest_of
-    
+
     branches ||--o{ delivery_agents : employs
     branches ||--o{ shipments : handles
-    
+
     delivery_agents ||--o{ shipments : delivers
-    
+
     shipments ||--o{ shipment_tracking : tracks
-    
+
     returns ||--o| refunds : triggers
 ```
 
@@ -496,7 +496,7 @@ CREATE TABLE users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_login_at TIMESTAMP,
-    
+
     CONSTRAINT chk_user_type CHECK (user_type IN ('customer', 'vendor', 'admin', 'agent', 'hub_operator')),
     CONSTRAINT chk_status CHECK (status IN ('active', 'inactive', 'suspended', 'deleted'))
 );
@@ -527,7 +527,7 @@ CREATE TABLE products (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     published_at TIMESTAMP,
-    
+
     CONSTRAINT chk_product_status CHECK (status IN ('draft', 'pending', 'active', 'inactive', 'deleted'))
 );
 
@@ -563,7 +563,7 @@ CREATE TABLE orders (
     shipped_at TIMESTAMP,
     delivered_at TIMESTAMP,
     cancelled_at TIMESTAMP,
-    
+
     CONSTRAINT chk_order_status CHECK (status IN (
         'pending', 'confirmed', 'processing', 'packed', 'shipped',
         'in_transit', 'out_for_delivery', 'delivered', 'cancelled',
@@ -600,7 +600,7 @@ CREATE TABLE shipments (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     picked_up_at TIMESTAMP,
     delivered_at TIMESTAMP,
-    
+
     CONSTRAINT chk_shipment_status CHECK (status IN (
         'created', 'awaiting_pickup', 'picked_up', 'in_transit',
         'at_hub', 'out_for_delivery', 'delivered', 'delivery_failed',
@@ -644,7 +644,7 @@ CREATE TABLE orders (
 
 CREATE TABLE orders_2024_01 PARTITION OF orders
     FOR VALUES FROM ('2024-01-01') TO ('2024-02-01');
-    
+
 CREATE TABLE orders_2024_02 PARTITION OF orders
     FOR VALUES FROM ('2024-02-01') TO ('2024-03-01');
 -- Continue for each month

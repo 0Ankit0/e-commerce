@@ -16,7 +16,7 @@ flowchart TB
         C4[Receive Delivery]
         C5[Provide Feedback]
     end
-    
+
     subgraph Platform["🖥️ Platform"]
         P1[Validate Order]
         P2[Process Payment]
@@ -24,7 +24,7 @@ flowchart TB
         P4[Send Notifications]
         P5[Update Tracking]
     end
-    
+
     subgraph Vendor["🏪 Vendor"]
         V1[Receive Order]
         V2[Accept Order]
@@ -32,7 +32,7 @@ flowchart TB
         V4[Generate Label]
         V5[Handover to Pickup]
     end
-    
+
     subgraph Logistics["🚚 Logistics"]
         L1[Pickup from Vendor]
         L2[Line Haul Transit]
@@ -40,7 +40,7 @@ flowchart TB
         L4[Last Mile Delivery]
         L5[Capture POD]
     end
-    
+
     C1 --> P1
     P1 --> C2
     C2 --> P2
@@ -77,7 +77,7 @@ flowchart TB
         V5[Setup Store]
         V6[Add Products]
     end
-    
+
     subgraph Platform["🖥️ Platform"]
         P1[Receive Application]
         P2[Validate Documents]
@@ -85,7 +85,7 @@ flowchart TB
         P4[Send Status Notification]
         P5[Activate Account]
     end
-    
+
     subgraph Admin["👨‍💼 Admin"]
         A1[Review Application]
         A2[Verify Business Details]
@@ -93,12 +93,12 @@ flowchart TB
         A4[Decision]
         A5[Approve/Reject]
     end
-    
+
     subgraph Finance["💰 Finance"]
         F1[Verify Bank Account]
         F2[Setup Payout Method]
     end
-    
+
     V1 --> P1
     P1 --> V2
     V2 --> P2
@@ -131,7 +131,7 @@ flowchart TB
         C3[Handover to Agent]
         C4[Receive Refund]
     end
-    
+
     subgraph Platform["🖥️ Platform"]
         P1[Validate Return Request]
         P2[Create Return Order]
@@ -139,7 +139,7 @@ flowchart TB
         P4[Track Return]
         P5[Process Refund]
     end
-    
+
     subgraph Vendor["🏪 Vendor"]
         V1[Review Return Request]
         V2[Approve/Reject]
@@ -147,19 +147,19 @@ flowchart TB
         V4[Quality Check]
         V5[Confirm Refund]
     end
-    
+
     subgraph Logistics["🚚 Logistics"]
         L1[Pickup from Customer]
         L2[Transit to Vendor]
         L3[Deliver to Vendor]
     end
-    
+
     subgraph Finance["💰 Finance"]
         F1[Initiate Refund]
         F2[Process Payment Reversal]
         F3[Update Settlement]
     end
-    
+
     C1 --> P1
     P1 --> P2
     P2 --> V1
@@ -193,7 +193,7 @@ flowchart TB
         C1[Initiate Payment]
         C2[Complete Payment]
     end
-    
+
     subgraph Platform["🖥️ Platform"]
         P1[Create Payment Order]
         P2[Redirect to Gateway]
@@ -202,14 +202,14 @@ flowchart TB
         P5[Create Order]
         P6[Calculate Commission]
     end
-    
+
     subgraph PaymentGateway["💳 Payment Gateway"]
         PG1[Display Payment Page]
         PG2[Process Payment]
         PG3[Send Callback]
         PG4[Settle to Platform]
     end
-    
+
     subgraph Finance["💰 Finance"]
         F1[Record Transaction]
         F2[Hold for Settlement]
@@ -217,19 +217,19 @@ flowchart TB
         F4[Schedule Payout]
         F5[Execute Payout]
     end
-    
+
     subgraph Vendor["🏪 Vendor"]
         V1[View Earnings]
         V2[Request Payout]
         V3[Receive Payout]
     end
-    
+
     subgraph Bank["🏦 Bank"]
         B1[Receive Transfer Request]
         B2[Process Transfer]
         B3[Confirm Transfer]
     end
-    
+
     C1 --> P1
     P1 --> P2
     P2 --> PG1
@@ -266,21 +266,21 @@ flowchart TB
         O4[Load Vehicle]
         O5[Dispatch]
     end
-    
+
     subgraph Platform["🖥️ Platform"]
         P1[Track Shipments]
         P2[Update Status]
         P3[Handle Exceptions]
         P4[Calculate ETAs]
     end
-    
+
     subgraph Transit["🚛 Transit"]
         T1[Start Journey]
         T2[Checkpoint Updates]
         T3[Report Issues]
         T4[Arrive at Destination]
     end
-    
+
     subgraph DestinationHub["📦 Destination Hub"]
         D1[Receive Vehicle]
         D2[Unload Packages]
@@ -288,13 +288,13 @@ flowchart TB
         D4[Reconcile Manifest]
         D5[Sort for Delivery]
     end
-    
+
     subgraph LastMile["🛵 Last Mile"]
         L1[Assign to Agent]
         L2[Route Optimization]
         L3[Out for Delivery]
     end
-    
+
     O1 --> O2
     O2 --> O3
     O3 --> P1
@@ -330,7 +330,7 @@ flowchart TB
         C3[Receive Resolution]
         C4[Rate Support]
     end
-    
+
     subgraph Support["🎧 Support Team"]
         S1[Receive Ticket]
         S2[Categorize Issue]
@@ -338,7 +338,7 @@ flowchart TB
         S4[Escalate if Needed]
         S5[Close Ticket]
     end
-    
+
     subgraph Platform["🖥️ Platform"]
         P1[Create Ticket]
         P2[Auto-categorize]
@@ -346,19 +346,19 @@ flowchart TB
         P4[Track SLA]
         P5[Send Updates]
     end
-    
+
     subgraph Vendor["🏪 Vendor"]
         V1[Receive Escalation]
         V2[Investigate]
         V3[Provide Response]
     end
-    
+
     subgraph Admin["👨‍💼 Admin"]
         A1[Review Escalation]
         A2[Make Decision]
         A3[Override if Needed]
     end
-    
+
     C1 --> P1
     P1 --> C2
     C2 --> P2
@@ -394,12 +394,12 @@ flowchart TB
         V3[Receive Low Stock Alert]
         V4[Restock Items]
     end
-    
+
     subgraph VendorERP["📊 Vendor ERP"]
         E1[Stock Changed]
         E2[Send Webhook]
     end
-    
+
     subgraph Platform["🖥️ Platform"]
         P1[Receive Stock Update]
         P2[Validate Update]
@@ -408,13 +408,13 @@ flowchart TB
         P5[Send Alerts]
         P6[Update Product Availability]
     end
-    
+
     subgraph Orders["📦 Orders"]
         O1[New Order Placed]
         O2[Reserve Stock]
         O3[Confirm Stock Deduction]
     end
-    
+
     V1 --> E1
     E1 --> E2
     E2 --> P1
