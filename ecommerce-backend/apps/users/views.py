@@ -16,6 +16,31 @@ from config import settings
 from . import models, serializers, utils
 
 
+class LoginView(TokenViewBase):
+    """Authenticate with email/password and return JWT tokens in response body."""
+
+    permission_classes = ()
+    serializer_class = serializers.LoginSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        token_data = serializer.save()
+
+        response = Response(token_data, status=status.HTTP_200_OK)
+        should_set_cookies = str(request.data.get("set_cookies", "")).lower() in {"1", "true", "yes", "on"}
+        if should_set_cookies:
+            utils.set_auth_cookie(
+                response,
+                {
+                    settings.ACCESS_TOKEN_COOKIE: token_data.get("access"),
+                    settings.REFRESH_TOKEN_COOKIE: token_data.get("refresh"),
+                },
+            )
+
+        return response
+
+
 class CookieTokenRefreshView(jwt_views.TokenRefreshView):
     """Use the refresh token from an HTTP-only cookie and generate new pair (access, refresh)
 

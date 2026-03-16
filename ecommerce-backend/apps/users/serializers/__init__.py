@@ -2,6 +2,7 @@ from .address import AddressSerializer
 from .auth import (
     CookieTokenObtainPairSerializer,
     CookieTokenRefreshSerializer,
+    LoginSerializer,
     LogoutSerializer,
     PasswordResetConfirmationSerializer,
     PasswordResetSerializer,

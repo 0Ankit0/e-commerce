@@ -24,8 +24,9 @@ router.register(r"profile", views.UserProfileViewSet, basename="profile")
 
 user_patterns = [
     # JWT Auth
-    path("token-refresh/", views.CookieTokenRefreshView.as_view(), name="jwt_token_refresh"),
-    path("logout/", views.LogoutView.as_view(), name="logout"),
+    path("login/", views.LoginView.as_view(), name="auth-login"),
+    path("token-refresh/", views.CookieTokenRefreshView.as_view(), name="auth-token-refresh"),
+    path("logout/", views.LogoutView.as_view(), name="auth-logout"),
     # User Registration & Confirmation
     path("signup/", views.UserSignupView.as_view(), name="signup"),
     path("confirm/", views.UserAccountConfirmView.as_view(), name="confirm-email"),
