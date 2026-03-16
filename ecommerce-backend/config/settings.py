@@ -75,6 +75,7 @@ LOCAL_APPS = [
     "apps.orders",
     "apps.payments",
     "apps.logistics",
+    "apps.recommendations",
 ]
 
 INSTALLED_APPS = (
