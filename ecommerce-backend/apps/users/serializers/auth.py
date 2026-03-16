@@ -204,6 +204,10 @@ class CookieTokenObtainPairSerializer(jwt_serializers.TokenObtainPairSerializer)
         return validated_data
 
 
+class LoginSerializer(CookieTokenObtainPairSerializer):
+    set_cookies = serializers.BooleanField(write_only=True, required=False, default=False)
+
+
 class CookieTokenRefreshSerializer(jwt_serializers.TokenRefreshSerializer):
     refresh = serializers.CharField(required=False)
     access = serializers.CharField(read_only=True)

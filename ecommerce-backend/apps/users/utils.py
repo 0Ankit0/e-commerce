@@ -16,7 +16,7 @@ def set_auth_cookie(response, data):
             refresh,
             max_age=cookie_max_age,
             httponly=True,
-            path=reverse("jwt_token_refresh"),
+            path=reverse("auth-token-refresh"),
         )
 
         response.set_cookie(
@@ -24,15 +24,15 @@ def set_auth_cookie(response, data):
             refresh,
             max_age=cookie_max_age,
             httponly=True,
-            path=reverse("logout"),
+            path=reverse("auth-logout"),
         )
 
 
 def reset_auth_cookie(response):
     response.delete_cookie(settings.ACCESS_TOKEN_COOKIE)
     response.delete_cookie(settings.REFRESH_TOKEN_COOKIE)
-    response.delete_cookie(settings.REFRESH_TOKEN_COOKIE, path=reverse("jwt_token_refresh"))
-    response.delete_cookie(settings.REFRESH_TOKEN_LOGOUT_COOKIE, path=reverse("logout"))
+    response.delete_cookie(settings.REFRESH_TOKEN_COOKIE, path=reverse("auth-token-refresh"))
+    response.delete_cookie(settings.REFRESH_TOKEN_LOGOUT_COOKIE, path=reverse("auth-logout"))
 
 
 def generate_otp_auth_token(user):
