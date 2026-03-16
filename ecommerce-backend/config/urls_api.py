@@ -1,3 +1,5 @@
+import re
+
 from django.urls import include, path, re_path
 from drf_yasg import openapi
 from drf_yasg.generators import OpenAPISchemaGenerator
@@ -15,6 +17,21 @@ class HttpAndHttpsSchemaGenerator(OpenAPISchemaGenerator):
     def get_schema(self, request=None, public=False):
         schema = super().get_schema(request, public)
         schema.schemes = ["http", "https"]
+
+        legacy_patterns = (
+            r"^/api/(?!v1/)",
+            r"^/api/catalog/",
+            r"^/api/vendors/",
+            r"^/api/orders/",
+            r"^/api/payments/",
+            r"^/api/logistics/",
+            r"^/api/inventory/",
+        )
+        for path_name, path_item in schema.paths.items():
+            if any(re.match(pattern, path_name) for pattern in legacy_patterns):
+                for operation in path_item.operations:
+                    operation[1].deprecated = True
+
         return schema
 
 
@@ -33,6 +50,10 @@ urlpatterns = [
         "api/",
         include(
             [
+                # Canonical contract endpoints
+                path("v1/", include("apps.contract_api.urls")),
+
+                # Legacy module endpoints (deprecated in OpenAPI)
                 # Authentication & User Management (single include to avoid namespace conflicts)
                 path("", include("apps.users.urls")),
                 # Multi-tenancy
