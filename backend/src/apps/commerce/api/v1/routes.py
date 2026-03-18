@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,8 +9,14 @@ from sqlmodel import select
 
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
-from src.apps.catalog.models import Product, ProductVariant
-from src.apps.commerce.models import Address, CartItem, TaxRule, WishlistItem
+from src.apps.catalog.models import Product, ProductImage, ProductVariant
+from src.apps.commerce.models import (
+    Address,
+    CartItem,
+    TaxRule,
+    WishlistItem,
+    WishlistShareLink,
+)
 from src.apps.commerce.services import (
     autocomplete_address_suggestions,
     build_cart_payload,
@@ -80,6 +88,10 @@ class TaxRuleCreateRequest(BaseModel):
     is_active: bool = True
 
 
+class WishlistShareLinkCreateRequest(BaseModel):
+    title: str = Field(default="", max_length=255)
+
+
 class BannerCreateRequest(BaseModel):
     title: str
     subtitle: str = ""
@@ -115,6 +127,45 @@ def _serialize_address(address: Address) -> dict[str, object]:
         "landmark": address.landmark,
         "type": address.type,
         "is_default": address.is_default,
+    }
+
+
+async def _serialize_wishlist_product(product: Product, db: AsyncSession) -> dict[str, object]:
+    primary_image = (
+        await db.execute(
+            select(ProductImage)
+            .where(ProductImage.product_id == product.id)
+            .order_by(ProductImage.is_primary.desc(), ProductImage.position.asc(), ProductImage.id.asc())
+        )
+    ).scalars().first()
+    variants = (
+        await db.execute(
+            select(ProductVariant)
+            .where(ProductVariant.product_id == product.id)
+            .order_by(ProductVariant.is_default.desc(), ProductVariant.id.asc())
+        )
+    ).scalars().all()
+    default_variant = variants[0] if variants else None
+    return {
+        "product_id": encode_id(product.id or 0),
+        "name": product.name,
+        "slug": product.slug,
+        "status": product.status.value,
+        "image_url": primary_image.url if primary_image else "",
+        "price": default_variant.selling_price if default_variant else None,
+        "variant_id": encode_id(default_variant.id or 0) if default_variant else None,
+        "variant_name": default_variant.name if default_variant else "",
+    }
+
+
+def _serialize_share_link(link: WishlistShareLink) -> dict[str, object]:
+    return {
+        "id": encode_id(link.id or 0),
+        "token": link.token,
+        "title": link.title,
+        "is_active": link.is_active,
+        "created_at": link.created_at.isoformat(),
+        "updated_at": link.updated_at.isoformat(),
     }
 
 
@@ -347,8 +398,82 @@ async def list_wishlist(
     for item in items:
         product = await db.get(Product, item.product_id)
         if product:
-            payload.append({"id": encode_id(item.id or 0), "product_id": encode_id(product.id or 0), "name": product.name})
+            payload.append({"id": encode_id(item.id or 0), **(await _serialize_wishlist_product(product, db))})
     return {"items": payload, "total": len(payload)}
+
+
+@router.post("/wishlist/share-links", status_code=status.HTTP_201_CREATED)
+async def create_wishlist_share_link(
+    payload: WishlistShareLinkCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    link = WishlistShareLink(
+        user_id=current_user.id,
+        token=secrets.token_urlsafe(18),
+        title=payload.title.strip(),
+    )
+    db.add(link)
+    await db.commit()
+    await db.refresh(link)
+    return {"share_link": _serialize_share_link(link)}
+
+
+@router.get("/wishlist/share-links")
+async def list_wishlist_share_links(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    links = (
+        await db.execute(
+            select(WishlistShareLink)
+            .where(WishlistShareLink.user_id == current_user.id)
+            .order_by(WishlistShareLink.created_at.desc())
+        )
+    ).scalars().all()
+    return {"items": [_serialize_share_link(link) for link in links], "total": len(links)}
+
+
+@router.delete("/wishlist/share-links/{share_id}")
+async def revoke_wishlist_share_link(
+    share_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    link = await db.get(WishlistShareLink, decode_id_or_404(share_id))
+    if link is None or link.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Share link not found")
+    link.is_active = False
+    link.updated_at = utc_now()
+    await db.commit()
+    return {"success": True}
+
+
+@router.get("/wishlist/shared/{token}")
+async def get_shared_wishlist(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    link = (
+        await db.execute(select(WishlistShareLink).where(WishlistShareLink.token == token, WishlistShareLink.is_active == True))  # noqa: E712
+    ).scalars().first()
+    if link is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared wishlist not found")
+    owner = await db.get(User, link.user_id)
+    items = (
+        await db.execute(select(WishlistItem).where(WishlistItem.user_id == link.user_id).order_by(WishlistItem.id.desc()))
+    ).scalars().all()
+    payload = []
+    for item in items:
+        product = await db.get(Product, item.product_id)
+        if product:
+            payload.append(await _serialize_wishlist_product(product, db))
+    return {
+        "share_link": _serialize_share_link(link),
+        "owner": {"username": owner.username if owner else "unknown"},
+        "items": payload,
+        "total": len(payload),
+    }
 
 
 @router.get("/content/banners")

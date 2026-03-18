@@ -4,6 +4,7 @@ import csv
 import io
 import json
 from difflib import SequenceMatcher
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
@@ -34,9 +35,11 @@ from src.apps.catalog.services import (
     recalculate_product_rating,
     serialize_product,
 )
+from src.apps.commerce.models import ProductVariantPriceHistory, WishlistItem
 from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import decode_id_or_404, encode_id
+from src.apps.notification.services.commerce_events import notify_low_stock, notify_wishlist_price_drop
 from src.apps.recommendations.models import RecommendationEventType, UserProductEvent
 from src.apps.vendors.models import Vendor
 from src.apps.vendors.services import ensure_vendor_active, get_vendor_for_user
@@ -133,6 +136,33 @@ def _read_import_rows(csv_content: str) -> list[dict[str, str]]:
     if missing:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"CSV is missing required columns: {', '.join(missing)}")
     return [{key: (value or "").strip() for key, value in row.items()} for row in reader]
+
+
+async def _snapshot_variant_price(
+    *,
+    variant: ProductVariant,
+    previous_price: float,
+    current_price: float,
+    changed_by_user_id: int | None,
+    change_reason: str,
+    db: AsyncSession,
+) -> None:
+    db.add(
+        ProductVariantPriceHistory(
+            variant_id=variant.id or 0,
+            previous_price=previous_price,
+            current_price=current_price,
+            changed_by_user_id=changed_by_user_id,
+            change_reason=change_reason,
+        )
+    )
+
+
+async def _wishlist_watchers_for_product(product_id: int, db: AsyncSession) -> list[int]:
+    wishlist_items = (
+        await db.execute(select(WishlistItem).where(WishlistItem.product_id == product_id))
+    ).scalars().all()
+    return sorted({item.user_id for item in wishlist_items})
 
 
 async def _preview_product_import(
@@ -440,6 +470,14 @@ async def create_product(
         ensure_variant_pricing(variant)
         db.add(variant)
         await db.flush()
+        await _snapshot_variant_price(
+            variant=variant,
+            previous_price=variant.selling_price,
+            current_price=variant.selling_price,
+            changed_by_user_id=current_user.id,
+            change_reason="product_created",
+            db=db,
+        )
         db.add(Inventory(variant_id=variant.id, quantity=variant_payload.quantity))
     vendor.product_count += 1
     await db.commit()
@@ -543,8 +581,107 @@ async def update_vendor_product(
     product.specifications_json = json.dumps(payload.specifications)
     product.is_featured = payload.is_featured
     product.status = payload.status
+    product.published_at = utc_now() if payload.status == ProductStatus.ACTIVE and product.published_at is None else product.published_at
     product.updated_at = utc_now()
+    existing_images = (
+        await db.execute(select(ProductImage).where(ProductImage.product_id == product.id))
+    ).scalars().all()
+    for image in existing_images:
+        await db.delete(image)
+    for image_payload in payload.images:
+        db.add(ProductImage(product_id=product.id, **image_payload.model_dump()))
+
+    existing_variants = (
+        await db.execute(select(ProductVariant).where(ProductVariant.product_id == product.id))
+    ).scalars().all()
+    variants_by_sku = {variant.sku: variant for variant in existing_variants}
+    price_drop_notifications: list[dict[str, Any]] = []
+    low_stock_notifications: list[dict[str, Any]] = []
+    for variant_payload in payload.variants:
+        variant = variants_by_sku.get(variant_payload.sku)
+        if variant is None:
+            variant = ProductVariant(
+                product_id=product.id,
+                sku=variant_payload.sku,
+                name=variant_payload.name,
+                mrp=variant_payload.mrp,
+                selling_price=variant_payload.selling_price,
+                cost_price=variant_payload.cost_price,
+                attributes_json=json.dumps(variant_payload.attributes),
+                is_default=variant_payload.is_default,
+            )
+            ensure_variant_pricing(variant)
+            db.add(variant)
+            await db.flush()
+            db.add(Inventory(variant_id=variant.id, quantity=variant_payload.quantity))
+            await _snapshot_variant_price(
+                variant=variant,
+                previous_price=variant.selling_price,
+                current_price=variant.selling_price,
+                changed_by_user_id=current_user.id,
+                change_reason="variant_created",
+                db=db,
+            )
+            continue
+
+        previous_price = variant.selling_price
+        variant.name = variant_payload.name
+        variant.mrp = variant_payload.mrp
+        variant.selling_price = variant_payload.selling_price
+        variant.cost_price = variant_payload.cost_price
+        variant.attributes_json = json.dumps(variant_payload.attributes)
+        variant.is_default = variant_payload.is_default
+        ensure_variant_pricing(variant)
+
+        inventory = (
+            await db.execute(select(Inventory).where(Inventory.variant_id == variant.id))
+        ).scalars().first()
+        if inventory is None:
+            inventory = Inventory(variant_id=variant.id)
+            db.add(inventory)
+            await db.flush()
+        inventory.quantity = variant_payload.quantity
+        inventory.updated_at = utc_now()
+
+        if previous_price != variant_payload.selling_price:
+            await _snapshot_variant_price(
+                variant=variant,
+                previous_price=previous_price,
+                current_price=variant_payload.selling_price,
+                changed_by_user_id=current_user.id,
+                change_reason="vendor_product_update",
+                db=db,
+            )
+            if variant_payload.selling_price < previous_price:
+                watcher_ids = await _wishlist_watchers_for_product(product.id or 0, db)
+                for watcher_id in watcher_ids:
+                    price_drop_notifications.append(
+                        {
+                            "user_id": watcher_id,
+                            "product_id": encode_id(product.id or 0),
+                            "variant_id": encode_id(variant.id or 0),
+                            "product_name": product.name,
+                            "variant_name": variant.name,
+                            "previous_price": previous_price,
+                            "current_price": variant_payload.selling_price,
+                        }
+                    )
+
+        if inventory.reorder_level and inventory.quantity <= inventory.reorder_level:
+            low_stock_notifications.append(
+                {
+                    "product_id": encode_id(product.id or 0),
+                    "variant_id": encode_id(variant.id or 0),
+                    "sku": variant.sku,
+                    "quantity": inventory.quantity,
+                    "reorder_level": inventory.reorder_level,
+                }
+            )
     await db.commit()
+    for price_drop in price_drop_notifications:
+        await notify_wishlist_price_drop(db=db, **price_drop)
+    for alert in low_stock_notifications:
+        await notify_low_stock(db=db, user_id=vendor.owner_user_id, **alert)
     return {"product": await serialize_product(product, db)}
 
 
@@ -606,6 +743,16 @@ async def update_vendor_inventory(
     inventory.reorder_qty = payload.reorder_qty
     inventory.updated_at = utc_now()
     await db.commit()
+    if inventory.reorder_level and inventory.quantity <= inventory.reorder_level:
+        await notify_low_stock(
+            db=db,
+            user_id=vendor.owner_user_id,
+            product_id=encode_id(product.id or 0),
+            variant_id=encode_id(variant.id or 0),
+            sku=variant.sku,
+            quantity=inventory.quantity,
+            reorder_level=inventory.reorder_level,
+        )
     return {"variant_id": encode_id(variant.id or 0), "quantity": inventory.quantity}
 
 

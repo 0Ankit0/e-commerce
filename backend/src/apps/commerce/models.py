@@ -59,6 +59,30 @@ class WishlistItem(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class WishlistShareLink(SQLModel, table=True):
+    __tablename__ = "wishlist_share_links"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    token: str = Field(max_length=80, unique=True, index=True)
+    title: str = Field(default="", max_length=255)
+    is_active: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ProductVariantPriceHistory(SQLModel, table=True):
+    __tablename__ = "product_variant_price_history"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    variant_id: int = Field(foreign_key="product_variants.id", index=True)
+    previous_price: float = Field(default=0, ge=0)
+    current_price: float = Field(default=0, ge=0)
+    changed_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    change_reason: str = Field(default="", max_length=120)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class TaxRule(SQLModel, table=True):
     __tablename__ = "tax_rules"  # type: ignore[assignment]
 

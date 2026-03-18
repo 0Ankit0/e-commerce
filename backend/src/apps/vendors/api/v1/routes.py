@@ -14,6 +14,7 @@ from src.apps.core.time import utc_now
 from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import decode_id_or_404
+from src.apps.notification.services.commerce_events import notify_payout_event
 from src.apps.orders.models import VendorOrder
 from src.apps.vendors.models import (
     BankAccount,
@@ -414,6 +415,17 @@ async def create_payout_request(
     )
     await db.commit()
     await db.refresh(request)
+    await notify_payout_event(
+        db=db,
+        user_id=vendor.owner_user_id,
+        vendor_id=encode_id(vendor.id),
+        event="vendor.payout_requested",
+        title="Payout request submitted",
+        body="Your payout request has been submitted for review.",
+        amount=request.amount,
+        payout_request_id=encode_id(request.id),
+        status=request.status.value,
+    )
     return {"payout_request": serialize_vendor_payout_request(request)}
 
 
@@ -673,6 +685,16 @@ async def create_vendor_payout(
     )
     await db.commit()
     await db.refresh(payout)
+    await notify_payout_event(
+        db=db,
+        user_id=vendor.owner_user_id,
+        vendor_id=encode_id(vendor.id),
+        event="vendor.payout_created",
+        title="Vendor payout created",
+        body="A payout has been created for your delivered orders.",
+        amount=payout.amount,
+        status=payout.status.value,
+    )
     return {"payout_id": encode_id(payout.id)}
 
 
@@ -715,6 +737,18 @@ async def approve_vendor_payout_request(
         )
     await db.commit()
     await db.refresh(payout)
+    if vendor:
+        await notify_payout_event(
+            db=db,
+            user_id=vendor.owner_user_id,
+            vendor_id=encode_id(vendor.id),
+            event="vendor.payout_request_approved",
+            title="Payout request approved",
+            body="Your payout request has been approved.",
+            amount=payout.amount,
+            payout_request_id=encode_id(payout_request.id),
+            status=payout.status.value,
+        )
     return {"payout": serialize_vendor_payout(payout)}
 
 
@@ -750,6 +784,21 @@ async def create_vendor_payout_batch(
         )
         db.add(payout)
     await db.commit()
+    for request in payout_requests:
+        vendor = await db.get(Vendor, request.vendor_id)
+        if vendor:
+            await notify_payout_event(
+                db=db,
+                user_id=vendor.owner_user_id,
+                vendor_id=encode_id(vendor.id),
+                event="vendor.payout_batch_created",
+                title="Payout batch created",
+                body=f"Your payout request is included in batch {batch.code}.",
+                amount=request.amount,
+                payout_request_id=encode_id(request.id),
+                payout_batch_id=encode_id(batch.id),
+                status=request.status.value,
+            )
     return {"batch_id": encode_id(batch.id or 0), "code": batch.code}
 
 

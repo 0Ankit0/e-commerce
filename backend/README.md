@@ -7,14 +7,14 @@ This backend is a FastAPI monolith for a multi-vendor e-commerce platform. It no
 - auth, multitenancy, RBAC, notifications, analytics, websocket presence
 - vendor onboarding, warehouse and payout workflows
 - catalog management, CSV bulk product import, advanced filtering, fuzzy search autocomplete
-- cart, wishlist, tax rules, address autocomplete, checkout fingerprinting, idempotent order creation
+- cart, wishlist, wishlist share links, price-drop alerts, tax rules, address autocomplete, checkout fingerprinting, idempotent order creation
 - payment flows for `khalti`, `esewa`, `stripe`, `paypal`, `wallet`, and `cod`
 - inventory reservations for unpaid online checkouts, stock commit on payment confirmation, stock release on cancel
 - orders, invoices, order notes, order timeline, returns, refunds, reverse pickup, shipment proofs
-- logistics zones, shipping options, pickup jobs, manifests, line-haul trips, delivery exceptions, reschedule, RTO, branch/hub performance
+- logistics zones, shipping options, pickup jobs, manifests, line-haul trips, delivery exceptions, reschedule, RTO, branch/hub performance, and stored shipping-label artifacts
 - support tickets with comments, assignment, SLA timestamps, and timeline events
 - admin content management for banners and static pages
-- admin reporting overview, CSV exports, and report-job records
+- admin reporting overview, CSV exports, report-job records, admin live order feed, and admin OTP visibility
 
 Hashids remain the canonical public identifier format. Numeric IDs are accepted on selected endpoints as backward-compatible input, but responses continue to return hashids.
 
@@ -107,6 +107,7 @@ Verification accepts an HMAC-SHA256 signature of the raw request body using the 
 - Admin can add order notes.
 - Returns enforce a policy window and now emit timeline events.
 - Payment reconciliation updates linked orders after verification, capture, void, refund, and webhooks.
+- Commerce events now fan out persisted notifications plus websocket events for order, return, payout, low-stock, and delivery-exception flows.
 
 ### Vendors
 
@@ -118,8 +119,16 @@ Verification accepts an HMAC-SHA256 signature of the raw request body using the 
 ### Logistics And Support
 
 - Delivery exceptions support failed-delivery recording, reschedule, and RTO initiation.
-- Shipping label metadata, agent availability, branch inventory movements, and hub/branch performance endpoints are available.
+- Shipping labels are generated as stored artifacts and are available from both vendor and admin/logistics endpoints.
+- Agent availability, branch inventory movements, and hub/branch performance endpoints are available.
 - Support tickets include assignment, SLA timestamps, customer/admin comments, and timeline events.
+
+### Wishlist And Admin Security
+
+- Customers can create, list, revoke, and publicly share read-only wishlist links.
+- Vendor price changes snapshot variant price history and trigger wishlist price-drop notifications.
+- Admin logins continue to work without mandatory OTP, but the login response now recommends OTP when a superuser account has not enabled it.
+- `GET /api/v1/auth/admin/security/admin-otp-status` exposes current OTP readiness plus the latest OTP audit event for admin accounts.
 
 ### Content And Reporting
 
@@ -134,7 +143,7 @@ The current completion pass was verified with:
 ```bash
 cd backend
 uv run python -m compileall src
-uv run pytest -q tests/unit/notification/test_notifications.py::TestNotificationAPI::test_mark_single_read tests/unit/notification/test_notifications.py::TestNotificationAPI::test_delete_notification_endpoint tests/unit/notification/test_notifications.py::TestNotificationAPI::test_push_subscription_compatibility_wrapper_uses_device_registry tests/unit/websocket/test_websocket.py::TestWSRestEndpoints::test_online_check tests/unit/core/test_security.py::TestPasswordHashing::test_hash_password tests/integration/ecommerce/test_marketplace_flow.py
+uv run pytest -q
 ```
 
 ## Status Matrix And Future Work

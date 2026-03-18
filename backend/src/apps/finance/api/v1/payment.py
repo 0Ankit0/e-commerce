@@ -49,6 +49,7 @@ from src.apps.iam.utils.hashid import decode_id_or_404, encode_id
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
 from src.apps.analytics.events import PaymentEvents
+from src.apps.notification.services.commerce_events import notify_order_event
 
 router = APIRouter()
 
@@ -179,6 +180,39 @@ async def _sync_order_after_transaction(
         order.payment_status = OrderPaymentStatus.REFUNDED
 
 
+async def _notify_order_transaction_state(tx: PaymentTransaction, db: AsyncSession) -> None:
+    from src.apps.orders.models import Order
+
+    order = (
+        await db.execute(select(Order).where(Order.payment_transaction_id == tx.id))
+    ).scalars().first()
+    if order is None:
+        order = (await db.execute(select(Order).where(Order.order_number == tx.purchase_order_id))).scalars().first()
+    if order is None:
+        return
+
+    event = {
+        PaymentStatus.COMPLETED: ("payment.confirmed", "Payment confirmed", "Your payment was confirmed successfully."),
+        PaymentStatus.CANCELLED: ("payment.cancelled", "Payment cancelled", "Your payment was cancelled and the order was not completed."),
+        PaymentStatus.REFUNDED: ("payment.refunded", "Payment refunded", "A refund has been processed for your order."),
+        PaymentStatus.FAILED: ("payment.failed", "Payment failed", "Your payment failed. Please retry with a different method."),
+    }.get(tx.status)
+    if event is None:
+        return
+
+    await notify_order_event(
+        db=db,
+        user_id=order.user_id,
+        order_id=encode_id(order.id or 0),
+        order_number=order.order_number,
+        event=event[0],
+        title=event[1],
+        body=event[2],
+        status=order.status.value,
+        payment_status=order.payment_status.value,
+    )
+
+
 # ---------------------------------------------------------------------------
 # List enabled providers
 # ---------------------------------------------------------------------------
@@ -260,6 +294,8 @@ async def verify_payment(
         tx = await db.get(PaymentTransaction, result.transaction_id)
         if tx is not None:
             await _sync_order_after_transaction(tx, db)
+            await db.commit()
+            await _notify_order_transaction_state(tx, db)
         from src.apps.finance.models.payment import PaymentStatus
         event = (
             PaymentEvents.PAYMENT_COMPLETED
@@ -348,6 +384,8 @@ async def ingest_payment_webhook(
             db=db,
         )
     await db.commit()
+    if tx:
+        await _notify_order_transaction_state(tx, db)
     return {"received": True, "verified": True}
 
 
@@ -397,6 +435,7 @@ async def capture_transaction(
         db=db,
     )
     await db.commit()
+    await _notify_order_transaction_state(tx, db)
     await db.refresh(tx)
     return PaymentTransactionRead.model_validate(tx)
 
@@ -422,6 +461,7 @@ async def void_transaction(
         db=db,
     )
     await db.commit()
+    await _notify_order_transaction_state(tx, db)
     await db.refresh(tx)
     return PaymentTransactionRead.model_validate(tx)
 
@@ -471,6 +511,7 @@ async def refund_transaction(
         db=db,
     )
     await db.commit()
+    await _notify_order_transaction_state(tx, db)
     await db.refresh(refund)
     return PaymentRefundRead.model_validate(refund)
 

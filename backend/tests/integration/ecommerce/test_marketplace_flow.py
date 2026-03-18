@@ -9,7 +9,9 @@ from sqlmodel import select
 
 from src.apps.core.config import settings
 from src.apps.core.security import TokenType, create_access_token, get_password_hash, verify_token
+from src.apps.notification.models.notification import Notification
 from src.apps.finance.models.payment import PaymentProvider, PaymentStatus, PaymentTransaction
+from src.apps.commerce.models import WishlistShareLink
 from src.apps.iam.models.token_tracking import TokenTracking
 from src.apps.iam.models.user import User, UserProfile
 from src.apps.messaging.models import ChatMessageEnvelope
@@ -390,6 +392,111 @@ async def test_vendor_delivery_and_customer_return_flow(client: AsyncClient, db_
 
 
 @pytest.mark.asyncio
+async def test_wishlist_sharing_and_price_drop_notifications(client: AsyncClient, db_session: AsyncSession):
+    admin, admin_headers = await _create_user_headers(
+        db_session,
+        username="wishlist_admin",
+        email="wishlist_admin@example.com",
+        is_superuser=True,
+    )
+    vendor_user, vendor_headers = await _create_user_headers(
+        db_session,
+        username="wishlist_vendor",
+        email="wishlist_vendor@example.com",
+    )
+    customer_user, customer_headers = await _create_user_headers(
+        db_session,
+        username="wishlist_customer",
+        email="wishlist_customer@example.com",
+    )
+    tenant = await _create_tenant_for_owner(db_session, vendor_user, "wishlist-tenant")
+    encode_id = __import__("src.apps.iam.utils.hashid", fromlist=["encode_id"]).encode_id
+
+    vendor_resp = await client.post(
+        "/api/v1/vendor/profile",
+        headers=vendor_headers,
+        json={
+            "tenant_id": encode_id(tenant.id),
+            "business_name": "Wishlist Vendor",
+            "display_name": "Wishlist Vendor",
+            "slug": "wishlist-vendor",
+        },
+    )
+    vendor_id = vendor_resp.json()["vendor"]["id"]
+    await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    await _create_delivery_zone(client, admin_headers, code="wishlist-zone")
+    await client.post("/api/v1/admin/categories", headers=admin_headers, json={"name": "Accessories", "slug": "accessories", "level": 1})
+    category_id = (await client.get("/api/v1/categories")).json()["items"][0]["id"]
+    brand_resp = await client.post(
+        "/api/v1/admin/catalog/brands",
+        headers=admin_headers,
+        json={"name": "Wishlist Brand", "slug": "wishlist-brand"},
+    )
+    brand_id = brand_resp.json()["brand"]["id"]
+    await client.post("/api/v1/vendor/warehouses", headers=vendor_headers, json={"name": "Wishlist WH"})
+    product_resp = await client.post(
+        "/api/v1/vendor/products",
+        headers=vendor_headers,
+        json={
+            "category_id": category_id,
+            "brand_id": brand_id,
+            "name": "Leather Wallet",
+            "slug": "leather-wallet",
+            "short_description": "Classic wallet",
+            "description": "Handmade leather wallet",
+            "variants": [{"sku": "WL-001", "name": "Brown", "mrp": 80, "selling_price": 65, "quantity": 10, "is_default": True}],
+            "images": [{"url": "https://example.com/wallet.jpg", "is_primary": True}],
+        },
+    )
+    product_id = product_resp.json()["product"]["id"]
+    approve_resp = await client.post(f"/api/v1/admin/catalog/products/{product_id}/approve", headers=admin_headers)
+
+    wishlist_add_resp = await client.post(f"/api/v1/wishlist/{product_id}", headers=customer_headers)
+    assert wishlist_add_resp.status_code == 201, wishlist_add_resp.text
+    share_resp = await client.post("/api/v1/wishlist/share-links", headers=customer_headers, json={"title": "Birthday ideas"})
+    assert share_resp.status_code == 201, share_resp.text
+    share_id = share_resp.json()["share_link"]["id"]
+    token = share_resp.json()["share_link"]["token"]
+
+    list_share_resp = await client.get("/api/v1/wishlist/share-links", headers=customer_headers)
+    assert list_share_resp.status_code == 200, list_share_resp.text
+    assert list_share_resp.json()["total"] == 1
+
+    public_resp = await client.get(f"/api/v1/wishlist/shared/{token}")
+    assert public_resp.status_code == 200, public_resp.text
+    assert public_resp.json()["items"][0]["name"] == "Leather Wallet"
+
+    update_resp = await client.patch(
+        f"/api/v1/vendor/products/{product_id}",
+        headers=vendor_headers,
+        json={
+            "category_id": category_id,
+            "brand_id": brand_id,
+            "name": "Leather Wallet",
+            "slug": "leather-wallet",
+            "short_description": "Classic wallet",
+            "description": "Handmade leather wallet",
+            "status": "active",
+            "variants": [{"sku": "WL-001", "name": "Brown", "mrp": 80, "selling_price": 55, "quantity": 10, "is_default": True}],
+            "images": [{"url": "https://example.com/wallet.jpg", "is_primary": True}],
+        },
+    )
+    assert update_resp.status_code == 200, update_resp.text
+
+    notifications = (
+        await db_session.execute(select(Notification).where(Notification.user_id == customer_user.id).order_by(Notification.id.desc()))
+    ).scalars().all()
+    assert any(notification.title == "Price drop on your wishlist" for notification in notifications)
+
+    revoke_resp = await client.delete(f"/api/v1/wishlist/share-links/{share_id}", headers=customer_headers)
+    assert revoke_resp.status_code == 200, revoke_resp.text
+    expired_public_resp = await client.get(f"/api/v1/wishlist/shared/{token}")
+    assert expired_public_resp.status_code == 404
+    share_links = (await db_session.execute(select(WishlistShareLink))).scalars().all()
+    assert share_links[0].is_active is False
+
+
+@pytest.mark.asyncio
 async def test_internal_logistics_and_support_flow(client: AsyncClient, db_session: AsyncSession):
     admin, admin_headers = await _create_user_headers(
         db_session,
@@ -492,6 +599,7 @@ async def test_internal_logistics_and_support_flow(client: AsyncClient, db_sessi
     assert same_order_resp.json()["order"]["id"] == order_resp.json()["order"]["id"]
     vendor_order_id = order_resp.json()["order"]["vendor_orders"][0]["id"]
     shipment_id = order_resp.json()["order"]["shipments"][0]["id"]
+    order_id = order_resp.json()["order"]["id"]
 
     pickup_job_resp = await client.post(
         f"/api/v1/vendor/orders/{vendor_order_id}/pickup-jobs",
@@ -511,6 +619,11 @@ async def test_internal_logistics_and_support_flow(client: AsyncClient, db_sessi
         params={"location": "Baneshwor Branch"},
     )
     assert complete_pickup_resp.status_code == 200, complete_pickup_resp.text
+    vendor_label_resp = await client.post(f"/api/v1/vendor/shipments/{shipment_id}/label", headers=vendor_headers)
+    assert vendor_label_resp.status_code == 200, vendor_label_resp.text
+    vendor_label_again_resp = await client.get(f"/api/v1/vendor/shipments/{shipment_id}/label", headers=vendor_headers)
+    assert vendor_label_again_resp.status_code == 200, vendor_label_again_resp.text
+    assert vendor_label_again_resp.json()["label_url"] == vendor_label_resp.json()["label_url"]
 
     manifest_resp = await client.post(
         "/api/v1/logistics/manifests",
@@ -573,6 +686,9 @@ async def test_internal_logistics_and_support_flow(client: AsyncClient, db_sessi
         headers=admin_headers,
     )
     assert rto_resp.status_code == 200, rto_resp.text
+    live_feed_resp = await client.get("/api/v1/admin/orders/live-feed", headers=admin_headers)
+    assert live_feed_resp.status_code == 200, live_feed_resp.text
+    assert any(item["payload"].get("order_id") == order_id for item in live_feed_resp.json()["items"])
     agent_availability_resp = await client.get("/api/v1/logistics/agents/availability", headers=admin_headers)
     assert agent_availability_resp.status_code == 200, agent_availability_resp.text
     branch_performance_resp = await client.get(
@@ -676,6 +792,9 @@ async def test_vendor_payout_content_and_reporting_flow(client: AsyncClient, db_
         json={"payout_request_ids": [payout_request_id], "notes": "Friday batch"},
     )
     assert payout_batch_resp.status_code == 201, payout_batch_resp.text
+    live_feed_resp = await client.get("/api/v1/admin/orders/live-feed", headers=admin_headers)
+    assert live_feed_resp.status_code == 200, live_feed_resp.text
+    assert any(item["event_type"] == "vendor.payout_requested" for item in live_feed_resp.json()["items"])
     settlement_export_resp = await client.get(
         f"/api/v1/admin/vendors/{vendor_id}/settlement-export",
         headers=admin_headers,

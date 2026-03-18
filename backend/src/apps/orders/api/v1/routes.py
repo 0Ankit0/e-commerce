@@ -23,10 +23,12 @@ from src.apps.logistics.services import quote_shipping
 from src.apps.orders.models import (
     CheckoutIdempotency,
     Order,
+    OrderEvent,
     OrderItem,
     OrderNote,
     OrderStatus,
     PaymentMethod,
+    ReturnEvent,
     ReturnRequest,
     ReturnStatus,
     Shipment,
@@ -45,8 +47,10 @@ from src.apps.orders.services import (
     serialize_order,
     update_return_request_status,
 )
+from src.apps.notification.services.commerce_events import notify_order_event, notify_return_event
 from src.apps.recommendations.models import RecommendationEventType
 from src.apps.recommendations.services import record_recommendation_event
+from src.apps.vendors.models import VendorPayoutBatch, VendorPayoutRequest, VendorTimelineEvent
 from src.apps.vendors.services import get_vendor_for_user
 
 router = APIRouter()
@@ -95,6 +99,25 @@ class ReportJobCreateRequest(BaseModel):
     date_from: datetime | None = None
     date_to: datetime | None = None
     output_format: str = "csv"
+
+
+def _build_live_feed_item(
+    *,
+    source: str,
+    event_type: str,
+    message: str,
+    created_at: datetime,
+    payload: dict[str, object],
+    actor_user_id: int | None = None,
+) -> dict[str, object]:
+    return {
+        "source": source,
+        "event_type": event_type,
+        "message": message,
+        "actor_user_id": encode_id(actor_user_id) if actor_user_id else None,
+        "payload": payload,
+        "created_at": created_at.isoformat(),
+    }
 
 
 @router.post("/checkout", status_code=status.HTTP_201_CREATED)
@@ -177,6 +200,17 @@ async def checkout(
     await db.commit()
     await db.refresh(order)
     await analytics.capture(str(current_user.id), "order_created", {"order_id": order.id, "order_number": order.order_number})
+    await notify_order_event(
+        db=db,
+        user_id=current_user.id,
+        order_id=encode_id(order.id or 0),
+        order_number=order.order_number,
+        event="order.created",
+        title="Order placed",
+        body=f"Your order {order.order_number} has been placed.",
+        status=order.status.value,
+        payment_status=order.payment_status.value,
+    )
     return {"order": await serialize_order(order, db)}
 
 
@@ -328,6 +362,17 @@ async def cancel_customer_order(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
     await cancel_order(order, db)
     await db.commit()
+    await notify_order_event(
+        db=db,
+        user_id=current_user.id,
+        order_id=encode_id(order.id or 0),
+        order_number=order.order_number,
+        event="order.cancelled",
+        title="Order cancelled",
+        body=f"Your order {order.order_number} has been cancelled.",
+        status=order.status.value,
+        payment_status=order.payment_status.value,
+    )
     return {"order": await serialize_order(order, db)}
 
 
@@ -372,6 +417,16 @@ async def request_return(
         db=db,
     )
     await db.commit()
+    await notify_return_event(
+        db=db,
+        user_id=current_user.id,
+        return_request_id=encode_id(return_request.id or 0),
+        order_id=payload.order_id,
+        event="return.requested",
+        title="Return requested",
+        body="Your return request has been submitted.",
+        status=return_request.status.value,
+    )
     return {"return_request_id": encode_id(return_request.id or 0), "status": return_request.status.value}
 
 
@@ -524,6 +579,18 @@ async def update_vendor_order_status(
             )
         )
     await db.commit()
+    if order is not None:
+        await notify_order_event(
+            db=db,
+            user_id=order.user_id,
+            order_id=encode_id(order.id or 0),
+            order_number=order.order_number,
+            event=f"order.{order.status.value}",
+            title=f"Order {order.status.value.replace('_', ' ')}",
+            body=payload.remarks or f"Your order is now {order.status.value.replace('_', ' ')}.",
+            status=order.status.value,
+            payment_status=order.payment_status.value,
+        )
     return {"success": True, "status": payload.status.value}
 
 
@@ -559,6 +626,18 @@ async def reject_vendor_order(
             )
         )
     await db.commit()
+    if order is not None:
+        await notify_order_event(
+            db=db,
+            user_id=order.user_id,
+            order_id=encode_id(order.id or 0),
+            order_number=order.order_number,
+            event="order.cancelled",
+            title="Order cancelled",
+            body=payload.reason,
+            status=order.status.value,
+            payment_status=order.payment_status.value,
+        )
     return {"success": True}
 
 
@@ -569,6 +648,123 @@ async def list_all_orders(
 ):
     orders = (await db.execute(select(Order).order_by(Order.created_at.desc()))).scalars().all()
     return {"items": [await serialize_order(order, db) for order in orders], "total": len(orders)}
+
+
+@router.get("/admin/orders/live-feed")
+async def admin_order_live_feed(
+    limit: int = 50,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    order_events = (
+        await db.execute(select(OrderEvent).order_by(OrderEvent.created_at.desc()).limit(limit))
+    ).scalars().all()
+    return_events = (
+        await db.execute(select(ReturnEvent).order_by(ReturnEvent.created_at.desc()).limit(limit))
+    ).scalars().all()
+    shipment_events = (
+        await db.execute(select(ShipmentTracking).order_by(ShipmentTracking.timestamp.desc()).limit(limit))
+    ).scalars().all()
+    payout_requests = (
+        await db.execute(select(VendorPayoutRequest).order_by(VendorPayoutRequest.created_at.desc()).limit(limit))
+    ).scalars().all()
+    payout_batches = (
+        await db.execute(select(VendorPayoutBatch).order_by(VendorPayoutBatch.created_at.desc()).limit(limit))
+    ).scalars().all()
+    vendor_timeline_events = (
+        await db.execute(select(VendorTimelineEvent).order_by(VendorTimelineEvent.created_at.desc()).limit(limit))
+    ).scalars().all()
+    items = [
+        _build_live_feed_item(
+            source="order",
+            event_type=event.event_type,
+            message=event.message,
+            created_at=event.created_at,
+            payload={"order_id": encode_id(event.order_id), **json.loads(event.payload_json or "{}")},
+            actor_user_id=event.actor_user_id,
+        )
+        for event in order_events
+    ]
+    items.extend(
+        [
+            _build_live_feed_item(
+                source="return",
+                event_type=event.event_type,
+                message=event.message,
+                created_at=event.created_at,
+                payload={"return_request_id": encode_id(event.return_request_id), **json.loads(event.payload_json or "{}")},
+                actor_user_id=event.actor_user_id,
+            )
+            for event in return_events
+        ]
+    )
+    items.extend(
+        [
+            _build_live_feed_item(
+                source="shipment",
+                event_type=f"shipment.{event.status.value}",
+                message=event.remarks or f"Shipment updated to {event.status.value}",
+                created_at=event.timestamp,
+                payload={
+                    "shipment_id": encode_id(event.shipment_id),
+                    "status": event.status.value,
+                    "location": event.location,
+                },
+            )
+            for event in shipment_events
+        ]
+    )
+    items.extend(
+        [
+            _build_live_feed_item(
+                source="payout",
+                event_type="vendor.payout_requested",
+                message="Vendor requested payout",
+                created_at=request.created_at,
+                payload={
+                    "payout_request_id": encode_id(request.id or 0),
+                    "vendor_id": encode_id(request.vendor_id),
+                    "amount": request.amount,
+                    "status": request.status.value,
+                },
+                actor_user_id=request.requested_by_user_id,
+            )
+            for request in payout_requests
+        ]
+    )
+    items.extend(
+        [
+            _build_live_feed_item(
+                source="payout",
+                event_type="vendor.payout_batch_created",
+                message="Payout batch created",
+                created_at=batch.created_at,
+                payload={
+                    "payout_batch_id": encode_id(batch.id or 0),
+                    "code": batch.code,
+                    "status": batch.status.value,
+                    "total_amount": batch.total_amount,
+                },
+            )
+            for batch in payout_batches
+        ]
+    )
+    items.extend(
+        [
+            _build_live_feed_item(
+                source="vendor",
+                event_type=event.event_type,
+                message=event.message,
+                created_at=event.created_at,
+                payload={"vendor_id": encode_id(event.vendor_id), **json.loads(event.payload_json or "{}")},
+                actor_user_id=event.actor_user_id,
+            )
+            for event in vendor_timeline_events
+            if "payout" in event.event_type
+        ]
+    )
+    items.sort(key=lambda item: item["created_at"], reverse=True)
+    return {"items": items[:limit], "total": len(items[:limit])}
 
 
 @router.get("/admin/returns")
@@ -599,6 +795,16 @@ async def update_admin_return_status(
         db=db,
     )
     await db.commit()
+    await notify_return_event(
+        db=db,
+        user_id=return_request.user_id,
+        return_request_id=encode_id(return_request.id or 0),
+        order_id=encode_id(return_request.order_id),
+        event=f"return.{return_request.status.value}",
+        title=f"Return {return_request.status.value.replace('_', ' ')}",
+        body=payload.note or f"Your return request is now {return_request.status.value.replace('_', ' ')}.",
+        status=return_request.status.value,
+    )
     return {"return_request": _serialize_return_request(return_request)}
 
 

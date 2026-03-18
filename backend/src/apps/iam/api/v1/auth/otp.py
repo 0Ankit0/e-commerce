@@ -12,7 +12,7 @@ from src.apps.core.config import settings
 from src.apps.core import security
 from src.apps.core.security import TokenType
 from src.apps.core.cookies import auth_cookie_options
-from src.apps.iam.api.deps import get_current_user, get_db
+from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User
 from src.apps.iam.models.login_attempt import LoginAttempt
 from src.apps.iam.models.token_tracking import TokenTracking
@@ -20,16 +20,43 @@ from src.apps.iam.schemas.token import Token
 from src.apps.iam.schemas.user import VerifyOTPRequest, DisableOTPRequest
 from src.apps.core.cache import RedisCache
 from src.apps.iam.utils.ip_access import revoke_tokens_for_ip, get_client_ip
+from src.apps.iam.utils.hashid import encode_id
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
 from src.apps.analytics.events import AuthEvents
+from src.apps.observability.models import ObservabilityLogEntry
 from src.apps.observability.service import (
+    create_log_entry,
     record_failed_login_event,
     record_successful_login_event,
     record_token_event,
 )
 
 router = APIRouter()
+
+
+async def _record_admin_otp_audit(
+    *,
+    db: AsyncSession,
+    user: User,
+    action: str,
+) -> None:
+    if not user.is_superuser:
+        return
+    await create_log_entry(
+        db,
+        level="INFO",
+        logger_name="auth.otp",
+        source="auth",
+        message=f"Admin OTP {action}",
+        event_code=f"auth.admin_otp.{action}",
+        user_id=user.id,
+        metadata={
+            "otp_enabled": user.otp_enabled,
+            "otp_verified": user.otp_verified,
+            "username": user.username,
+        },
+    )
 
 
 @router.post("/otp/enable/")
@@ -72,6 +99,7 @@ async def enable_otp(
         current_user.otp_base32 = otp_base32
         current_user.otp_auth_url = otp_auth_url
         current_user.otp_verified = False
+        await _record_admin_otp_audit(db=db, user=current_user, action="setup_started")
         await db.commit()
         
         return {
@@ -115,6 +143,7 @@ async def verify_otp(
         
         current_user.otp_enabled = True
         current_user.otp_verified = True
+        await _record_admin_otp_audit(db=db, user=current_user, action="verified")
         await db.commit()
         
         # Invalidate user cache
@@ -162,6 +191,7 @@ async def disable_otp(
         current_user.otp_verified = False
         current_user.otp_base32 = ""
         current_user.otp_auth_url = ""
+        await _record_admin_otp_audit(db=db, user=current_user, action="disabled")
         await db.commit()
         
         # Invalidate user cache
@@ -401,3 +431,44 @@ async def validate_otp_login(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred during OTP validation"
         )
+
+
+@router.get("/admin/security/admin-otp-status")
+async def list_admin_otp_status(
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    admin_users = (
+        await db.execute(select(User).where(User.is_superuser == True).order_by(User.username.asc()))  # noqa: E712
+    ).scalars().all()
+    items: list[dict[str, Any]] = []
+    for admin_user in admin_users:
+        latest_audit = (
+            await db.execute(
+                select(ObservabilityLogEntry)
+                .where(
+                    ObservabilityLogEntry.user_id == admin_user.id,
+                    ObservabilityLogEntry.event_code.like("auth.admin_otp.%"),
+                )
+                .order_by(ObservabilityLogEntry.timestamp.desc())
+            )
+        ).scalars().first()
+        if admin_user.otp_enabled and admin_user.otp_verified:
+            last_verified_state = "verified"
+        elif admin_user.otp_base32:
+            last_verified_state = "pending_verification"
+        else:
+            last_verified_state = "not_enabled"
+        items.append(
+            {
+                "user_id": encode_id(admin_user.id or 0),
+                "username": admin_user.username,
+                "email": admin_user.email,
+                "otp_enabled": admin_user.otp_enabled,
+                "otp_verified": admin_user.otp_verified,
+                "last_verified_state": last_verified_state,
+                "last_otp_event_code": latest_audit.event_code if latest_audit else None,
+                "last_otp_event_at": latest_audit.timestamp.isoformat() if latest_audit else None,
+            }
+        )
+    return {"items": items, "total": len(items)}

@@ -32,7 +32,18 @@ router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
 
 
-@router.post("/login/")
+def _admin_otp_recommendation(user: User) -> dict[str, Any]:
+    if not user.is_superuser:
+        return {}
+    if user.otp_enabled and user.otp_verified:
+        return {"otp_recommended": False, "otp_recommendation_message": ""}
+    return {
+        "otp_recommended": True,
+        "otp_recommendation_message": "Admin accounts should enable OTP for stronger account protection.",
+    }
+
+
+@router.post("/login/", response_model=None)
 @limiter.limit(lambda: settings.RATE_LIMIT_LOGIN)
 async def login_access_token(
     request: Request,
@@ -249,12 +260,14 @@ async def login_access_token(
                 **auth_cookie_options(max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60),
             )
             return {"message": "Logged in successfully"}
-        
-        return Token(
+
+        token_payload = Token(
             access=access_token,
             refresh=refresh_token,
             token_type=TokenType.BEARER.value
-        )
+        ).model_dump()
+        token_payload.update(_admin_otp_recommendation(user))
+        return token_payload
     except HTTPException:
         raise
     except Exception as ex:

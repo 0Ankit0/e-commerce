@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -10,6 +11,8 @@ from sqlmodel import select, func
 
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
+from src.apps.commerce.models import Address
+from src.apps.core.storage import save_media_bytes
 from src.apps.core.time import utc_now
 from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User
@@ -50,7 +53,9 @@ from src.apps.logistics.services import (
     start_line_haul_trip,
     update_shipment_tracking,
 )
-from src.apps.orders.models import OrderStatus, ReturnRequest, Shipment, ShipmentTracking, VendorOrder, VendorOrderStatus
+from src.apps.orders.models import Order, OrderStatus, ReturnRequest, ReturnStatus, Shipment, ShipmentTracking, VendorOrder, VendorOrderStatus
+from src.apps.notification.services.commerce_events import notify_delivery_exception, notify_order_event, notify_return_event
+from src.apps.orders.services import update_return_request_status
 from src.apps.vendors.services import get_vendor_for_user
 
 router = APIRouter()
@@ -155,6 +160,104 @@ class BranchInventoryMovementCreateRequest(BaseModel):
     movement_type: str = Field(min_length=3, max_length=40)
     quantity: int
     notes: str = ""
+
+
+def _build_label_payload(
+    *,
+    shipment: Shipment,
+    vendor_order: VendorOrder | None,
+    address: Address | None,
+) -> dict[str, object]:
+    destination = {
+        "name": address.name if address else "",
+        "phone": address.phone if address else "",
+        "line1": address.line1 if address else "",
+        "line2": address.line2 if address else "",
+        "city": address.city if address else "",
+        "state": address.state if address else "",
+        "pincode": address.pincode if address else "",
+        "country": address.country if address else "",
+    }
+    return {
+        "awb": shipment.awb,
+        "shipment_id": encode_id(shipment.id or 0),
+        "vendor_order_id": encode_id(shipment.vendor_order_id) if shipment.vendor_order_id else None,
+        "vendor_order_number": vendor_order.vendor_order_number if vendor_order else "",
+        "shipment_status": shipment.status.value,
+        "current_location": shipment.current_location,
+        "generated_at": utc_now().isoformat(),
+        "destination_address": destination,
+    }
+
+
+async def _ensure_shipping_label(
+    *,
+    shipment: Shipment,
+    db: AsyncSession,
+    force: bool = False,
+) -> dict[str, object]:
+    vendor_order = await db.get(VendorOrder, shipment.vendor_order_id) if shipment.vendor_order_id else None
+    parent_order = await db.get(Order, shipment.order_id)
+    address = await db.get(Address, parent_order.address_id) if parent_order else None
+    existing_payload = json.loads(shipment.label_payload_json or "{}")
+    if shipment.label_url and shipment.label_generated_at and existing_payload and not force:
+        return {
+            "url": shipment.label_url,
+            "generated_at": shipment.label_generated_at.isoformat(),
+            "payload": existing_payload,
+        }
+
+    payload = _build_label_payload(shipment=shipment, vendor_order=vendor_order, address=address)
+    label_text = "\n".join(
+        [
+            "Platform Shipping Label",
+            f"AWB: {payload['awb']}",
+            f"Shipment ID: {payload['shipment_id']}",
+            f"Vendor Order: {payload['vendor_order_number'] or '-'}",
+            f"Status: {payload['shipment_status']}",
+            f"Destination: {payload['destination_address']['name']}",
+            f"Phone: {payload['destination_address']['phone']}",
+            f"Address: {payload['destination_address']['line1']} {payload['destination_address']['line2']}".strip(),
+            f"City/State: {payload['destination_address']['city']}, {payload['destination_address']['state']}",
+            f"Pincode: {payload['destination_address']['pincode']}",
+            f"Generated At: {payload['generated_at']}",
+        ]
+    )
+    relative_path = str(Path("shipping-labels") / f"{shipment.awb.lower()}.txt")
+    shipment.label_url = save_media_bytes(relative_path, label_text.encode("utf-8"), content_type="text/plain")
+    shipment.label_payload_json = json.dumps(payload)
+    shipment.label_generated_at = utc_now()
+    shipment.updated_at = utc_now()
+    await db.commit()
+    await db.refresh(shipment)
+    return {
+        "url": shipment.label_url,
+        "generated_at": shipment.label_generated_at.isoformat() if shipment.label_generated_at else None,
+        "payload": payload,
+    }
+
+
+async def _notify_customer_for_shipment_status(
+    *,
+    shipment: Shipment,
+    db: AsyncSession,
+    title: str,
+    body: str,
+) -> None:
+    order = await db.get(Order, shipment.order_id)
+    if order is None:
+        return
+    await notify_order_event(
+        db=db,
+        user_id=order.user_id,
+        order_id=encode_id(order.id or 0),
+        order_number=order.order_number,
+        event=f"order.{shipment.status.value}",
+        title=title,
+        body=body,
+        status=shipment.status.value,
+        payment_status=order.payment_status.value,
+    )
 
 
 @router.get("/logistics/serviceability")
@@ -492,7 +595,25 @@ async def create_return_pickup(
     if return_request is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Return request not found")
     job = await create_reverse_pickup(return_request, db)
+    await update_return_request_status(
+        return_request=return_request,
+        status_value=ReturnStatus.REVERSE_PICKUP_ASSIGNED,
+        actor_user_id=None,
+        message="Reverse pickup requested",
+        payload={"job_id": job.id},
+        db=db,
+    )
     await db.commit()
+    await notify_return_event(
+        db=db,
+        user_id=return_request.user_id,
+        return_request_id=encode_id(return_request.id or 0),
+        order_id=encode_id(return_request.order_id),
+        event="return.reverse_pickup_assigned",
+        title="Reverse pickup assigned",
+        body="A reverse pickup has been created for your return.",
+        status=return_request.status.value,
+    )
     return {"reverse_pickup_job_id": encode_id(job.id or 0)}
 
 
@@ -524,7 +645,28 @@ async def complete_return_pickup(
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reverse pickup job not found")
     await complete_reverse_pickup(job, db)
+    return_request = await db.get(ReturnRequest, job.return_request_id)
+    if return_request is not None:
+        await update_return_request_status(
+            return_request=return_request,
+            status_value=ReturnStatus.PICKED_UP,
+            actor_user_id=None,
+            message="Return package picked up",
+            payload={"job_id": job.id},
+            db=db,
+        )
     await db.commit()
+    if return_request is not None:
+        await notify_return_event(
+            db=db,
+            user_id=return_request.user_id,
+            return_request_id=encode_id(return_request.id or 0),
+            order_id=encode_id(return_request.order_id),
+            event="return.picked_up",
+            title="Return picked up",
+            body="Your return package has been picked up.",
+            status=return_request.status.value,
+        )
     return {"success": True}
 
 
@@ -548,6 +690,18 @@ async def report_delivery_exception(
         db=db,
     )
     await db.commit()
+    order = await db.get(Order, shipment.order_id)
+    if order is not None:
+        await notify_delivery_exception(
+            db=db,
+            user_id=order.user_id,
+            shipment_id=encode_id(shipment.id or 0),
+            order_id=encode_id(order.id or 0),
+            event="shipment.failed_delivery",
+            title="Delivery attempt failed",
+            body=payload.failure_reason or "We could not complete the delivery attempt.",
+            status=exception.status.value,
+        )
     return {"exception_id": encode_id(exception.id or 0)}
 
 
@@ -566,6 +720,18 @@ async def reschedule_exception(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
     await reschedule_delivery_exception(exception, shipment, payload.rescheduled_for, db)
     await db.commit()
+    order = await db.get(Order, shipment.order_id)
+    if order is not None:
+        await notify_delivery_exception(
+            db=db,
+            user_id=order.user_id,
+            shipment_id=encode_id(shipment.id or 0),
+            order_id=encode_id(order.id or 0),
+            event="shipment.rescheduled",
+            title="Delivery rescheduled",
+            body=f"Your delivery has been rescheduled to {payload.rescheduled_for.isoformat()}",
+            status=exception.status.value,
+        )
     return {"success": True}
 
 
@@ -583,6 +749,18 @@ async def initiate_exception_rto(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
     await initiate_rto_for_exception(exception, shipment, db)
     await db.commit()
+    order = await db.get(Order, shipment.order_id)
+    if order is not None:
+        await notify_delivery_exception(
+            db=db,
+            user_id=order.user_id,
+            shipment_id=encode_id(shipment.id or 0),
+            order_id=encode_id(order.id or 0),
+            event="shipment.rto_initiated",
+            title="Return to origin initiated",
+            body="The shipment is being returned to origin after a failed delivery.",
+            status=exception.status.value,
+        )
     return {"success": True}
 
 
@@ -603,7 +781,46 @@ async def update_shipment_status(
     )
     await db.commit()
     await analytics.capture("system", "shipment_status_updated", {"shipment_id": shipment.id, "status": payload.status.value})
+    await _notify_customer_for_shipment_status(
+        shipment=shipment,
+        db=db,
+        title=f"Order {payload.status.value.replace('_', ' ')}",
+        body=payload.remarks or f"Shipment is now {payload.status.value.replace('_', ' ')}.",
+    )
     return {"success": True}
+
+
+@router.post("/vendor/shipments/{shipment_id}/label")
+async def generate_vendor_shipping_label(
+    shipment_id: str,
+    force: bool = Query(default=False),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_for_user(current_user, db)
+    shipment = await db.get(Shipment, decode_id_or_404(shipment_id))
+    if shipment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
+    vendor_order = await db.get(VendorOrder, shipment.vendor_order_id) if shipment.vendor_order_id else None
+    if vendor_order is None or vendor_order.vendor_id != vendor.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
+    label = await _ensure_shipping_label(shipment=shipment, db=db, force=force)
+    return {
+        "shipment_id": encode_id(shipment.id or 0),
+        "awb": shipment.awb,
+        "label_url": label["url"],
+        "generated_at": label["generated_at"],
+        "label": label["payload"],
+    }
+
+
+@router.get("/vendor/shipments/{shipment_id}/label")
+async def get_vendor_shipping_label(
+    shipment_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await generate_vendor_shipping_label(shipment_id, False, current_user, db)
 
 
 @router.get("/logistics/shipments/{shipment_id}/label")
@@ -615,18 +832,13 @@ async def get_shipping_label_metadata(
     shipment = await db.get(Shipment, decode_id_or_404(shipment_id))
     if shipment is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
-    vendor_order = await db.get(VendorOrder, shipment.vendor_order_id) if shipment.vendor_order_id else None
+    label = await _ensure_shipping_label(shipment=shipment, db=db)
     return {
         "shipment_id": encode_id(shipment.id or 0),
         "awb": shipment.awb,
         "carrier": "platform-logistics",
-        "label": {
-            "generated_at": utc_now().isoformat(),
-            "shipment_status": shipment.status.value,
-            "vendor_order_number": vendor_order.vendor_order_number if vendor_order else None,
-            "current_location": shipment.current_location,
-            "eta": shipment.eta.isoformat() if shipment.eta else None,
-        },
+        "label_url": label["url"],
+        "label": label["payload"],
     }
 
 
@@ -662,6 +874,12 @@ async def capture_proof_of_delivery(
         )
     )
     await db.commit()
+    await _notify_customer_for_shipment_status(
+        shipment=shipment,
+        db=db,
+        title="Order delivered",
+        body=payload.notes or "Your order has been delivered.",
+    )
     return {"proof_id": encode_id(proof.id or 0)}
 
 
