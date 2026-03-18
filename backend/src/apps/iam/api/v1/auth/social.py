@@ -1,11 +1,15 @@
-"""Social OAuth2 login endpoints — thin router, all logic delegated to utils and config."""
+"""Social OAuth2 login endpoints — browser OAuth plus native Google token exchange."""
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
+from google.auth.transport.requests import Request as GoogleRequest
+from google.oauth2 import id_token as google_id_token
 from jose import jwt
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from urllib.parse import urlencode
 
@@ -16,6 +20,7 @@ from src.apps.core.http import default_timeout, retry_async
 from src.apps.core.security import TokenType
 from src.apps.iam.api.deps import get_db
 from src.apps.iam.models.token_tracking import TokenTracking
+from src.apps.iam.schemas.token import Token
 from src.apps.iam.utils.ip_access import revoke_tokens_for_ip, get_client_ip
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
@@ -30,12 +35,83 @@ from src.apps.iam.utils.social import (
 
 router = APIRouter()
 
-# Maps provider name → its enabled setting flag
-_PROVIDER_ENABLED: dict[str, bool] = {
-    "google": settings.GOOGLE_ENABLED,
-    "github": settings.GITHUB_ENABLED,
-    "facebook": settings.FACEBOOK_ENABLED,
-}
+def _provider_enabled_map() -> dict[str, bool]:
+    return {
+        "google": settings.GOOGLE_ENABLED,
+        "github": settings.GITHUB_ENABLED,
+        "facebook": settings.FACEBOOK_ENABLED,
+    }
+
+
+class NativeGoogleLoginRequest(BaseModel):
+    id_token: str
+
+
+async def _issue_app_tokens_for_social_user(
+    *,
+    user,
+    provider: str,
+    request: Request,
+    db: AsyncSession,
+    analytics: AnalyticsService,
+) -> Token:
+    ip_address = get_client_ip(request)
+    user_agent = request.headers.get("user-agent", "unknown")
+
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = security.create_access_token(user.id, expires_delta=access_token_expires)
+    refresh_token = security.create_refresh_token(user.id)
+
+    access_payload = jwt.decode(access_token, settings.SECRET_KEY, algorithms=[security.ALGORITHM])
+    refresh_payload = jwt.decode(refresh_token, settings.SECRET_KEY, algorithms=[security.ALGORITHM])
+
+    await revoke_tokens_for_ip(db, user.id, ip_address)
+
+    db.add(TokenTracking(
+        user_id=user.id,
+        token_jti=access_payload["jti"],
+        token_type=TokenType.ACCESS,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        expires_at=datetime.fromtimestamp(access_payload["exp"], tz=timezone.utc),
+    ))
+    db.add(TokenTracking(
+        user_id=user.id,
+        token_jti=refresh_payload["jti"],
+        token_type=TokenType.REFRESH,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        expires_at=datetime.fromtimestamp(refresh_payload["exp"], tz=timezone.utc),
+    ))
+    await db.commit()
+    await record_successful_login_event(
+        db,
+        user_id=user.id,
+        ip_address=ip_address,
+        request=request,
+        method=f"social:{provider}",
+    )
+    await record_token_event(
+        db,
+        user_id=user.id,
+        ip_address=ip_address,
+        action="issued",
+        request=request,
+        metadata={"issued_tokens": 2, "auth_method": f"social:{provider}"},
+    )
+    await db.commit()
+
+    await analytics.capture(
+        str(user.id),
+        AuthEvents.LOGGED_IN_SOCIAL,
+        {"provider": provider, "ip_address": ip_address, "user_agent": user_agent},
+    )
+
+    return Token(
+        access=access_token,
+        refresh=refresh_token,
+        token_type=TokenType.BEARER.value,
+    )
 
 
 def _assert_provider_enabled(provider: str) -> None:
@@ -45,7 +121,7 @@ def _assert_provider_enabled(provider: str) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Provider '{provider}' is not supported. Supported: {list(OAUTH_PROVIDERS.keys())}",
         )
-    if not _PROVIDER_ENABLED.get(provider, False):
+    if not _provider_enabled_map().get(provider, False):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Social login with '{provider}' is not enabled.",
@@ -58,7 +134,7 @@ def _assert_provider_enabled(provider: str) -> None:
     description="Returns a list of social OAuth2 providers that are currently enabled.",
 )
 async def list_social_providers() -> dict:
-    enabled = [p for p, on in _PROVIDER_ENABLED.items() if on]
+    enabled = [p for p, on in _provider_enabled_map().items() if on]
     return {"providers": enabled}
 
 
@@ -200,59 +276,12 @@ async def social_callback(
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This account has been deactivated.")
 
-    # Whitelist the current IP — social login is already authenticated by the provider
-    ip_address = get_client_ip(request)
-    user_agent = request.headers.get("user-agent", "unknown")
-
-    # Issue application JWT tokens
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = security.create_access_token(user.id, expires_delta=access_token_expires)
-    refresh_token = security.create_refresh_token(user.id)
-
-    access_payload = jwt.decode(access_token, settings.SECRET_KEY, algorithms=[security.ALGORITHM])
-    refresh_payload = jwt.decode(refresh_token, settings.SECRET_KEY, algorithms=[security.ALGORITHM])
-
-    # Revoke any existing active tokens for this user+IP before issuing new ones
-    await revoke_tokens_for_ip(db, user.id, ip_address)
-
-    db.add(TokenTracking(
-        user_id=user.id,
-        token_jti=access_payload["jti"],
-        token_type=TokenType.ACCESS,
-        ip_address=ip_address,
-        user_agent=user_agent,
-        expires_at=datetime.fromtimestamp(access_payload["exp"], tz=timezone.utc),
-    ))
-    db.add(TokenTracking(
-        user_id=user.id,
-        token_jti=refresh_payload["jti"],
-        token_type=TokenType.REFRESH,
-        ip_address=ip_address,
-        user_agent=user_agent,
-        expires_at=datetime.fromtimestamp(refresh_payload["exp"], tz=timezone.utc),
-    ))
-    await db.commit()
-    await record_successful_login_event(
-        db,
-        user_id=user.id,
-        ip_address=ip_address,
+    issued_tokens = await _issue_app_tokens_for_social_user(
+        user=user,
+        provider=provider,
         request=request,
-        method=f"social:{provider}",
-    )
-    await record_token_event(
-        db,
-        user_id=user.id,
-        ip_address=ip_address,
-        action="issued",
-        request=request,
-        metadata={"issued_tokens": 2, "auth_method": f"social:{provider}"},
-    )
-    await db.commit()
-
-    await analytics.capture(
-        str(user.id),
-        AuthEvents.LOGGED_IN_SOCIAL,
-        {"provider": provider, "ip_address": ip_address, "user_agent": user_agent},
+        db=db,
+        analytics=analytics,
     )
 
     # Redirect the popup back to the frontend auth-callback page with tokens as
@@ -263,12 +292,82 @@ async def social_callback(
         redirect_resp = RedirectResponse(url=frontend_callback, status_code=302)
         redirect_resp.set_cookie(
             key=settings.ACCESS_TOKEN_COOKIE,
-            value=access_token,
+            value=issued_tokens.access,
             **auth_cookie_options(max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60),
         )
         return redirect_resp
 
     return RedirectResponse(
-        url=f"{frontend_callback}?access={access_token}&refresh={refresh_token}",
+        url=f"{frontend_callback}?access={issued_tokens.access}&refresh={issued_tokens.refresh}&provider={provider}",
         status_code=302,
+    )
+
+
+@router.post(
+    "/social/google/native/",
+    response_model=Token,
+    summary="Exchange a native Google sign-in token for application JWTs",
+    description=(
+        "Used by native mobile clients after a device-level Google sign-in. "
+        "The mobile app sends a Google ID token and receives app access/refresh tokens."
+    ),
+)
+async def social_google_native_login(
+    payload: NativeGoogleLoginRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    analytics: AnalyticsService = Depends(get_analytics),
+) -> Token:
+    _assert_provider_enabled("google")
+
+    if not payload.id_token.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google ID token is required.",
+        )
+
+    try:
+        google_claims = await asyncio.to_thread(
+            google_id_token.verify_oauth2_token,
+            payload.id_token,
+            GoogleRequest(),
+            settings.GOOGLE_CLIENT_ID,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired Google sign-in token.",
+        ) from exc
+
+    if google_claims.get("iss") not in {"accounts.google.com", "https://accounts.google.com"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google sign-in issuer could not be verified.",
+        )
+    if google_claims.get("email_verified") is False:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google sign-in did not return a verified email address.",
+        )
+
+    social_id, email, display_name = extract_user_info("google", google_claims)
+    if not social_id or not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google sign-in did not return a verified email address.",
+        )
+
+    user = await find_or_create_social_user(db, "google", social_id, email, display_name)
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This account has been deactivated.",
+        )
+
+    return await _issue_app_tokens_for_social_user(
+        user=user,
+        provider="google",
+        request=request,
+        db=db,
+        analytics=analytics,
     )
