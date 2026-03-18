@@ -2,8 +2,11 @@
 
 import { Suspense, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { apiClient } from '@/lib/api-client';
+import { getDefaultPortalPath } from '@/lib/portal';
 import { useAuthStore } from '@/store/auth-store';
 import { Loader2 } from 'lucide-react';
+import type { User } from '@/types';
 
 /**
  * Landing page for social OAuth callbacks.
@@ -14,25 +17,37 @@ import { Loader2 } from 'lucide-react';
 function AuthCallbackInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { setTokens } = useAuthStore();
+  const { setTokens, setUser } = useAuthStore();
 
   useEffect(() => {
-    const access = searchParams.get('access');
-    const refresh = searchParams.get('refresh');
-    const error = searchParams.get('error');
+    async function completeSocialLogin() {
+      const access = searchParams.get('access');
+      const refresh = searchParams.get('refresh');
+      const error = searchParams.get('error');
 
-    if (error) {
-      router.replace(`/login?error=${encodeURIComponent(error)}`);
-      return;
-    }
+      if (error) {
+        router.replace(`/login?error=${encodeURIComponent(error)}`);
+        return;
+      }
 
-    if (access && refresh) {
+      if (!access || !refresh) {
+        router.replace('/login?error=oauth_failed');
+        return;
+      }
+
       setTokens(access, refresh);
-      router.replace('/dashboard');
-    } else {
-      router.replace('/login?error=oauth_failed');
+
+      try {
+        const userResponse = await apiClient.get<User>('/users/me/');
+        setUser(userResponse.data);
+        router.replace(getDefaultPortalPath(userResponse.data));
+      } catch {
+        router.replace('/login?error=oauth_user_fetch_failed');
+      }
     }
-  }, [searchParams, setTokens, router]);
+
+    void completeSocialLogin();
+  }, [router, searchParams, setTokens, setUser]);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-50">

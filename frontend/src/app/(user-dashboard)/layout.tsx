@@ -7,10 +7,10 @@ import { Header } from '@/components/layout/header';
 export default function UserDashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <ProtectedRoute>
-      <div className="min-h-screen bg-gray-50">
+      <div className="dashboard-stage min-h-screen">
         <Sidebar />
         <Header />
-        <main className="ml-64 pt-16 p-6">{children}</main>
+        <main className="px-4 pb-8 pt-20 lg:ml-72 lg:px-8">{children}</main>
       </div>
     </ProtectedRoute>
   );

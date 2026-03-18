@@ -1,236 +1,90 @@
 'use client';
 
 import Link from 'next/link';
-import { useAuthStore } from '@/store/auth-store';
-import { useListUsers } from '@/hooks/use-users';
-import { useTokens } from '@/hooks/use-tokens';
-import { useRoles } from '@/hooks/use-rbac';
-import { useObservabilitySummary } from '@/hooks/use-observability';
+import { Activity, BadgeDollarSign, LayoutGrid, ShieldCheck, Store, Truck, Users } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Activity,
-  AlertTriangle,
-  CheckCircle2,
-  Key,
-  Shield,
-  ShieldAlert,
-  UserCheck,
-  UserX,
-  Users,
-} from 'lucide-react';
+
+const stats = [
+  { label: 'Orders under watch', value: '124', icon: Activity, color: 'bg-[#d9eafb] text-[#13324f]' },
+  { label: 'Vendors in review', value: '08', icon: Store, color: 'bg-[#f7efe1] text-[#c96d44]' },
+  { label: 'Open logistics exceptions', value: '11', icon: Truck, color: 'bg-[#f6ebc9] text-[#9a6a16]' },
+  { label: 'Pending settlements', value: '$18.2k', icon: BadgeDollarSign, color: 'bg-[#dff1e8] text-[#123f35]' },
+];
 
 export default function AdminDashboardPage() {
-  const user = useAuthStore((state) => state.user);
-  const { data: usersData } = useListUsers({ limit: 100 });
-  const { data: tokenData } = useTokens({ limit: 1 });
-  const { data: rolesData } = useRoles();
-  const { data: observabilitySummary } = useObservabilitySummary();
-
-  const users = usersData?.items ?? [];
-  const totalUsers = usersData?.total ?? users.length;
-  const activeUsers = users.filter((member) => member.is_active).length;
-  const superusers = users.filter((member) => member.is_superuser).length;
-  const unverifiedUsers = users.filter((member) => !member.is_confirmed).length;
-  const activeSessions = tokenData?.total ?? 0;
-  const totalRoles = rolesData?.total ?? rolesData?.items.length ?? 0;
-
-  const stats = [
-    {
-      name: 'Total Users',
-      value: String(totalUsers),
-      icon: Users,
-      href: '/admin/users',
-      color: 'text-blue-600 bg-blue-50',
-    },
-    {
-      name: 'Active Sessions',
-      value: String(activeSessions),
-      icon: Key,
-      href: '/tokens',
-      color: 'text-purple-600 bg-purple-50',
-    },
-    {
-      name: 'Roles & Permissions',
-      value: String(totalRoles),
-      icon: Shield,
-      href: '/admin/rbac',
-      color: 'text-green-600 bg-green-50',
-    },
-    {
-      name: 'Superusers',
-      value: String(superusers),
-      icon: UserCheck,
-      href: '/admin/users',
-      color: 'text-amber-600 bg-amber-50',
-    },
-    {
-      name: 'Open Incidents',
-      value: String(observabilitySummary?.open_incidents ?? 0),
-      icon: ShieldAlert,
-      href: '/admin/security-review',
-      color: 'text-red-600 bg-red-50',
-    },
-  ];
-
-  const quickActions = [
-    {
-      href: '/admin/users',
-      icon: Users,
-      label: 'Manage Users',
-      desc: 'Review accounts and edit access',
-      color: 'text-blue-600',
-    },
-    {
-      href: '/admin/rbac',
-      icon: Shield,
-      label: 'Roles & Permissions',
-      desc: 'Tune role and permission rules',
-      color: 'text-green-600',
-    },
-    {
-      href: '/admin/logs',
-      icon: Activity,
-      label: 'Live Logs',
-      desc: 'Watch the persisted event stream',
-      color: 'text-blue-600',
-    },
-    {
-      href: '/admin/security-review',
-      icon: ShieldAlert,
-      label: 'Security Review',
-      desc: 'Triage suspicious activity',
-      color: 'text-red-600',
-    },
-    {
-      href: '/tokens',
-      icon: Key,
-      label: 'Active Sessions',
-      desc: 'Monitor and revoke tokens',
-      color: 'text-purple-600',
-    },
-  ];
-
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Admin Dashboard</h1>
-        <p className="text-gray-500">
-          Welcome back
-          {user?.first_name ? `, ${user.first_name}` : user?.username ? `, ${user.username}` : ''}!
-          {' '}Here&apos;s the current platform overview.
-        </p>
+        <p className="text-xs uppercase tracking-[0.26em] text-[#8b6e57]">Admin control</p>
+        <h1 className="mt-3 font-[family:var(--font-display)] text-5xl text-[#1d1b18]">
+          Monitor the entire marketplace from one operations command surface.
+        </h1>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {stats.map((stat) => (
-          <Link key={stat.name} href={stat.href}>
-            <Card className="cursor-pointer transition-shadow hover:shadow-md">
-              <CardContent className="pt-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-500">{stat.name}</p>
-                    <p className="mt-1 text-2xl font-bold text-gray-900">{stat.value}</p>
-                  </div>
-                  <div className={`flex h-12 w-12 items-center justify-center rounded-lg ${stat.color}`}>
-                    <stat.icon className="h-6 w-6" />
-                  </div>
+          <Card key={stat.label} className="rounded-[28px]">
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-[#8b6e57]">{stat.label}</p>
+                  <p className="mt-1 text-2xl font-semibold text-[#1d1b18]">{stat.value}</p>
                 </div>
-              </CardContent>
-            </Card>
-          </Link>
+                <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${stat.color}`}>
+                  <stat.icon className="h-5 w-5" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <Card>
+      <div className="grid gap-6 lg:grid-cols-[1fr_0.9fr]">
+        <Card className="rounded-[32px]">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Activity className="h-5 w-5" />
-              Quick Actions
-            </CardTitle>
+            <CardTitle>Control areas</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 gap-3">
-              {quickActions.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className="flex flex-col gap-2 rounded-lg border border-gray-200 p-4 transition-colors hover:border-blue-400 hover:bg-blue-50"
-                >
-                  <item.icon className={`h-5 w-5 ${item.color}`} />
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{item.label}</p>
-                    <p className="text-xs text-gray-500">{item.desc}</p>
-                  </div>
-                </Link>
-              ))}
-            </div>
+          <CardContent className="grid gap-3 sm:grid-cols-2">
+            {[
+              { href: '/admin/orders', label: 'Orders', icon: Activity, desc: 'Investigate order progress and notes' },
+              { href: '/admin/vendors', label: 'Vendors', icon: Users, desc: 'Review onboarding and payouts' },
+              { href: '/admin/catalog', label: 'Catalog', icon: LayoutGrid, desc: 'Moderate storefront quality' },
+              { href: '/admin/live-feed', label: 'Live Feed', icon: Truck, desc: 'Watch mixed commerce events' },
+            ].map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="rounded-[24px] border border-[rgba(25,30,45,0.08)] p-5 transition-colors hover:bg-[#fcf7f0]"
+              >
+                <item.icon className="h-5 w-5 text-[#c96d44]" />
+                <p className="mt-3 font-medium text-[#1d1b18]">{item.label}</p>
+                <p className="mt-2 text-sm text-[#6f6257]">{item.desc}</p>
+              </Link>
+            ))}
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="rounded-[32px] bg-[#1d1b18] text-white">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Users className="h-5 w-5" />
-              User Overview
-            </CardTitle>
+            <CardTitle>Security posture</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-4 text-sm text-[rgba(255,255,255,0.72)]">
+            <div className="rounded-[22px] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.04)] p-4">
+              Admin OTP readiness is surfaced directly in the backend and should be reviewed regularly.
+            </div>
+            <div className="rounded-[22px] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.04)] p-4">
+              Role-aware navigation keeps privileged links out of sidebars for users who should not see them.
+            </div>
             <Link
-              href="/admin/users"
-              className="flex items-center justify-between rounded-lg border border-gray-200 p-3 transition-colors hover:border-blue-400 hover:bg-blue-50"
+              href="/admin/security-review"
+              className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-[#1d1b18]"
             >
-              <div className="flex items-center gap-3">
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
-                <span className="text-sm text-gray-900">Active users</span>
-              </div>
-              <span className="text-xs text-gray-500">{activeUsers} accounts</span>
-            </Link>
-            <Link
-              href="/admin/users"
-              className="flex items-center justify-between rounded-lg border border-gray-200 p-3 transition-colors hover:border-blue-400 hover:bg-blue-50"
-            >
-              <div className="flex items-center gap-3">
-                <UserCheck className="h-5 w-5 text-amber-600" />
-                <span className="text-sm text-gray-900">Superuser access</span>
-              </div>
-              <span className="text-xs text-gray-500">{superusers} elevated users</span>
-            </Link>
-            <Link
-              href="/admin/users"
-              className="flex items-center justify-between rounded-lg border border-gray-200 p-3 transition-colors hover:border-blue-400 hover:bg-blue-50"
-            >
-              <div className="flex items-center gap-3">
-                <UserX className="h-5 w-5 text-red-600" />
-                <span className="text-sm text-gray-900">Unverified accounts</span>
-              </div>
-              <span className="text-xs text-gray-500">{unverifiedUsers} pending review</span>
+              <ShieldCheck className="h-4 w-4" />
+              Review security
             </Link>
           </CardContent>
         </Card>
       </div>
-
-      {unverifiedUsers > 0 ? (
-        <Card className="border-yellow-200 bg-yellow-50">
-          <CardContent className="pt-6">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-yellow-600" />
-              <div className="flex-1">
-                <p className="text-sm font-medium text-yellow-800">Accounts need attention</p>
-                <p className="mt-1 text-xs text-yellow-700">
-                  {unverifiedUsers} user account{unverifiedUsers === 1 ? '' : 's'} still need email verification.
-                </p>
-              </div>
-              <Link
-                href="/admin/users"
-                className="flex-shrink-0 text-sm font-medium text-yellow-700 underline hover:text-yellow-900"
-              >
-                Review users
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
     </div>
   );
 }

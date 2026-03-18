@@ -76,8 +76,8 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
   // While Zustand is rehydrating from localStorage or we're attempting a refresh
   if (!_hasHydrated || isInitializing) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+      <div className="flex min-h-screen items-center justify-center bg-[#fcf7f0]">
+        <div className="h-10 w-10 animate-spin rounded-full border-b-2 border-[#1d1b18]" />
       </div>
     );
   }
@@ -85,8 +85,8 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
   // Refresh failed and router.push('/login') is in-flight — show spinner
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+      <div className="flex min-h-screen items-center justify-center bg-[#fcf7f0]">
+        <div className="h-10 w-10 animate-spin rounded-full border-b-2 border-[#1d1b18]" />
       </div>
     );
   }

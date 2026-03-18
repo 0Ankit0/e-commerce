@@ -8,6 +8,9 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { apiClient } from '@/lib/api-client';
+import { useAuthStore } from '@/store/auth-store';
+import { getDefaultPortalPath } from '@/lib/portal';
 import {
   Card,
   CardHeader,
@@ -17,7 +20,7 @@ import {
   CardFooter,
 } from '@/components/ui/card';
 import { startOAuthLogin, type OAuthProvider } from '@/lib/oauth';
-import type { OTPLoginResponse } from '@/types';
+import type { OTPLoginResponse, User } from '@/types';
 
 const loginSchema = z.object({
   username: z.string().min(1, 'Username is required'),
@@ -39,6 +42,7 @@ interface LoginFormProps {
 export function LoginForm({ enabledProviders }: LoginFormProps) {
   const router = useRouter();
   const { loginAsync, isLoading, loginError } = useAuth();
+  const { setUser } = useAuthStore();
 
   const {
     register,
@@ -55,7 +59,9 @@ export function LoginForm({ enabledProviders }: LoginFormProps) {
         const otpResult = result as OTPLoginResponse;
         router.push(`/otp-verify?temp_token=${otpResult.temp_token}`);
       } else {
-        router.push('/dashboard');
+        const userResponse = await apiClient.get<User>('/users/me/');
+        setUser(userResponse.data);
+        router.push(getDefaultPortalPath(userResponse.data));
       }
     } catch {
       // error shown via loginError

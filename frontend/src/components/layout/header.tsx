@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { Bell, User, LogOut, Settings, ChevronRight, CheckCheck } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { useAuthStore } from '@/store/auth-store';
@@ -9,6 +10,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useNotifications, useMarkAllNotificationsRead, useMarkNotificationRead } from '@/hooks/use-notifications';
 import { LanguageSwitcher } from './language-switcher';
 import { ThemeSelector } from '@/components/theme/theme-selector';
+import { PORTAL_DEFINITIONS, getPortalFromPath } from '@/lib/portal';
 
 function useClickOutside(ref: React.RefObject<HTMLElement | null>, handler: () => void) {
   useEffect(() => {
@@ -23,6 +25,7 @@ function useClickOutside(ref: React.RefObject<HTMLElement | null>, handler: () =
 export function Header() {
   const { logout } = useAuth();
   const { user, tenant } = useAuthStore();
+  const pathname = usePathname();
 
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -41,6 +44,7 @@ export function Header() {
 
   const notifications = notifData?.items ?? [];
   const unreadCount = notifData?.unread_count ?? 0;
+  const portal = PORTAL_DEFINITIONS[getPortalFromPath(pathname)];
 
   const handleLogoutConfirm = async () => {
     setIsLoggingOut(true);
@@ -50,15 +54,17 @@ export function Header() {
   };
 
   return (
-    <header className="fixed top-0 left-64 right-0 z-10 h-16 bg-white border-b border-gray-200">
+    <header className="fixed left-0 right-0 top-0 z-10 h-16 border-b border-[rgba(25,30,45,0.08)] bg-[rgba(255,250,243,0.82)] backdrop-blur-xl lg:left-72">
       <div className="flex h-full items-center justify-between px-6">
-        {/* Left: tenant name */}
-        <div className="flex items-center gap-2">
-          {tenant && (
-            <span className="text-sm text-gray-500">
-              Organization: <span className="font-medium text-gray-900">{tenant.name}</span>
-            </span>
-          )}
+        <div className="flex items-center gap-3">
+          <div>
+            <p className="font-[family:var(--font-display)] text-2xl leading-none text-[#1d1b18]">
+              {portal.label}
+            </p>
+            <p className="mt-1 text-xs uppercase tracking-[0.24em] text-[#8b6e57]">
+              {tenant ? `Org: ${tenant.name}` : portal.description}
+            </p>
+          </div>
         </div>
 
         <div className="flex items-center gap-3">

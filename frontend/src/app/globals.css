@@ -1,34 +1,33 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --background: #fcf7f0;
+  --foreground: #1d1b18;
   --surface: #ffffff;
-  --surface-muted: #f8fafc;
-  --surface-subtle: #f1f5f9;
-  --border-color: #e2e8f0;
-  --text-primary: #0f172a;
-  --text-secondary: #334155;
-  --text-muted: #64748b;
-  --accent: #2563eb;
-  --accent-foreground: #f8fafc;
-  --accent-soft: #dbeafe;
-  --success-soft: #dcfce7;
-  --warning-soft: #fef3c7;
-  --danger-soft: #fee2e2;
+  --surface-muted: #f7efe1;
+  --surface-subtle: #f2e7d6;
+  --border-color: rgba(25, 30, 45, 0.08);
+  --text-primary: #1d1b18;
+  --text-secondary: #4b4036;
+  --text-muted: #7d6758;
+  --accent: #c96d44;
+  --accent-foreground: #fffaf3;
+  --accent-soft: #f4d2a8;
+  --success-soft: #dff1e8;
+  --warning-soft: #f6ebc9;
+  --danger-soft: #f7dfdf;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-body);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-geist-sans), sans-serif;
+  font-family: var(--font-body), sans-serif;
 }
 
 html,
@@ -176,4 +175,33 @@ textarea {
 
 ::selection {
   background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.dashboard-stage {
+  background:
+    radial-gradient(circle at top left, rgba(201, 109, 68, 0.12), transparent 28%),
+    radial-gradient(circle at top right, rgba(18, 63, 53, 0.1), transparent 30%),
+    linear-gradient(180deg, #fcf7f0 0%, #fffdf9 100%);
+}
+
+.grain-overlay {
+  position: relative;
+}
+
+.grain-overlay::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.18;
+  background-image: radial-gradient(rgba(29, 27, 24, 0.15) 0.6px, transparent 0.6px);
+  background-size: 14px 14px;
+  mix-blend-mode: multiply;
 }

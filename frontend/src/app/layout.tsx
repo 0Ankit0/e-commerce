@@ -1,22 +1,23 @@
 import type { Metadata } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
+import { Bricolage_Grotesque, Cormorant_Garamond } from 'next/font/google';
 import './globals.css';
 import { Providers } from '@/components/providers';
 import { THEME_PRESETS } from '@/lib/themes';
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
+const bodyFont = Bricolage_Grotesque({
+  variable: '--font-body',
   subsets: ['latin'],
 });
 
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
+const displayFont = Cormorant_Garamond({
+  variable: '--font-display',
   subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
 });
 
 export const metadata: Metadata = {
-  title: 'Fastapi Template',
-  description: 'Modern Fastapi Template platform',
+  title: 'Northstar Market',
+  description: 'Multi-vendor commerce storefront and role-aware operations portal',
 };
 
 export default function RootLayout({
@@ -69,7 +70,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+      <body className={`${bodyFont.variable} ${displayFont.variable} antialiased`}>
         <Providers>{children}</Providers>
       </body>
     </html>
