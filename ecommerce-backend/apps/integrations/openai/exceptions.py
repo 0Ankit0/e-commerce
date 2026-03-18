@@ -1,2 +1,0 @@
-class OpenAIClientException(Exception):
-    pass

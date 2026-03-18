@@ -1,8 +1,0 @@
-{% load crispy_forms_field %}
-
-<div class="flex items-center">
-    {% crispy_field field 'class' 'form-checkbox h-5 w-5 text-blue-600' %}
-    <label for="{{ field.id_for_label }}" class="ml-2 block text-sm text-gray-900">
-        {{ field.label|safe }}
-    </label>
-</div>
