@@ -3,6 +3,12 @@
 ## Overview
 Cloud architecture design for the e-commerce platform on AWS.
 
+Current implementation note:
+
+- This document is a target-state infrastructure design, not the exact runtime shape of the repository today.
+- The current backend implementation is a FastAPI monolith documented in the high-level and detailed design docs.
+- Components such as Kafka/MSK shown below should be read as future scaling options unless they are explicitly called out as implemented elsewhere.
+
 ---
 
 ## AWS Architecture Overview

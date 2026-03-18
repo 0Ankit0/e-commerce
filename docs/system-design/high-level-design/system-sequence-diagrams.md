@@ -88,12 +88,38 @@ sequenceDiagram
     Customer->>System: submitReturn(reason, photos)
     System-->>Customer: returnRequestId, status
 
-    System-->>Customer: notification(pickupScheduled, date)
+    System-->>Customer: notification(reversePickupAssigned, date)
 
     Customer->>System: checkReturnStatus(returnId)
     System-->>Customer: returnStatus(stage, timeline)
 
     System-->>Customer: notification(refundProcessed, amount)
+```
+
+---
+
+## Customer: Wishlist Sharing And Price Alerts
+
+```mermaid
+sequenceDiagram
+    actor Customer
+    actor Viewer as Public Viewer
+    participant System as E-Commerce System
+
+    Customer->>System: addToWishlist(productId)
+    System-->>Customer: wishlistUpdated
+
+    Customer->>System: createWishlistShareLink(title)
+    System-->>Customer: shareLink(tokenizedUrl)
+
+    Viewer->>System: openSharedWishlist(token)
+    System-->>Viewer: readOnlyWishlist(items)
+
+    Customer->>System: revokeShareLink(shareId)
+    System-->>Customer: shareRevoked
+
+    Note over System: Later - vendor reduces variant price
+    System-->>Customer: notification(priceDrop, product, oldPrice, newPrice)
 ```
 
 ---
@@ -119,8 +145,8 @@ sequenceDiagram
 
     Vendor->>System: generateShippingLabel(orderId)
     System->>Logistics: createShipment(details)
-    Logistics-->>System: AWB, label
-    System-->>Vendor: shippingLabel(AWB, labelPDF)
+    Logistics-->>System: AWB
+    System-->>Vendor: shippingLabel(AWB, labelArtifactURL)
 
     Vendor->>System: schedulePickup(orderId, slot)
     System->>Logistics: requestPickup(AWB, slot)
@@ -129,6 +155,8 @@ sequenceDiagram
 
     Logistics-->>System: webhook(pickupComplete)
     System-->>Vendor: notification(shipped)
+    System-->>Customer: notification(orderShipped)
+    System-->>Admin: liveFeedEvent(orderShipped)
 ```
 
 ---
@@ -191,6 +219,32 @@ sequenceDiagram
         Admin->>System: requestInfo(vendorId, requirements)
         System-->>Admin: requestSent
         System-->>Vendor: notification(moreInfoNeeded)
+    end
+```
+
+---
+
+## Admin: Security And Live Operations Sequence
+
+```mermaid
+sequenceDiagram
+    actor Admin
+    participant System as E-Commerce System
+
+    Admin->>System: login(username, password)
+    alt OTP already enabled
+        System-->>Admin: tempAuthToken(requiresOtp)
+        Admin->>System: submitOtp(code)
+        System-->>Admin: accessGranted
+    else OTP not enabled
+        System-->>Admin: accessGranted(otpRecommended=true)
+    end
+
+    Admin->>System: getAdminOtpStatus()
+    System-->>Admin: otpStatusList(enabled, verified, lastAuditEvent)
+
+    loop Commerce domain events
+        System-->>Admin: liveFeedEvent(order|shipment|return|payout)
     end
 ```
 

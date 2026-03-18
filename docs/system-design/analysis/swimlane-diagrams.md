@@ -291,7 +291,7 @@ flowchart TB
 
     subgraph LastMile["🛵 Last Mile"]
         L1[Assign to Agent]
-        L2[Route Optimization]
+        L2[ETA / Delivery Planning]
         L3[Out for Delivery]
     end
 

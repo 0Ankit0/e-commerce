@@ -17,6 +17,7 @@ Status labels:
 | Inventory | Warehouse stock tracking, low-stock reporting, reorder report | `implemented in this completion pass` |
 | Inventory | Reservation-based stock protection for unpaid online orders | `implemented in this completion pass` |
 | Cart | Persistent cart, wishlist, coupon apply/remove | `implemented now` |
+| Cart | Wishlist share links and public shared wishlist reads | `implemented in this completion pass` |
 | Checkout | Serviceability-aware shipping, tax rules, quote fingerprinting, idempotency persistence | `implemented in this completion pass` |
 | Checkout | Address autocomplete through saved addresses plus OSM/Google providers | `implemented in this completion pass` |
 | Promotions | Coupon validation and discount handling | `implemented now` |
@@ -30,15 +31,17 @@ Status labels:
 | Vendors | Vendor profile, warehouses, analytics, payout history | `implemented now` |
 | Vendors | Under-review/resubmission workflow, timeline events, payout requests, payout batches, settlement export | `implemented in this completion pass` |
 | Logistics | Zones, shipping options, pickup jobs, manifests, trips, POD | `implemented now` |
-| Logistics | Delivery exceptions, reschedule, RTO, label metadata, agent availability, branch/hub performance | `implemented in this completion pass` |
+| Logistics | Delivery exceptions, reschedule, RTO, shipping-label artifacts, agent availability, branch/hub performance | `implemented in this completion pass` |
 | Support | Ticket creation and admin list | `implemented now` |
 | Support | Ticket comments, assignment, SLA timestamps, ticket timeline | `implemented in this completion pass` |
 | Content | Admin banners and static pages plus public content endpoints | `implemented in this completion pass` |
 | Reporting | Admin overview dashboard | `implemented now` |
-| Reporting | CSV export and persisted report jobs | `implemented in this completion pass` |
+| Reporting | CSV export, persisted report jobs, admin live order feed | `implemented in this completion pass` |
 | Security | Public hashid responses, numeric-id compatibility input, timezone-aware UTC helpers, safer password hash default, payment audit logs | `implemented in this completion pass` |
+| Security | Admin OTP recommendation, admin OTP visibility endpoint, OTP audit events | `implemented in this completion pass` |
 | Notifications | Async notification infrastructure, device registry, preferences | `implemented now` |
-| Notifications | Low-stock, payout, return-event, and richer order-state fanout | `future` |
+| Notifications | Low-stock, payout, return-event, price-drop, delivery-exception, and richer order-state fanout | `implemented in this completion pass` |
+| Catalog | Variant price-history snapshots for vendor price changes | `implemented in this completion pass` |
 | Logistics | External route optimization engine | `future` |
 | Logistics | Real-time courier GPS ingestion | `future` |
 | Recommendations | ML-grade ranking and re-ranking | `future` |

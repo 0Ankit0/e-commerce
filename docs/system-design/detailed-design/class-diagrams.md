@@ -454,9 +454,16 @@ classDiagram
         +refundPayment(paymentId, amount) RefundResult
     }
 
-    class RazorpayAdapter {
+    class KhaltiAdapter {
         -String apiKey
-        -String apiSecret
+        +createOrder(amount, currency) GatewayOrder
+        +verifyPayment(paymentId) VerifyResult
+        +capturePayment(paymentId) CaptureResult
+        +refundPayment(paymentId, amount) RefundResult
+    }
+
+    class EsewaAdapter {
+        -String merchantCode
         +createOrder(amount, currency) GatewayOrder
         +verifyPayment(paymentId) VerifyResult
         +capturePayment(paymentId) CaptureResult
@@ -471,10 +478,20 @@ classDiagram
         +refundPayment(paymentId, amount) RefundResult
     }
 
+    class PayPalAdapter {
+        -String clientId
+        +createOrder(amount, currency) GatewayOrder
+        +verifyPayment(paymentId) VerifyResult
+        +capturePayment(paymentId) CaptureResult
+        +refundPayment(paymentId, amount) RefundResult
+    }
+
     Payment "1" --> "*" Refund
     VendorPayout "1" --> "*" PayoutBreakdown
-    PaymentGatewayAdapter <|.. RazorpayAdapter
+    PaymentGatewayAdapter <|.. KhaltiAdapter
+    PaymentGatewayAdapter <|.. EsewaAdapter
     PaymentGatewayAdapter <|.. StripeAdapter
+    PaymentGatewayAdapter <|.. PayPalAdapter
 ```
 
 ---

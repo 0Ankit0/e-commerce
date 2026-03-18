@@ -13,8 +13,10 @@ erDiagram
     USER ||--o{ ORDER : places
     USER ||--o{ CART : has
     USER ||--o{ WISHLIST : has
+    USER ||--o{ WISHLIST_SHARE_LINK : creates
     USER ||--o{ REVIEW : writes
     USER ||--o{ WALLET : has
+    USER ||--o{ NOTIFICATION : receives
 
     VENDOR ||--o{ PRODUCT : sells
     VENDOR ||--o{ PAYOUT : receives
@@ -22,6 +24,7 @@ erDiagram
     VENDOR ||--o{ WAREHOUSE : has
 
     PRODUCT ||--o{ PRODUCT_VARIANT : has
+    PRODUCT_VARIANT ||--o{ VARIANT_PRICE_HISTORY : snapshots
     PRODUCT }o--|| CATEGORY : belongs_to
     PRODUCT }o--|| BRAND : has
     PRODUCT ||--o{ PRODUCT_IMAGE : has
@@ -36,11 +39,13 @@ erDiagram
     ORDER ||--o{ ORDER_ITEM : contains
     ORDER_ITEM }o--|| PRODUCT_VARIANT : references
     ORDER ||--o{ SHIPMENT : has
+    ORDER ||--o{ ORDER_EVENT : emits
     ORDER }o--o| COUPON : uses
     ORDER ||--|| PAYMENT : has
     ORDER }o--|| ADDRESS : delivered_to
 
     SHIPMENT ||--o{ SHIPMENT_TRACKING : has
+    SHIPMENT ||--|| SHIPPING_LABEL : has
     SHIPMENT }o--|| BRANCH : assigned_to
     SHIPMENT }o--o| DELIVERY_AGENT : delivered_by
 
@@ -51,6 +56,7 @@ erDiagram
 
     RETURN ||--|| ORDER_ITEM : for
     RETURN ||--|| REFUND : triggers
+    RETURN ||--o{ RETURN_EVENT : emits
 
     ADMIN ||--o{ ADMIN_ROLE : has
     ADMIN_ROLE ||--o{ PERMISSION : grants
@@ -70,6 +76,8 @@ classDiagram
         +String passwordHash
         +UserType type
         +UserStatus status
+        +Boolean otpEnabled
+        +Boolean otpVerified
         +DateTime createdAt
         +DateTime lastLoginAt
         +register()
@@ -115,8 +123,19 @@ classDiagram
         +DateTime createdAt
     }
 
+    class Notification {
+        +UUID id
+        +UUID userId
+        +String title
+        +String body
+        +String type
+        +JSON extraData
+        +DateTime createdAt
+    }
+
     User "1" --> "*" Address
     User "1" --> "1" Wallet
+    User "1" --> "*" Notification
     Wallet "1" --> "*" WalletTransaction
 ```
 
@@ -169,6 +188,15 @@ classDiagram
         +getPrice()
     }
 
+    class VariantPriceHistory {
+        +UUID id
+        +UUID variantId
+        +Decimal previousPrice
+        +Decimal currentPrice
+        +String changeReason
+        +DateTime createdAt
+    }
+
     class ProductImage {
         +UUID id
         +UUID productId
@@ -201,6 +229,7 @@ classDiagram
     Product "1" --> "*" ProductImage
     Product "*" --> "1" Brand
     ProductVariant "1" --> "*" Inventory
+    ProductVariant "1" --> "*" VariantPriceHistory
 ```
 
 ---
@@ -218,6 +247,24 @@ classDiagram
         +updateQuantity()
         +getTotal()
         +checkout()
+    }
+
+    class Wishlist {
+        +UUID id
+        +UUID userId
+        +addProduct(productId)
+        +removeProduct(productId)
+        +listItems()
+    }
+
+    class WishlistShareLink {
+        +UUID id
+        +UUID userId
+        +String token
+        +String title
+        +Boolean isActive
+        +DateTime createdAt
+        +revoke()
     }
 
     class CartItem {
@@ -275,8 +322,20 @@ classDiagram
         +apply()
     }
 
+    class OrderEvent {
+        +UUID id
+        +UUID orderId
+        +String eventType
+        +String message
+        +JSON payload
+        +DateTime createdAt
+    }
+
     Cart "1" --> "*" CartItem
+    User "1" --> "*" Wishlist
+    User "1" --> "*" WishlistShareLink
     Order "1" --> "*" OrderItem
+    Order "1" --> "*" OrderEvent
     Order "*" --> "0..1" Coupon
 ```
 
@@ -347,6 +406,9 @@ classDiagram
         +UUID vendorId
         +UUID branchId
         +ShipmentStatus status
+        +String labelArtifactUrl
+        +JSON labelPayload
+        +DateTime labelGeneratedAt
         +ShipmentType type
         +Decimal weight
         +JSON dimensions
@@ -355,6 +417,13 @@ classDiagram
         +DateTime deliveredAt
         +track()
         +updateStatus()
+    }
+
+    class ShippingLabel {
+        +UUID shipmentId
+        +String url
+        +JSON payload
+        +DateTime generatedAt
     }
 
     class ShipmentTracking {
@@ -424,6 +493,7 @@ classDiagram
     }
 
     Shipment "1" --> "*" ShipmentTracking
+    Shipment "1" --> "1" ShippingLabel
     Hub "1" --> "*" Branch
     Branch "1" --> "*" DeliveryAgent
     LineHaulTrip "*" --> "1" Hub : origin
@@ -509,12 +579,11 @@ classDiagram
 
     class OrderStatus {
         <<enumeration>>
-        PENDING
+        PENDING_PAYMENT
         CONFIRMED
         PROCESSING
         PACKED
         SHIPPED
-        IN_TRANSIT
         OUT_FOR_DELIVERY
         DELIVERED
         CANCELLED
@@ -533,10 +602,9 @@ classDiagram
 
     class ShipmentStatus {
         <<enumeration>>
-        CREATED
-        PICKED_UP
-        IN_TRANSIT
-        AT_HUB
+        CONFIRMED
+        PROCESSING
+        SHIPPED
         OUT_FOR_DELIVERY
         DELIVERED
         RTO_INITIATED

@@ -1,7 +1,7 @@
 # C4 Code Diagram
 
 ## Overview
-C4 Code diagrams showing class-level details for key components. This is the lowest level of the C4 model.
+C4 Code diagrams showing class-level details for key components. This is the lowest level of the C4 model. The diagrams below are aligned to the current FastAPI monolith and its implemented integrations rather than the earlier Kafka/Razorpay-oriented draft.
 
 ---
 
@@ -32,7 +32,7 @@ classDiagram
             -cart_service: CartService
             -inventory_client: InventoryClient
             -payment_client: PaymentClient
-            -event_publisher: EventPublisher
+            -event_notifier: CommerceEventNotifier
             +create_order(user_id, order_data): Order
             +get_order(order_id): Order
             +cancel_order(order_id, reason): None
@@ -96,9 +96,10 @@ classDiagram
             +release_stock(order_id): None
         }
 
-        class EventPublisher {
-            -kafka_producer: AIOKafkaProducer
-            +publish(topic, event): None
+        class CommerceEventNotifier {
+            -notification_service: NotificationService
+            -websocket_manager: ConnectionManager
+            +emit(event_type, payload): None
         }
     }
 
@@ -109,7 +110,7 @@ classDiagram
     OrderService --> OrderSplitter
     OrderService --> OrderRepository
     OrderService --> InventoryClient
-    OrderService --> EventPublisher
+    OrderService --> CommerceEventNotifier
 
     CheckoutService --> PricingEngine
 
@@ -131,8 +132,7 @@ classDiagram
         }
 
         class WebhookRouter {
-            +handle_razorpay(request, raw_body): JSONResponse
-            +handle_stripe(request, raw_body): JSONResponse
+            +handle_gateway_webhook(gateway, request, raw_body): JSONResponse
         }
     }
 
@@ -142,7 +142,7 @@ classDiagram
             -payment_repo: PaymentRepository
             -gateway_factory: GatewayFactory
             -order_client: OrderClient
-            -event_publisher: EventPublisher
+            -event_notifier: CommerceEventNotifier
             +create_payment_order(order_id, amount): PaymentOrder
             +handle_webhook(gateway, payload): None
             +refund(payment_id, amount): Refund
@@ -187,10 +187,15 @@ classDiagram
             +refund(payment_id, amount): RefundResult
         }
 
-        class RazorpayAdapter {
+        class KhaltiAdapter {
             -api_key: str
-            -api_secret: str
-            -client: razorpay.Client
+            +create_order(amount): GatewayOrder
+            +verify_payment(payment_id): VerifyResult
+            +refund(payment_id, amount): RefundResult
+        }
+
+        class EsewaAdapter {
+            -merchant_code: str
             +create_order(amount): GatewayOrder
             +verify_payment(payment_id): VerifyResult
             +refund(payment_id, amount): RefundResult
@@ -204,6 +209,13 @@ classDiagram
             +refund(payment_id, amount): RefundResult
         }
 
+        class PayPalAdapter {
+            -client_id: str
+            +create_order(amount): GatewayOrder
+            +verify_payment(payment_id): VerifyResult
+            +refund(payment_id, amount): RefundResult
+        }
+
         class GatewayFactory {
             +get_gateway(name): PaymentGateway
         }
@@ -211,8 +223,7 @@ classDiagram
 
     namespace Security {
         class SignatureValidator {
-            +validate_razorpay(payload, signature): bool
-            +validate_stripe(payload, signature): bool
+            +validate_webhook(gateway, payload, signature): bool
         }
     }
 
@@ -226,11 +237,15 @@ classDiagram
     RefundService --> Refund
     RefundService --> GatewayFactory
 
-    GatewayFactory --> RazorpayAdapter
+    GatewayFactory --> KhaltiAdapter
+    GatewayFactory --> EsewaAdapter
     GatewayFactory --> StripeAdapter
+    GatewayFactory --> PayPalAdapter
 
-    RazorpayAdapter ..|> PaymentGateway
+    KhaltiAdapter ..|> PaymentGateway
+    EsewaAdapter ..|> PaymentGateway
     StripeAdapter ..|> PaymentGateway
+    PayPalAdapter ..|> PaymentGateway
 ```
 
 ---
@@ -260,7 +275,7 @@ classDiagram
             -shipmentRepository: ShipmentRepository
             -trackingRepository: TrackingRepository
             -partnerClient: PartnerClient
-            -eventPublisher: EventPublisher
+            -eventNotifier: CommerceEventNotifier
             +createShipment(order): Promise~Shipment~
             +updateStatus(awb, status): Promise~void~
             +getTracking(awb): Promise~TrackingInfo~
@@ -275,10 +290,10 @@ classDiagram
             +handleException(awb, exception): Promise~void~
         }
 
-        class RouteOptimizer {
+        class DeliveryPlanner {
             -mapsClient: MapsClient
-            +optimizeRoute(shipments): Promise~OptimizedRoute~
             +calculateETA(origin, destination): Promise~Duration~
+            +suggestDeliverySequence(shipments): Promise~DeliveryPlan~
         }
 
         class AssignmentEngine {
@@ -473,7 +488,7 @@ classDiagram
 | **API** | HTTP handling, validation, routing | Controllers, DTOs, Middleware |
 | **Application** | Business logic orchestration | Services, Use Cases |
 | **Domain** | Core business entities and rules | Entities, Value Objects, Domain Events |
-| **Infrastructure** | External integrations, persistence | Repositories, API Clients, Message Publishers |
+| **Infrastructure** | External integrations, persistence | Repositories, API clients, storage adapters, notification dispatchers |
 
 ---
 
@@ -485,6 +500,6 @@ classDiagram
 | **Factory** | Create gateway instances | Payment gateway selection |
 | **Adapter** | Integrate external services | API clients, providers |
 | **Strategy** | Interchangeable algorithms | Pricing, routing |
-| **Observer** | Event-driven communication | Kafka event publishing |
+| **Observer** | Event-driven communication | Persisted notifications and websocket fanout |
 | **Decorator** | Add cross-cutting concerns | Logging, caching |
 | **DI/IoC** | Dependency management | All layers |

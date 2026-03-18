@@ -1,7 +1,7 @@
 # System Context Diagram
 
 ## Overview
-The System Context Diagram shows the e-commerce platform's boundaries and its interactions with external systems and actors.
+The system context below reflects the implemented backend and its external actors and dependencies.
 
 ---
 
@@ -9,7 +9,7 @@ The System Context Diagram shows the e-commerce platform's boundaries and its in
 
 ```mermaid
 graph TB
-    subgraph External Actors
+    subgraph Actors
         Customer((Customer))
         Vendor((Vendor))
         Admin((Admin))
@@ -17,163 +17,93 @@ graph TB
         HubOperator((Hub Operator))
     end
 
-    subgraph External Systems
-        PG[Payment Gateways<br>Razorpay/Stripe/PayPal]
-        SMS[SMS Provider<br>Twilio/MSG91]
-        Email[Email Service<br>SendGrid/SES]
-        Push[Push Notification<br>Firebase/OneSignal]
-        Maps[Maps Service<br>Google Maps/Mapbox]
-        Analytics[Analytics<br>Google Analytics/Mixpanel]
-        CDN[CDN<br>CloudFront/Cloudflare]
-        Storage[Object Storage<br>S3/GCS]
+    subgraph ExternalSystems
+        PG[Payment Providers<br>Khalti / eSewa / Stripe / PayPal]
+        SMS[SMS Provider]
+        Email[Email Service]
+        Push[Push Service]
+        Maps[Maps Provider<br>OSM default / Google optional]
+        Storage[Object Storage]
         ERP[Vendor ERP Systems]
-        Bank[Banking System]
+        Bank[Banking / Payout System]
+        Logistics[Logistics Partner]
     end
 
     subgraph "E-Commerce Platform"
-        Platform[E-Commerce<br>Platform]
+        Platform[FastAPI Monolith]
     end
 
-    Customer -->|Browse, Order, Pay| Platform
-    Vendor -->|Manage Products, Orders| Platform
-    Admin -->|Configure, Monitor| Platform
-    DeliveryAgent -->|Deliver, Update| Platform
-    HubOperator -->|Process Shipments| Platform
+    Customer -->|browse, wishlist, checkout, track, return| Platform
+    Vendor -->|catalog, inventory, orders, payouts, labels| Platform
+    Admin -->|monitor, approve, moderate, report| Platform
+    DeliveryAgent -->|pickup and delivery updates| Platform
+    HubOperator -->|shipment and branch operations| Platform
 
-    Platform -->|Process Payments| PG
-    Platform -->|Send SMS/OTP| SMS
-    Platform -->|Send Emails| Email
-    Platform -->|Send Notifications| Push
-    Platform -->|Location Services| Maps
-    Platform -->|Track Events| Analytics
-    Platform -->|Serve Static Content| CDN
-    Platform -->|Store Files| Storage
-    Platform <-->|Sync Inventory| ERP
-    Platform -->|Payouts| Bank
+    Platform -->|process and verify payments| PG
+    Platform -->|OTP and notifications| SMS
+    Platform -->|transactional emails| Email
+    Platform -->|push and websocket-triggered notification fanout| Push
+    Platform -->|address search and ETA support| Maps
+    Platform -->|store media and shipping labels| Storage
+    Platform <-->|inventory and catalog sync| ERP
+    Platform -->|vendor settlements| Bank
+    Platform <-->|shipments and tracking| Logistics
 ```
 
 ---
 
-## Detailed Context with Data Flows
+## Detailed Context With Data Flows
 
 ```mermaid
 graph LR
-    subgraph Customers
-        Web[Web Browser]
-        MobileApp[Mobile App]
+    subgraph Clients
+        Web[Web Client]
+        Mobile[Mobile App]
+        VendorUI[Vendor Portal]
+        AdminUI[Admin Dashboard]
     end
 
-    subgraph "E-Commerce Platform"
-        API[API Gateway]
-        Frontend[Web Frontend]
+    subgraph Platform
+        API[REST API]
+        WS[Websocket Manager]
     end
 
-    subgraph "Payment Ecosystem"
-        PG[Payment Gateway]
-        CC[Credit Card Networks]
-        UPI[UPI/NPCI]
-        Wallet[Digital Wallets]
+    subgraph Payments
+        Khalti[Khalti]
+        Esewa[eSewa]
+        Stripe[Stripe]
+        Paypal[PayPal]
     end
 
-    subgraph "Communication"
+    subgraph Messaging
         SMS[SMS Gateway]
-        Email[Email Server]
-        Push[Push Service]
+        Email[Email Provider]
+        Push[Push Provider]
     end
 
-    subgraph "Logistics Partners"
-        LP1[3PL Partner 1]
-        LP2[3PL Partner 2]
-        LP3[Own Fleet]
+    subgraph Operations
+        Logistics[Logistics Partner]
+        Maps[Maps Provider]
+        Storage[Object Storage]
     end
 
-    Web -->|HTTPS| Frontend
-    MobileApp -->|REST/GraphQL| API
-    Frontend --> API
+    Web --> API
+    Mobile --> API
+    VendorUI --> API
+    AdminUI --> API
 
-    API -->|Payment Request| PG
-    PG --> CC
-    PG --> UPI
-    PG --> Wallet
-
+    API --> WS
+    API --> Khalti
+    API --> Esewa
+    API --> Stripe
+    API --> Paypal
     API --> SMS
     API --> Email
     API --> Push
-
-    API <-->|Shipment Data| LP1
-    API <-->|Shipment Data| LP2
-    API <-->|Shipment Data| LP3
+    API --> Logistics
+    API --> Maps
+    API --> Storage
 ```
-
----
-
-## Integration Points Detail
-
-### Payment Gateway Integration
-
-```mermaid
-sequenceDiagram
-    participant C as Customer
-    participant P as Platform
-    participant PG as Payment Gateway
-    participant Bank as Bank/Card Network
-
-    C->>P: Initiate Payment
-    P->>PG: Create Order
-    PG-->>P: Order ID
-    P-->>C: Redirect to Gateway
-    C->>PG: Enter Payment Details
-    PG->>Bank: Authorize
-    Bank-->>PG: Auth Response
-    PG-->>C: Redirect to Platform
-    C->>P: Payment Callback
-    P->>PG: Verify Payment
-    PG-->>P: Payment Status
-    P-->>C: Order Confirmation
-```
-
-### Logistics Partner Integration
-
-```mermaid
-sequenceDiagram
-    participant V as Vendor
-    participant P as Platform
-    participant LP as Logistics Partner
-    participant H as Hub
-    participant DA as Delivery Agent
-
-    V->>P: Order Packed
-    P->>LP: Create Shipment
-    LP-->>P: AWB Number
-    P->>LP: Schedule Pickup
-    LP->>V: Pickup Agent Arrives
-    V->>LP: Handover Package
-    LP-->>P: Pickup Confirmed
-    LP->>H: Transit to Hub
-    H->>LP: Received at Hub
-    LP-->>P: At Hub
-    H->>DA: Assign for Delivery
-    DA->>C: Deliver Package
-    DA->>LP: POD Captured
-    LP-->>P: Delivered
-```
-
----
-
-## External System Dependencies
-
-| System | Purpose | Integration Type | Criticality |
-|--------|---------|------------------|-------------|
-| Payment Gateway | Process payments | REST API | Critical |
-| SMS Provider | OTP, notifications | REST API | High |
-| Email Service | Transactional emails | SMTP/API | High |
-| Push Notification | Mobile/web push | SDK/API | Medium |
-| Maps API | Address, routing | REST API | Medium |
-| CDN | Static assets | HTTP | High |
-| Object Storage | Images, files | SDK | High |
-| Analytics | User tracking | JS SDK | Low |
-| ERP Systems | Vendor inventory sync | API/Webhook | Medium |
-| Banking | Vendor payouts | API | High |
 
 ---
 
@@ -186,39 +116,52 @@ graph TB
         CDN[CDN]
     end
 
-    subgraph "DMZ"
+    subgraph "Edge Zone"
         WAF[Web Application Firewall]
         LB[Load Balancer]
-        API[API Gateway]
     end
 
     subgraph "Application Zone"
-        App[Application Servers]
-        Cache[Redis Cache]
-        Queue[Message Queue]
+        API[FastAPI Application]
+        Redis[Redis Cache]
+        Worker[Async Task Worker]
+        WS[Websocket Manager]
     end
 
     subgraph "Data Zone"
         DB[(Primary Database)]
-        Replica[(Read Replicas)]
-        Search[Search Engine]
+        Storage[(Object Storage)]
     end
 
     subgraph "External Services"
-        PG[Payment Gateway]
-        SMS[SMS Provider]
+        PG[Payment Providers]
+        MSG[SMS / Email / Push]
+        LOG[Logistics Partner]
     end
 
     Internet --> CDN
     CDN --> WAF
     WAF --> LB
     LB --> API
-    API --> App
-    App --> Cache
-    App --> Queue
-    App --> DB
-    App --> Replica
-    App --> Search
-    App -- Encrypted --> PG
-    App -- Encrypted --> SMS
+    API --> Redis
+    API --> Worker
+    API --> WS
+    API --> DB
+    API --> Storage
+    API -- TLS --> PG
+    API -- TLS --> MSG
+    API -- TLS --> LOG
 ```
+
+---
+
+## External Dependency Notes
+
+| System | Purpose | Current Role |
+|--------|---------|--------------|
+| Payment providers | Charge, authorize, capture, refund | Implemented |
+| SMS / Email / Push | OTP and transactional notifications | Implemented |
+| Maps provider | Address autocomplete and ETA support | Implemented with OSM default |
+| Object storage | Product media and shipping labels | Implemented |
+| ERP sync | Vendor integration option | Partial / integration dependent |
+| External route optimization | Advanced delivery planning | Future-only |

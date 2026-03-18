@@ -98,8 +98,9 @@
 6. Customer adds photos (if applicable)
 7. Customer selects refund method (original/wallet)
 8. System creates return request
-9. System schedules reverse pickup
-10. System sends confirmation email
+9. System creates reverse-pickup workflow and timeline event
+10. System sends confirmation notification
+11. Customer tracks return timeline through pickup, receipt, and refund
 
 **Return Reasons:**
 - Wrong item delivered
@@ -107,6 +108,29 @@
 - Quality not as expected
 - Size/fit issue
 - Changed mind
+
+---
+
+### UC-CUS-004: Share Wishlist
+
+| Attribute | Description |
+|-----------|-------------|
+| **Use Case ID** | UC-CUS-004 |
+| **Name** | Share Wishlist |
+| **Actor** | Customer |
+| **Description** | Customer shares a read-only wishlist link and receives price-drop alerts for saved items |
+| **Preconditions** | - Customer is logged in<br>- Wishlist contains at least one item |
+| **Postconditions** | - Share link is created or revoked<br>- Shared wishlist can be viewed publicly while active |
+
+**Main Flow:**
+1. Customer opens Wishlist
+2. Customer clicks "Create Share Link"
+3. System generates a public read-only tokenized URL
+4. Customer copies the link and shares it externally
+5. Public visitor opens the shared wishlist URL
+6. System displays current product snapshots from the owner wishlist
+7. Customer later revokes the share link if needed
+8. When a saved product price drops, system sends a price-drop notification to the wishlist owner
 
 ---
 
@@ -167,11 +191,11 @@
 5. System updates order status to "Processing"
 6. Vendor packs the order
 7. Vendor clicks "Mark as Packed"
-8. System generates shipping label
-9. Vendor prints and attaches label
+8. System generates a printable shipping-label artifact with AWB and destination details
+9. Vendor prints or reuses the stored label URL
 10. Vendor clicks "Schedule Pickup"
 11. System schedules pickup with logistics partner
-12. System notifies customer of shipment
+12. System notifies customer of shipment and updates the admin live operations feed
 
 **Alternative Flows:**
 

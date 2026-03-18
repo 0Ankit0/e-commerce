@@ -7,6 +7,7 @@ Current implementation note:
 
 - The live backend in this repository is a FastAPI monolith under [`backend/src`](/Users/ankit/Projects/Python/fastapi/e-commerce/backend/src), not the service-split layout shown below.
 - Use [the backend guide](/Users/ankit/Projects/Python/fastapi/e-commerce/backend/README.md) and [the backend status matrix](/Users/ankit/Projects/Python/fastapi/e-commerce/docs/system-design/implementation/backend-status-matrix.md) as the source of truth for what is implemented today.
+- The current monolith includes shared wishlists, automatic commerce notifications, generated shipping labels, and admin OTP readiness endpoints; keep new work aligned to those existing modules instead of recreating parallel services inside the repo.
 
 ---
 
@@ -671,7 +672,8 @@ router.get('/ready', async (req, res) => {
   const checks = {
     database: await checkDatabase(),
     redis: await checkRedis(),
-    kafka: await checkKafka()
+    storage: await checkObjectStorage(),
+    notifications: await checkNotificationWorker()
   };
 
   const healthy = Object.values(checks).every(c => c);

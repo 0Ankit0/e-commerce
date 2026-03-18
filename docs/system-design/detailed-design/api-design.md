@@ -1,7 +1,7 @@
 # API Design
 
 ## Overview
-RESTful API design specifications for the e-commerce platform.
+This document describes the current repository implementation of the backend API. The running system is a FastAPI monolith with versioned routers under `/api/v1`, hashid-style public IDs, persisted idempotency for checkout/payment flows, asynchronous notifications, websocket fanout, and stored shipping-label artifacts.
 
 ---
 
@@ -10,57 +10,98 @@ RESTful API design specifications for the e-commerce platform.
 ```mermaid
 graph TB
     subgraph "Clients"
-        Web[Web App]
-        Mobile[Mobile App]
-        Vendor[Vendor App]
-        Admin[Admin App]
+        Web[Customer Web]
+        Mobile[Customer Mobile]
+        Vendor[Vendor Portal]
+        Admin[Admin Dashboard]
+        Agent[Agent App]
     end
 
-    subgraph "API Gateway"
-        Gateway[Kong Gateway]
-
-        subgraph "Middleware"
-            Auth[Authentication]
-            RateLimit[Rate Limiting]
-            Logging[Request Logging]
-            Transform[Response Transform]
-        end
+    subgraph "FastAPI Monolith"
+        Router[Versioned Routers<br>/api/v1]
+        IAM[IAM + Auth]
+        Catalog[Catalog + Search]
+        Commerce[Cart + Wishlist + Pricing]
+        Orders[Checkout + Orders + Returns]
+        Payments[Payments + Refunds]
+        Vendors[Vendors + Payouts]
+        Logistics[Shipments + Tracking]
+        Support[Support + Reports + CMS]
+        Notify[Notification + Websocket Fanout]
     end
 
-    subgraph "API Versions"
-        V1[API v1]
-        V2[API v2]
+    subgraph "Persistence"
+        DB[(PostgreSQL)]
+        Cache[(Redis)]
+        Media[(Media Storage)]
     end
 
-    subgraph "Services"
-        UserAPI[User API]
-        ProductAPI[Product API]
-        OrderAPI[Order API]
-        PaymentAPI[Payment API]
-        LogisticsAPI[Logistics API]
-        VendorAPI[Vendor API]
+    subgraph "External Integrations"
+        PayGW[Payment Gateways<br>Khalti, eSewa, Stripe, PayPal]
+        Maps[Maps Providers<br>OSM default, Google optional]
+        Msg[Email / SMS / Push]
+        LogisticsPartner[Logistics Partner]
     end
 
-    Web --> Gateway
-    Mobile --> Gateway
-    Vendor --> Gateway
-    Admin --> Gateway
+    Web --> Router
+    Mobile --> Router
+    Vendor --> Router
+    Admin --> Router
+    Agent --> Router
 
-    Gateway --> Auth
-    Auth --> RateLimit
-    RateLimit --> Logging
-    Logging --> Transform
+    Router --> IAM
+    Router --> Catalog
+    Router --> Commerce
+    Router --> Orders
+    Router --> Payments
+    Router --> Vendors
+    Router --> Logistics
+    Router --> Support
 
-    Transform --> V1
-    Transform --> V2
+    Commerce --> Notify
+    Orders --> Notify
+    Payments --> Notify
+    Vendors --> Notify
+    Logistics --> Notify
 
-    V1 --> UserAPI
-    V1 --> ProductAPI
-    V1 --> OrderAPI
-    V1 --> PaymentAPI
-    V1 --> LogisticsAPI
-    V1 --> VendorAPI
+    IAM --> DB
+    Catalog --> DB
+    Commerce --> DB
+    Orders --> DB
+    Payments --> DB
+    Vendors --> DB
+    Logistics --> DB
+    Support --> DB
+    Notify --> DB
+
+    Catalog --> Cache
+    Commerce --> Cache
+    IAM --> Cache
+
+    Catalog --> Media
+    Logistics --> Media
+    Support --> Media
+
+    Payments --> PayGW
+    Commerce --> Maps
+    Logistics --> LogisticsPartner
+    Notify --> Msg
 ```
+
+---
+
+## API Conventions
+
+| Convention | Current Behavior |
+|-----------|------------------|
+| Versioning | Versioned under `/api/v1` |
+| Resource identifiers | Public API uses hashid-style IDs; internal storage uses integer/UUID primary keys as defined by models |
+| Authentication | JWT bearer tokens; OTP challenge may be required when enabled |
+| Admin login | Admin and superuser logins may include `otp_recommended` and `otp_recommendation_message` without blocking access |
+| Idempotency | Checkout/payment mutations support persisted request keys and request fingerprint validation |
+| Quote safety | `GET /checkout/quote` returns a fingerprint that must match the final checkout request when supplied |
+| Notifications | Order, return, payout, low-stock, delivery-exception, and wishlist price-drop events create persisted notifications and websocket events automatically |
+| Shipping labels | Shipping label generation is idempotent per shipment unless force-regenerated |
 
 ---
 
@@ -70,394 +111,191 @@ graph TB
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/auth/register` | Register new user |
-| POST | `/auth/login` | Login with email/phone |
+| POST | `/auth/signup` | Register a user account |
+| POST | `/auth/login` | Login with username/email and password |
 | POST | `/auth/logout` | Logout current session |
 | POST | `/auth/refresh` | Refresh access token |
-| POST | `/auth/forgot-password` | Request password reset |
-| POST | `/auth/reset-password` | Reset password with token |
-| POST | `/auth/verify-email` | Verify email with OTP |
-| POST | `/auth/verify-phone` | Verify phone with OTP |
-| POST | `/auth/oauth/{provider}` | OAuth login (google/facebook) |
+| POST | `/auth/otp/enable` | Start OTP setup and return QR payload |
+| POST | `/auth/otp/verify` | Verify OTP and enable it |
+| POST | `/auth/otp/disable` | Disable OTP |
+| POST | `/auth/otp/validate` | Complete OTP challenge during login |
+| GET | `/auth/admin/security/admin-otp-status` | View OTP readiness for privileged accounts |
 
-### Request/Response Examples
+### Login Response Note
 
-#### Register User
-```http
-POST /api/v1/auth/register
-Content-Type: application/json
-
-{
-  "email": "user@example.com",
-  "phone": "+919876543210",
-  "password": "SecurePass123!",
-  "name": "John Doe"
-}
-```
-
-**Response: 201 Created**
-```json
-{
-  "success": true,
-  "data": {
-    "user": {
-      "id": "uuid",
-      "email": "user@example.com",
-      "name": "John Doe",
-      "emailVerified": false,
-      "phoneVerified": false
-    },
-    "tokens": {
-      "accessToken": "eyJhbG...",
-      "refreshToken": "eyJhbG...",
-      "expiresIn": 3600
-    }
-  }
-}
-```
-
-#### Login
 ```http
 POST /api/v1/auth/login
 Content-Type: application/json
 
 {
-  "email": "user@example.com",
+  "username": "admin@example.com",
   "password": "SecurePass123!"
 }
 ```
 
+```json
+{
+  "access": "jwt",
+  "refresh": "jwt",
+  "token_type": "bearer",
+  "otp_required": false,
+  "otp_recommended": true,
+  "otp_recommendation_message": "Admin accounts should enable OTP for stronger account protection."
+}
+```
+
 ---
 
-## Product API
+## Catalog API
 
 ### Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/products` | List products with filters |
-| GET | `/products/:id` | Get product details |
-| GET | `/products/:id/reviews` | Get product reviews |
-| GET | `/products/search` | Search products |
+| GET | `/products` | List products with filters for category, brand, vendor, rating, price, stock state, featured state, and attributes |
+| GET | `/products/search` | Search catalog with ranked and fuzzy matching |
+| GET | `/products/autocomplete` | Return short autocomplete suggestions |
+| GET | `/products/{id}` | Get product details |
 | GET | `/categories` | List categories |
-| GET | `/categories/:id/products` | Products by category |
 | GET | `/brands` | List brands |
+| GET | `/address/autocomplete` | Address suggestions using configured maps provider |
+| POST | `/vendor/products/import/preview` | Dry-run CSV validation with row-level errors |
+| POST | `/vendor/products/import/commit` | Commit validated CSV import |
 
-### Query Parameters
+### Product Query Parameters
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `page` | integer | Page number (default: 1) |
-| `limit` | integer | Items per page (default: 20, max: 100) |
-| `sort` | string | Sort field (price, rating, newest) |
-| `order` | string | Sort order (asc, desc) |
-| `category` | uuid | Filter by category |
-| `brand` | uuid | Filter by brand |
-| `minPrice` | decimal | Minimum price |
-| `maxPrice` | decimal | Maximum price |
-| `rating` | integer | Minimum rating (1-5) |
-| `inStock` | boolean | Only in-stock items |
-
-### Request/Response Examples
-
-#### List Products
-```http
-GET /api/v1/products?category=electronics&minPrice=100&maxPrice=1000&sort=price&order=asc&page=1&limit=20
-```
-
-**Response: 200 OK**
-```json
-{
-  "success": true,
-  "data": {
-    "products": [
-      {
-        "id": "uuid",
-        "name": "Wireless Headphones",
-        "slug": "wireless-headphones",
-        "shortDescription": "Premium wireless headphones",
-        "images": [
-          {
-            "url": "https://cdn.example.com/images/1.jpg",
-            "isPrimary": true
-          }
-        ],
-        "price": {
-          "mrp": 299.99,
-          "sellingPrice": 249.99,
-          "discount": 17
-        },
-        "rating": {
-          "average": 4.5,
-          "count": 128
-        },
-        "vendor": {
-          "id": "uuid",
-          "name": "TechStore",
-          "rating": 4.8
-        },
-        "inStock": true
-      }
-    ],
-    "pagination": {
-      "page": 1,
-      "limit": 20,
-      "total": 156,
-      "totalPages": 8
-    }
-  }
-}
-```
-
-#### Get Product Details
-```http
-GET /api/v1/products/uuid
-```
-
-**Response: 200 OK**
-```json
-{
-  "success": true,
-  "data": {
-    "id": "uuid",
-    "name": "Wireless Headphones",
-    "slug": "wireless-headphones",
-    "description": "Full product description...",
-    "specifications": {
-      "Connectivity": "Bluetooth 5.0",
-      "Battery Life": "30 hours",
-      "Weight": "250g"
-    },
-    "variants": [
-      {
-        "id": "uuid",
-        "sku": "WH-BLK-001",
-        "name": "Black",
-        "attributes": {
-          "color": "Black"
-        },
-        "price": {
-          "mrp": 299.99,
-          "sellingPrice": 249.99
-        },
-        "stock": 45,
-        "isDefault": true
-      }
-    ],
-    "images": [...],
-    "category": {...},
-    "brand": {...},
-    "vendor": {...},
-    "rating": {...}
-  }
-}
-```
+| `q` | string | Search query |
+| `category` | string | Category public ID or slug |
+| `brand` | string | Brand public ID or slug |
+| `vendor` | string | Vendor public ID |
+| `minPrice` | number | Minimum selling price |
+| `maxPrice` | number | Maximum selling price |
+| `rating` | number | Minimum average rating |
+| `inStock` | boolean | Filter to available inventory |
+| `featured` | boolean | Filter featured products |
+| `attributes` | string | Attribute filters in key/value form |
 
 ---
 
-## Cart API
+## Cart And Wishlist API
 
 ### Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/cart` | Get current cart |
+| GET | `/cart` | Get active cart |
 | POST | `/cart/items` | Add item to cart |
-| PUT | `/cart/items/:id` | Update cart item quantity |
-| DELETE | `/cart/items/:id` | Remove item from cart |
-| DELETE | `/cart` | Clear cart |
-| POST | `/cart/coupon` | Apply coupon |
-| DELETE | `/cart/coupon` | Remove coupon |
+| PATCH | `/cart/items/{id}` | Update cart item quantity |
+| DELETE | `/cart/items/{id}` | Remove cart item |
+| POST | `/cart/coupon` | Apply coupon or promotion |
+| GET | `/wishlist` | Get wishlist contents |
+| POST | `/wishlist/{product_id}` | Add product to wishlist |
+| DELETE | `/wishlist/{product_id}` | Remove product from wishlist |
+| POST | `/wishlist/share-links` | Create a revocable wishlist share link |
+| GET | `/wishlist/share-links` | List wishlist share links |
+| DELETE | `/wishlist/share-links/{share_id}` | Revoke a wishlist share link |
+| GET | `/wishlist/shared/{token}` | Read a shared wishlist without authentication |
 
-### Request/Response Examples
+### Shared Wishlist Example
 
-#### Add to Cart
 ```http
-POST /api/v1/cart/items
+POST /api/v1/wishlist/share-links
 Authorization: Bearer {token}
 Content-Type: application/json
 
 {
-  "variantId": "uuid",
-  "quantity": 2
+  "title": "Festival gift ideas"
 }
 ```
 
-**Response: 200 OK**
 ```json
 {
   "success": true,
   "data": {
-    "cart": {
-      "id": "uuid",
-      "items": [
-        {
-          "id": "uuid",
-          "product": {
-            "id": "uuid",
-            "name": "Wireless Headphones",
-            "image": "https://cdn.example.com/images/1.jpg"
-          },
-          "variant": {
-            "id": "uuid",
-            "name": "Black",
-            "sku": "WH-BLK-001"
-          },
-          "quantity": 2,
-          "unitPrice": 249.99,
-          "totalPrice": 499.98,
-          "inStock": true
-        }
-      ],
-      "summary": {
-        "subtotal": 499.98,
-        "discount": 0,
-        "shipping": 0,
-        "tax": 89.99,
-        "total": 589.97
-      },
-      "coupon": null
-    }
+    "id": "hashid",
+    "title": "Festival gift ideas",
+    "token": "wl_3VPab8r...",
+    "active": true,
+    "shareUrl": "https://example.com/wishlist/shared/wl_3VPab8r..."
   }
 }
 ```
 
 ---
 
-## Order API
+## Checkout, Orders, And Returns API
 
 ### Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| GET | `/checkout/quote` | Build a tax/shipping/promotion quote and quote fingerprint |
+| POST | `/checkout` | Create order with idempotency and quote fingerprint validation |
 | GET | `/orders` | List user orders |
-| GET | `/orders/:id` | Get order details |
-| POST | `/orders` | Create order (checkout) |
-| POST | `/orders/:id/cancel` | Cancel order |
-| GET | `/orders/:id/track` | Track order |
-| POST | `/orders/:id/return` | Request return |
-| GET | `/orders/:id/invoice` | Download invoice |
+| GET | `/orders/{id}` | Get order details |
+| POST | `/orders/{id}/cancel` | Cancel order when allowed |
+| GET | `/orders/{id}/timeline` | View order timeline events |
+| GET | `/orders/{id}/notes` | View order notes |
+| GET | `/orders/{id}/invoice` | View invoice metadata |
+| GET | `/tracking/{id}` | View shipment tracking for the order |
+| POST | `/returns` | Create a return request |
+| GET | `/returns/{id}/timeline` | View return timeline |
+| GET | `/admin/orders/live-feed` | View recent order, return, payout, and delivery events |
 
-### Request/Response Examples
+### Checkout Example
 
-#### Create Order (Checkout)
 ```http
-POST /api/v1/orders
+GET /api/v1/checkout/quote?addressId=hashid&paymentMethod=stripe
 Authorization: Bearer {token}
-Idempotency-Key: {uuid} (optional)
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "subtotal": 499.98,
+    "discount": 49.99,
+    "shippingCharge": 15.0,
+    "tax": 80.99,
+    "total": 545.97,
+    "quoteFingerprint": "fp_1b5e8d..."
+  }
+}
+```
+
+```http
+POST /api/v1/checkout
+Authorization: Bearer {token}
+Idempotency-Key: 2ed1db72-c8d2-4f61-8fd4-0c65eb8c965f
 Content-Type: application/json
 
 {
-  "addressId": "uuid",
-  "paymentMethod": "card",
-  "couponCode": "SAVE10",
+  "addressId": "hashid",
+  "paymentMethod": "stripe",
+  "quoteFingerprint": "fp_1b5e8d...",
   "notes": "Please leave at door"
 }
 ```
 
-**Response: 201 Created**
-```json
-{
-  "success": true,
-  "data": {
-    "order": {
-      "id": "uuid",
-      "orderNumber": "ORD-2024-000123",
-      "status": "pending",
-      "items": [...],
-      "address": {...},
-      "summary": {
-        "subtotal": 499.98,
-        "discount": 49.99,
-        "shipping": 0,
-        "tax": 80.99,
-        "total": 530.98
-      },
-      "createdAt": "2024-01-15T10:30:00Z"
-    },
-    "payment": {
-      "orderId": "order_xxx",
-      "amount": 53098,
-      "currency": "INR",
-      "paymentUrl": "https://razorpay.com/pay/xxx"
-    }
-  }
-}
-```
-
-#### Track Order
-```http
-GET /api/v1/orders/uuid/track
-Authorization: Bearer {token}
-```
-
-**Response: 200 OK**
-```json
-{
-  "success": true,
-  "data": {
-    "orderNumber": "ORD-2024-000123",
-    "status": "in_transit",
-    "estimatedDelivery": "2024-01-18",
-    "shipments": [
-      {
-        "awb": "AWB123456",
-        "status": "in_transit",
-        "currentLocation": "Mumbai Hub",
-        "tracking": [
-          {
-            "status": "Order Placed",
-            "location": "Online",
-            "timestamp": "2024-01-15T10:30:00Z"
-          },
-          {
-            "status": "Picked Up",
-            "location": "Vendor Warehouse",
-            "timestamp": "2024-01-16T09:00:00Z"
-          },
-          {
-            "status": "In Transit",
-            "location": "Mumbai Hub",
-            "timestamp": "2024-01-17T14:30:00Z"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
 ---
 
-## Payment API
+## Payments API
 
 ### Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/payments/create` | Create payment order |
-| POST | `/payments/verify` | Verify payment |
-| GET | `/payments/:id` | Get payment status |
-| POST | `/payments/webhooks/:gateway` | Payment gateway webhook |
+| POST | `/payments/initiate` | Create a payment transaction |
+| POST | `/payments/verify` | Verify payment after redirect or provider callback |
+| GET | `/payments/{id}` | Get payment status |
+| POST | `/payments/webhooks/{gateway}` | Provider webhook endpoint |
+| POST | `/payments/{id}/capture` | Capture authorized payment when applicable |
+| POST | `/payments/{id}/void` | Void payment when applicable |
+| POST | `/payments/{id}/refunds` | Create refund |
 
-### Webhook Payload (Razorpay)
-```json
-{
-  "entity": "event",
-  "event": "payment.captured",
-  "payload": {
-    "payment": {
-      "entity": {
-        "id": "pay_xxx",
-        "order_id": "order_xxx",
-        "amount": 53098,
-        "currency": "INR",
-        "status": "captured"
-      }
-    }
-  }
-}
-```
+Supported providers in the running backend: `khalti`, `esewa`, `stripe`, `paypal`, `wallet`, and `cod`.
 
 ---
 
@@ -467,160 +305,72 @@ Authorization: Bearer {token}
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/vendor/dashboard` | Dashboard metrics |
+| GET | `/vendor/analytics` | Vendor dashboard metrics |
 | GET | `/vendor/products` | List vendor products |
 | POST | `/vendor/products` | Create product |
-| PUT | `/vendor/products/:id` | Update product |
-| DELETE | `/vendor/products/:id` | Delete product |
+| PATCH | `/vendor/products/{id}` | Update product and record price history when prices change |
+| DELETE | `/vendor/products/{id}` | Delete product |
+| PATCH | `/vendor/inventory/{variant_id}` | Update inventory |
 | GET | `/vendor/orders` | List vendor orders |
-| POST | `/vendor/orders/:id/accept` | Accept order |
-| POST | `/vendor/orders/:id/reject` | Reject order |
-| POST | `/vendor/orders/:id/pack` | Mark as packed |
-| GET | `/vendor/payouts` | List payouts |
-| POST | `/vendor/payouts/request` | Request payout |
+| POST | `/vendor/orders/{id}/status` | Update vendor order status |
+| POST | `/vendor/orders/{id}/reject` | Reject order |
+| GET | `/vendor/payouts` | List completed payouts |
+| GET | `/vendor/payout-requests` | List payout requests |
+| POST | `/vendor/payout-requests` | Create payout request |
+| POST | `/vendor/shipments/{shipment_id}/label` | Generate shipping label artifact |
+| GET | `/vendor/shipments/{shipment_id}/label` | Fetch shipping label metadata and URL |
 
 ---
 
-## Admin API
+## Logistics And Admin API
 
-### Endpoints
+### Logistics Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/admin/dashboard` | Admin dashboard |
-| GET | `/admin/users` | List users |
-| GET | `/admin/vendors` | List vendors |
-| POST | `/admin/vendors/:id/approve` | Approve vendor |
-| POST | `/admin/vendors/:id/reject` | Reject vendor |
+| GET | `/tracking/{id}` | Public/customer tracking view |
+| POST | `/logistics/shipments/{shipment_id}/exceptions` | Record failed-delivery or related exception |
+| POST | `/logistics/exceptions/{id}/reschedule` | Reschedule delivery |
+| POST | `/logistics/exceptions/{id}/rto` | Initiate RTO |
+| GET | `/logistics/shipments/{shipment_id}/label` | Admin/logistics shipping label fetch |
+
+### Admin Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
 | GET | `/admin/orders` | List all orders |
-| GET | `/admin/categories` | Manage categories |
-| POST | `/admin/categories` | Create category |
-| GET | `/admin/analytics` | Analytics data |
+| GET | `/admin/orders/live-feed` | Cross-domain live operations feed |
+| GET | `/admin/vendors` | List vendors |
+| POST | `/admin/vendors/{id}/approve` | Approve vendor |
+| POST | `/admin/vendors/{id}/reject` | Reject vendor |
+| GET | `/admin/returns` | List returns |
+| POST | `/admin/returns/{id}/status` | Update return status |
+| POST | `/admin/orders/{id}/notes` | Add order note |
+| GET | `/admin/reports/overview` | Admin overview report |
+| GET | `/admin/reports/export` | Export report CSV |
+| POST | `/admin/reports/jobs` | Create report job |
+| GET | `/admin/reports/jobs` | List report jobs |
+| GET | `/admin/security/admin-otp-status` | Admin OTP readiness view when mounted outside auth router |
 
 ---
 
-## Recommendation API
+## Cross-Cutting Behavior
 
-### Endpoints
+### Notifications
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/recommendations` | Get personalized recommendations |
-| POST | `/recommendations/events` | Track user interactions |
+The backend emits persisted notifications and websocket events automatically for:
 
-### Request/Response Examples
+- order created, paid, cancelled, shipped, out for delivery, delivered
+- return requested, approved, rejected, picked up, received, refunded
+- payout request created, approved, batch created, payout paid or failed
+- low-stock alerts
+- delivery exceptions, reschedules, and RTO events
+- wishlist price-drop events
 
-#### Get Recommendations
-```http
-GET /api/v1/recommendations?type=home&limit=5
-Authorization: Bearer {token}
-```
+### Public IDs
 
-**Response: 200 OK**
-```json
-{
-  "success": true,
-  "data": {
-    "strategy": "hybrid_personalization",
-    "recommendations": [
-      {
-        "id": "uuid",
-        "name": "Bluetooth Speaker",
-        "score": 0.89,
-        "reason": "Because you bought Wireless Headphones",
-        "price": {
-          "mrp": 59.99,
-          "sellingPrice": 49.99
-        },
-        "image": "https://cdn.example.com/images/speaker.jpg"
-      }
-    ]
-  }
-}
-```
+User-facing routes should use encoded public IDs consistently. Documentation examples use hashid-style strings for that reason.
 
----
+### Future-Only Areas
 
-## Error Response Format
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "Invalid input data",
-    "details": [
-      {
-        "field": "email",
-        "message": "Invalid email format"
-      }
-    ]
-  },
-  "requestId": "req_xxx"
-}
-```
-
-### Error Codes
-
-| Code | HTTP Status | Description |
-|------|-------------|-------------|
-| `VALIDATION_ERROR` | 400 | Invalid request data |
-| `UNAUTHORIZED` | 401 | Authentication required |
-| `FORBIDDEN` | 403 | Permission denied |
-| `NOT_FOUND` | 404 | Resource not found |
-| `CONFLICT` | 409 | Resource already exists |
-| `RATE_LIMITED` | 429 | Too many requests |
-| `INTERNAL_ERROR` | 500 | Server error |
-
----
-
-## Rate Limiting
-
-| Tier | Requests/min | Description |
-|------|--------------|-------------|
-| Public | 60 | Unauthenticated requests |
-| Customer | 120 | Authenticated customers |
-| Vendor | 300 | Vendor dashboard |
-| Admin | 600 | Admin panel |
-
-### Rate Limit Headers
-```http
-X-RateLimit-Limit: 120
-X-RateLimit-Remaining: 95
-X-RateLimit-Reset: 1705320000
-```
-
----
-
-## API Integration Diagram
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Gateway
-    participant Auth
-    participant Service
-    participant Cache
-    participant DB
-
-    Client->>Gateway: API Request
-    Gateway->>Gateway: Rate Limit Check
-    Gateway->>Auth: Validate Token
-    Auth->>Cache: Check Session
-    Cache-->>Auth: Session Data
-    Auth-->>Gateway: User Context
-
-    Gateway->>Service: Forward Request
-    Service->>Cache: Check Cache
-    alt Cache Hit
-        Cache-->>Service: Cached Data
-    else Cache Miss
-        Service->>DB: Query Data
-        DB-->>Service: Result
-        Service->>Cache: Store in Cache
-    end
-
-    Service-->>Gateway: Response
-    Gateway->>Gateway: Transform Response
-    Gateway-->>Client: JSON Response
-```
+The API surface intentionally does not expose Razorpay-specific routes, external route-optimization engines, real-time courier GPS ingestion, or ML recommendation endpoints as implemented features. Those remain future work.

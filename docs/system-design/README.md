@@ -17,6 +17,7 @@
 
 - [Backend runtime/setup guide](../../backend/README.md)
 - [Backend capability status matrix](./implementation/backend-status-matrix.md)
+- Current backend highlights include shared wishlists, price-drop notifications, automatic commerce-event fanout, generated shipping labels, and admin OTP readiness visibility.
 
 ## System Overview
 

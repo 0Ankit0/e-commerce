@@ -3,6 +3,11 @@
 ## Overview
 Network topology and infrastructure layout for the e-commerce platform.
 
+Current implementation note:
+
+- This diagram describes a production-grade target network topology.
+- The repository currently runs a monolithic FastAPI backend; gateway and event-bus layers shown in infrastructure diagrams should not be read as already implemented in local runtime unless referenced by the implementation docs.
+
 ---
 
 ## Network Architecture Overview

@@ -20,6 +20,8 @@
 | CUS-007 | As a customer, I want to view product details so that I can make informed decisions | - Images zoom<br>- Specifications visible<br>- Reviews shown |
 | CUS-008 | As a customer, I want to add items to cart so that I can purchase later | - Quantity selection<br>- Variant selection<br>- Price shown |
 | CUS-009 | As a customer, I want to save items to wishlist so that I can buy later | - Add to wishlist<br>- View wishlist<br>- Move to cart |
+| CUS-009A | As a customer, I want to share my wishlist so that others can see selected items | - Create share link<br>- Public read-only access<br>- Revoke share link |
+| CUS-009B | As a customer, I want price-drop alerts for wishlist items so that I can buy at the right time | - Alert on price decrease<br>- Link back to product<br>- Delivered through notification preferences |
 
 ### Checkout & Payment
 
@@ -75,7 +77,9 @@
 |----|-------|---------------------|
 | VEN-012 | As a vendor, I want to view earnings so that I can track revenue | - Daily/monthly view<br>- Order-wise breakdown<br>- Commission deducted |
 | VEN-013 | As a vendor, I want to request payouts so that I receive payments | - Payout request<br>- Bank transfer<br>- Transaction history |
+| VEN-013A | As a vendor, I want payout workflow notifications so that I know when money is moving | - Request submitted notice<br>- Approval notice<br>- Batch/payment notice |
 | VEN-014 | As a vendor, I want to view analytics so that I can improve sales | - Sales charts<br>- Top products<br>- Customer insights |
+| VEN-015 | As a vendor, I want printable shipping labels so that pickups are processed correctly | - Generate label artifact<br>- Stable download URL<br>- Regenerate when needed |
 
 ---
 
@@ -88,6 +92,8 @@
 | ADM-001 | As an admin, I want to view dashboard so that I can monitor platform | - Key metrics<br>- Real-time updates<br>- Trend charts |
 | ADM-002 | As an admin, I want to generate reports so that I can analyze data | - Custom date range<br>- Export to CSV<br>- Scheduled reports |
 | ADM-003 | As an admin, I want to view live orders so that I can monitor activity | - Order feed<br>- Geographic view<br>- Issue alerts |
+| ADM-003A | As an admin, I want a live operational event feed so that I can watch order, shipment, return, and payout changes together | - Reverse chronological feed<br>- Mixed domain events<br>- Fast refresh/live updates |
+| ADM-004A | As an admin, I want visibility into OTP readiness for privileged accounts so that I can improve security posture | - OTP enabled state<br>- Last verified state<br>- Latest OTP audit event |
 
 ### User Management
 

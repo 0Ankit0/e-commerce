@@ -42,6 +42,7 @@ The system will support:
 - System shall support role-based access control (RBAC)
 - System shall maintain admin activity audit logs
 - System shall support 2FA for admin accounts
+- Admin 2FA shall be recommendable and observable without forcing OTP for every privileged login
 
 #### FR-UM-004: Authentication
 - System shall implement JWT-based authentication
@@ -85,6 +86,7 @@ The system will support:
 - Customers shall save products to wishlist
 - System shall notify on wishlist item price drops
 - Wishlist items shall be shareable
+- Wishlist owners shall be able to revoke share links
 
 #### FR-SC-003: Checkout Process
 - System shall validate cart items availability
@@ -109,6 +111,7 @@ The system will support:
 - Customers shall track orders in real-time
 - System shall provide shipment milestones
 - System shall send status notifications (email/SMS/push)
+- Admin shall view a live order-operations feed across order, shipment, return, and payout events
 
 #### FR-OM-003: Order Cancellation
 - Customers shall cancel orders before shipment
@@ -125,7 +128,7 @@ The system will support:
 ### 2.5 Payment Module
 
 #### FR-PM-001: Payment Gateway Integration
-- System shall integrate multiple payment gateways (Razorpay, Stripe, PayPal)
+- System shall integrate multiple payment gateways (Khalti, eSewa, Stripe, PayPal)
 - System shall support credit/debit cards, UPI, net banking
 - System shall support wallet payments
 
@@ -143,6 +146,7 @@ The system will support:
 - System shall calculate vendor settlements
 - System shall deduct platform commission
 - System shall process scheduled payouts
+- System shall notify vendors of payout-request, approval, batching, paid, and failed events
 
 ---
 
@@ -181,11 +185,13 @@ The system will support:
 - Agents shall update delivery status
 - System shall capture proof of delivery (photo/OTP)
 - System shall handle delivery exceptions
+- System shall generate printable shipping-label artifacts for vendor/admin retrieval
 
 #### FR-BD-003: Failed Delivery Handling
 - System shall reschedule failed deliveries
 - System shall manage RTO (Return to Origin)
 - System shall notify customers of attempts
+- System shall notify customers when an exception is rescheduled or moved to RTO
 
 #### FR-BD-004: Branch Management
 - System shall manage branch inventory
@@ -205,6 +211,7 @@ The system will support:
 - Vendors shall accept/reject orders
 - Vendors shall mark orders as packed
 - Vendors shall generate shipping labels
+- Generated labels shall remain stable and re-usable unless explicitly regenerated
 
 #### FR-VM-003: Inventory Sync
 - Vendors shall update stock levels

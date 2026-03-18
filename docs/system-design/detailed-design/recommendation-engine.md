@@ -3,6 +3,11 @@
 ## Overview
 The Recommendation Engine is a core component designed to personalize the user experience by suggesting relevant products based on user behavior, historical data, and product attributes.
 
+Current implementation note:
+
+- ML-grade recommendation ranking is still future work in this repository.
+- The architecture in this document remains a target-state design and is not part of the currently implemented backend feature set.
+
 ## Architecture
 
 ```mermaid

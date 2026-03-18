@@ -3,6 +3,11 @@
 ## Overview
 Deployment diagrams showing the mapping of software components to hardware/infrastructure.
 
+Current implementation note:
+
+- This is a target deployment design for scaled production environments.
+- The current repository implementation is a FastAPI monolith; service mesh, separate gateway layers, and streaming infrastructure in this file are future deployment options rather than the present codebase topology.
+
 ---
 
 ## Production Deployment Architecture
