@@ -17,6 +17,15 @@ from src.apps.finance.models import *  # noqa: F403,F401
 from src.apps.iam.models import *  # noqa: F403,F401
 from src.apps.multitenancy.models import *  # noqa: F403,F401
 from src.apps.notification.models import *  # noqa: F403,F401
+from src.apps.vendors.models import *  # noqa: F403,F401
+from src.apps.catalog.models import *  # noqa: F403,F401
+from src.apps.commerce.models import *  # noqa: F403,F401
+from src.apps.promotions.models import *  # noqa: F403,F401
+from src.apps.orders.models import *  # noqa: F403,F401
+from src.apps.recommendations.models import *  # noqa: F403,F401
+from src.apps.logistics.models import *  # noqa: F403,F401
+from src.apps.messaging.models import *  # noqa: F403,F401
+from src.apps.support.models import *  # noqa: F403,F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

@@ -29,6 +29,15 @@ from src.apps.system.api import router as system_router
 from src.apps.observability.api import router as observability_router
 from src.apps.observability.service import prune_old_log_entries
 from src.apps.core.storage import storage_uses_local_filesystem
+from src.apps.vendors.api import vendors_router
+from src.apps.catalog.api import catalog_router
+from src.apps.commerce.api import commerce_router
+from src.apps.promotions.api import promotions_router
+from src.apps.orders.api import orders_router
+from src.apps.recommendations.api import recommendations_router
+from src.apps.logistics.api import logistics_router
+from src.apps.messaging.api import messaging_router
+from src.apps.support.api import support_router
 
 configure_logging()
 
@@ -140,6 +149,15 @@ if settings.FEATURE_NOTIFICATIONS:
     app.include_router(notification_router, prefix=settings.API_V1_STR)
 if settings.FEATURE_ANALYTICS:
     app.include_router(analytics_router, prefix=settings.API_V1_STR)
+app.include_router(vendors_router, prefix=settings.API_V1_STR)
+app.include_router(catalog_router, prefix=settings.API_V1_STR)
+app.include_router(commerce_router, prefix=settings.API_V1_STR)
+app.include_router(promotions_router, prefix=settings.API_V1_STR)
+app.include_router(orders_router, prefix=settings.API_V1_STR)
+app.include_router(recommendations_router, prefix=settings.API_V1_STR)
+app.include_router(logistics_router, prefix=settings.API_V1_STR)
+app.include_router(messaging_router, prefix=settings.API_V1_STR)
+app.include_router(support_router, prefix=settings.API_V1_STR)
 
 # Serve uploaded media files (avatars, etc.)
 if storage_uses_local_filesystem():

@@ -40,9 +40,19 @@ async def init_db():
     import src.apps.finance.models  # noqa: F401
     import src.apps.websocket.models  # noqa: F401
     import src.apps.observability.models  # noqa: F401
+    import src.apps.vendors.models  # noqa: F401
+    import src.apps.catalog.models  # noqa: F401
+    import src.apps.commerce.models  # noqa: F401
+    import src.apps.promotions.models  # noqa: F401
+    import src.apps.orders.models  # noqa: F401
+    import src.apps.recommendations.models  # noqa: F401
+    import src.apps.logistics.models  # noqa: F401
+    import src.apps.messaging.models  # noqa: F401
+    import src.apps.support.models  # noqa: F401
 
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+    if settings.TESTING:
+        async with engine.begin() as conn:
+            await conn.run_sync(SQLModel.metadata.create_all)
 
     async with async_session_factory() as session:
         await sync_general_settings(session)
