@@ -6,7 +6,7 @@ schemas for Khalti and eSewa.
 from typing import Any, Optional
 from pydantic import BaseModel, field_serializer, field_validator
 
-from src.apps.finance.models.payment import PaymentProvider, PaymentStatus
+from src.apps.finance.models.payment import PaymentProvider, PaymentRefundStatus, PaymentStatus
 from src.apps.iam.utils.hashid import decode_id, encode_id
 
 
@@ -97,6 +97,8 @@ class PaymentTransactionRead(BaseModel):
     return_url: str
     website_url: str
     failure_reason: Optional[str]
+    captured_amount: int
+    refunded_amount: int
 
     model_config = {"from_attributes": True}
 
@@ -176,3 +178,36 @@ class EsewaCallbackData(BaseModel):
     product_code: Optional[str] = None
     signed_field_names: Optional[str] = None
     signature: Optional[str] = None
+
+
+class PaymentCaptureRequest(BaseModel):
+    amount: Optional[int] = None
+
+
+class PaymentRefundCreateRequest(BaseModel):
+    amount: int
+    reason: str = ""
+    destination: str = "original"
+
+    @field_validator("amount")
+    @classmethod
+    def refund_amount_must_be_positive(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("amount must be positive")
+        return value
+
+
+class PaymentRefundRead(BaseModel):
+    id: int
+    transaction_id: int
+    amount: int
+    status: PaymentRefundStatus
+    destination: str
+    reason: str
+    provider_refund_id: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+    @field_serializer("id", "transaction_id")
+    def serialize_ids(self, value: int) -> str:
+        return encode_id(value)

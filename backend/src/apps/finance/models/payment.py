@@ -9,6 +9,8 @@ class PaymentProvider(str, Enum):
     ESEWA = "esewa"
     STRIPE = "stripe"
     PAYPAL = "paypal"
+    WALLET = "wallet"
+    COD = "cod"
 
 
 class PaymentStatus(str, Enum):
@@ -85,6 +87,20 @@ class PaymentTransactionBase(SQLModel):
         max_length=500,
         description="Human-readable reason when status is FAILED"
     )
+    captured_amount: int = Field(
+        default=0,
+        description="Total amount captured in smallest currency unit"
+    )
+    refunded_amount: int = Field(
+        default=0,
+        description="Total amount refunded in smallest currency unit"
+    )
+    idempotency_key: Optional[str] = Field(
+        default=None,
+        max_length=255,
+        index=True,
+        description="Idempotency key used for initiation or follow-up mutations"
+    )
 
 
 class PaymentTransaction(PaymentTransactionBase, table=True):
@@ -127,3 +143,33 @@ class PaymentWebhook(PaymentWebhookBase, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     received_at: datetime = Field(default_factory=datetime.now)
+
+
+class PaymentRefundStatus(str, Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class PaymentRefund(SQLModel, table=True):
+    __tablename__ = "payment_refunds"  # type: ignore
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    transaction_id: int = Field(foreign_key="payment_transactions.id", index=True)
+    amount: int = Field(description="Refund amount in the smallest currency unit")
+    status: PaymentRefundStatus = Field(default=PaymentRefundStatus.PENDING)
+    destination: str = Field(default="original", max_length=50)
+    reason: str = Field(default="", max_length=255)
+    provider_refund_id: Optional[str] = Field(default=None, max_length=255)
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class PaymentAudit(SQLModel, table=True):
+    __tablename__ = "payment_audit_logs"  # type: ignore
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    transaction_id: Optional[int] = Field(default=None, foreign_key="payment_transactions.id", index=True)
+    event_type: str = Field(max_length=100, index=True)
+    actor_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    payload_json: str = Field(default="{}")
+    created_at: datetime = Field(default_factory=datetime.now)

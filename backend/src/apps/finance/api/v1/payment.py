@@ -6,18 +6,31 @@ POST /payments/verify       — verify / process a provider callback
 GET  /payments/{id}         — retrieve a stored transaction record
 GET  /payments/             — list transactions (authenticated users)
 """
+import json
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, col
 
 from src.apps.core.config import settings
 
-from src.apps.finance.models.payment import PaymentProvider, PaymentTransaction
+from src.apps.finance.models.payment import (
+    PaymentAudit,
+    PaymentProvider,
+    PaymentRefund,
+    PaymentRefundStatus,
+    PaymentStatus,
+    PaymentTransaction,
+    PaymentWebhook,
+)
+from src.apps.finance.models.stored_value import GiftCard, WalletLedger, WalletLedgerType
 from src.apps.finance.schemas.payment import (
     InitiatePaymentRequest,
     InitiatePaymentResponse,
+    PaymentCaptureRequest,
+    PaymentRefundCreateRequest,
+    PaymentRefundRead,
     PaymentTransactionRead,
     VerifyPaymentRequest,
     VerifyPaymentResponse,
@@ -27,13 +40,21 @@ from src.apps.finance.services.esewa import EsewaService
 from src.apps.finance.services.khalti import KhaltiService
 from src.apps.finance.services.stripe import StripeService
 from src.apps.finance.services.paypal import PayPalService
-from src.apps.iam.api.deps import get_db
-from src.apps.iam.utils.hashid import decode_id_or_404
+from src.apps.finance.services.stored_value import create_wallet_entry, get_wallet_balance, redeem_gift_card
+from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
+from src.apps.iam.models.user import User
+from src.apps.iam.utils.hashid import decode_id_or_404, encode_id
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
 from src.apps.analytics.events import PaymentEvents
 
 router = APIRouter()
+
+
+def _decode_transaction_identifier(transaction_id: str) -> int:
+    if transaction_id.isdigit():
+        return int(transaction_id)
+    return decode_id_or_404(transaction_id)
 
 # ---------------------------------------------------------------------------
 # Provider registry — built at startup, respects per-provider enabled flags
@@ -52,6 +73,49 @@ def _build_registry() -> dict[PaymentProvider, BasePaymentProvider]:
     return registry
 
 _PROVIDERS: dict[PaymentProvider, BasePaymentProvider] = _build_registry()
+
+
+def _webhook_secret_for(provider: PaymentProvider) -> str:
+    if provider == PaymentProvider.STRIPE:
+        return settings.STRIPE_WEBHOOK_SECRET
+    if provider == PaymentProvider.PAYPAL:
+        return settings.PAYPAL_CLIENT_SECRET
+    if provider == PaymentProvider.KHALTI:
+        return settings.KHALTI_SECRET_KEY
+    if provider == PaymentProvider.ESEWA:
+        return settings.ESEWA_SECRET_KEY
+    return ""
+
+
+def _serialize_wallet_entry(entry: WalletLedger) -> dict[str, object]:
+    return {
+        "id": encode_id(entry.id or 0),
+        "entry_type": entry.entry_type.value,
+        "amount": entry.amount,
+        "balance_after": entry.balance_after,
+        "reference_type": entry.reference_type,
+        "reference_id": encode_id(entry.reference_id) if entry.reference_id else None,
+        "notes": entry.notes,
+        "created_at": entry.created_at.isoformat(),
+    }
+
+
+async def _log_payment_audit(
+    *,
+    event_type: str,
+    transaction_id: int | None,
+    actor_user_id: int | None,
+    payload: dict[str, object],
+    db: AsyncSession,
+) -> None:
+    db.add(
+        PaymentAudit(
+            transaction_id=transaction_id,
+            event_type=event_type,
+            actor_user_id=actor_user_id,
+            payload_json=json.dumps(payload),
+        )
+    )
 
 
 def _describe_exception(exc: Exception) -> str:
@@ -129,6 +193,15 @@ async def initiate_payment(
         )
 
 
+@router.post("/intents/", response_model=InitiatePaymentResponse)
+async def create_payment_intent(
+    request_body: InitiatePaymentRequest,
+    db: AsyncSession = Depends(get_db),
+    analytics: AnalyticsService = Depends(get_analytics),
+) -> InitiatePaymentResponse:
+    return await initiate_payment(request_body, db, analytics)
+
+
 # ---------------------------------------------------------------------------
 # Verify payment
 # ---------------------------------------------------------------------------
@@ -174,6 +247,66 @@ async def verify_payment(
         )
 
 
+@router.post("/webhooks/{provider}")
+async def ingest_payment_webhook(
+    provider: PaymentProvider,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    raw_body = await request.body()
+    provided_signature = request.headers.get("X-Webhook-Signature", "")
+    expected_signature = _webhook_secret_for(provider)
+    is_verified = bool(expected_signature and provided_signature == expected_signature)
+    webhook = PaymentWebhook(
+        provider=provider,
+        event_type=request.headers.get("X-Webhook-Event", "callback"),
+        raw_payload=raw_body.decode("utf-8"),
+        is_verified=is_verified,
+        ip_address=request.client.host if request.client else None,
+    )
+    db.add(webhook)
+    await db.flush()
+    if not is_verified:
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid webhook signature")
+    payload: dict[str, object] = {}
+    try:
+        payload = json.loads(raw_body.decode("utf-8") or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+    provider_pidx = str(payload.get("provider_pidx") or payload.get("pidx") or payload.get("session_id") or "")
+    tx = None
+    if provider_pidx:
+        tx = (
+            await db.execute(
+                select(PaymentTransaction).where(
+                    PaymentTransaction.provider == provider,
+                    PaymentTransaction.provider_pidx == provider_pidx,
+                )
+            )
+        ).scalars().first()
+    if tx:
+        event_type = webhook.event_type.lower()
+        if "refund" in event_type:
+            tx.status = PaymentStatus.REFUNDED
+            tx.refunded_amount = tx.amount
+        elif "cancel" in event_type:
+            tx.status = PaymentStatus.CANCELLED
+        else:
+            tx.status = PaymentStatus.COMPLETED
+            tx.captured_amount = tx.amount
+        webhook.transaction_id = tx.id
+        await _log_payment_audit(
+            event_type="webhook.received",
+            transaction_id=tx.id,
+            actor_user_id=None,
+            payload=payload,
+            db=db,
+        )
+    await db.commit()
+    return {"received": True, "verified": True}
+
+
 # ---------------------------------------------------------------------------
 # Retrieve a single transaction
 # ---------------------------------------------------------------------------
@@ -184,7 +317,7 @@ async def get_transaction(
     db: AsyncSession = Depends(get_db),
 ) -> PaymentTransactionRead:
     """Fetch a stored payment transaction by its internal ID."""
-    decoded_transaction_id = decode_id_or_404(transaction_id)
+    decoded_transaction_id = _decode_transaction_identifier(transaction_id)
     tx = await db.get(PaymentTransaction, decoded_transaction_id)
     if tx is None:
         raise HTTPException(
@@ -192,6 +325,107 @@ async def get_transaction(
             detail=f"Transaction {transaction_id} not found.",
         )
     return PaymentTransactionRead.model_validate(tx)
+
+
+@router.post("/{transaction_id}/capture/", response_model=PaymentTransactionRead)
+async def capture_transaction(
+    transaction_id: str,
+    payload: PaymentCaptureRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PaymentTransactionRead:
+    tx = await db.get(PaymentTransaction, _decode_transaction_identifier(transaction_id))
+    if tx is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+    if tx.status not in {PaymentStatus.INITIATED, PaymentStatus.PENDING, PaymentStatus.COMPLETED}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Transaction cannot be captured")
+    capture_amount = payload.amount or tx.amount
+    if capture_amount <= 0 or capture_amount > tx.amount:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid capture amount")
+    tx.captured_amount = capture_amount
+    tx.status = PaymentStatus.COMPLETED
+    await _log_payment_audit(
+        event_type="capture",
+        transaction_id=tx.id,
+        actor_user_id=current_user.id,
+        payload={"amount": capture_amount},
+        db=db,
+    )
+    await db.commit()
+    await db.refresh(tx)
+    return PaymentTransactionRead.model_validate(tx)
+
+
+@router.post("/{transaction_id}/void/", response_model=PaymentTransactionRead)
+async def void_transaction(
+    transaction_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PaymentTransactionRead:
+    tx = await db.get(PaymentTransaction, _decode_transaction_identifier(transaction_id))
+    if tx is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+    if tx.status not in {PaymentStatus.INITIATED, PaymentStatus.PENDING}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Transaction cannot be voided")
+    tx.status = PaymentStatus.CANCELLED
+    await _log_payment_audit(
+        event_type="void",
+        transaction_id=tx.id,
+        actor_user_id=current_user.id,
+        payload={},
+        db=db,
+    )
+    await db.commit()
+    await db.refresh(tx)
+    return PaymentTransactionRead.model_validate(tx)
+
+
+@router.post("/{transaction_id}/refunds/", response_model=PaymentRefundRead)
+async def refund_transaction(
+    transaction_id: str,
+    payload: PaymentRefundCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PaymentRefundRead:
+    tx = await db.get(PaymentTransaction, _decode_transaction_identifier(transaction_id))
+    if tx is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+    if tx.status not in {PaymentStatus.COMPLETED, PaymentStatus.REFUNDED}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Transaction cannot be refunded")
+    if tx.refunded_amount + payload.amount > tx.captured_amount:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Refund amount exceeds captured amount")
+    refund = PaymentRefund(
+        transaction_id=tx.id,
+        amount=payload.amount,
+        status=PaymentRefundStatus.COMPLETED,
+        destination=payload.destination,
+        reason=payload.reason,
+        provider_refund_id=f"refund-{tx.id}-{tx.refunded_amount + payload.amount}",
+    )
+    db.add(refund)
+    tx.refunded_amount += payload.amount
+    if tx.refunded_amount >= tx.captured_amount:
+        tx.status = PaymentStatus.REFUNDED
+    if payload.destination == "wallet" and tx.user_id:
+        await create_wallet_entry(
+            user_id=tx.user_id,
+            amount=payload.amount,
+            entry_type=WalletLedgerType.REFUND,
+            reference_type="payment_refund",
+            reference_id=tx.id,
+            notes=payload.reason or "Wallet refund",
+            db=db,
+        )
+    await _log_payment_audit(
+        event_type="refund",
+        transaction_id=tx.id,
+        actor_user_id=current_user.id,
+        payload=payload.model_dump(),
+        db=db,
+    )
+    await db.commit()
+    await db.refresh(refund)
+    return PaymentRefundRead.model_validate(refund)
 
 
 # ---------------------------------------------------------------------------
@@ -216,3 +450,65 @@ async def list_transactions(
     result = await db.execute(query)
     transactions = result.scalars().all()
     return [PaymentTransactionRead.model_validate(tx) for tx in transactions]
+
+
+@router.get("/stored-value/wallet/")
+async def get_wallet(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    balance = await get_wallet_balance(current_user.id, db)
+    entries = (
+        await db.execute(select(WalletLedger).where(WalletLedger.user_id == current_user.id).order_by(col(WalletLedger.id).desc()))
+    ).scalars().all()
+    return {"balance": balance, "entries": [_serialize_wallet_entry(entry) for entry in entries]}
+
+
+@router.post("/stored-value/wallet/credit")
+async def admin_credit_wallet(
+    amount: int = Query(..., gt=0),
+    user_id: str = Query(...),
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    decoded_user_id = decode_id_or_404(user_id)
+    entry = await create_wallet_entry(
+        user_id=decoded_user_id,
+        amount=amount,
+        entry_type=WalletLedgerType.CREDIT,
+        reference_type="admin_credit",
+        reference_id=None,
+        notes="Admin wallet credit",
+        db=db,
+    )
+    await db.commit()
+    return {"entry": _serialize_wallet_entry(entry)}
+
+
+@router.post("/stored-value/gift-cards/")
+async def create_gift_card(
+    amount: int = Query(..., gt=0),
+    code: str = Query(..., min_length=4),
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    existing = (await db.execute(select(GiftCard).where(GiftCard.code == code.upper()))).scalars().first()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Gift card code already exists")
+    gift_card = GiftCard(code=code.upper(), initial_amount=amount, remaining_amount=amount)
+    db.add(gift_card)
+    await db.commit()
+    await db.refresh(gift_card)
+    return {"gift_card": {"id": encode_id(gift_card.id or 0), "code": gift_card.code, "amount": gift_card.remaining_amount}}
+
+
+@router.post("/stored-value/gift-cards/redeem/")
+async def redeem_gift_card_endpoint(
+    code: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    gift_card = await redeem_gift_card(code, current_user.id, db)
+    await db.commit()
+    balance = await get_wallet_balance(current_user.id, db)
+    return {"gift_card_code": gift_card.code, "wallet_balance": balance}
