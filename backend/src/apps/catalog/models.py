@@ -6,6 +6,8 @@ from typing import Optional
 
 from sqlmodel import Field, SQLModel
 
+from src.apps.core.time import utc_now
+
 
 class ProductStatus(str, Enum):
     DRAFT = "draft"
@@ -19,6 +21,19 @@ class ProductReviewStatus(str, Enum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
+
+
+class ProductImportJobStatus(str, Enum):
+    PREVIEW = "preview"
+    COMMITTED = "committed"
+    FAILED = "failed"
+
+
+class ProductImportRowStatus(str, Enum):
+    VALID = "valid"
+    INVALID = "invalid"
+    IMPORTED = "imported"
+    SKIPPED = "skipped"
 
 
 class Category(SQLModel, table=True):
@@ -35,7 +50,7 @@ class Category(SQLModel, table=True):
     sort_order: int = Field(default=0)
     is_active: bool = Field(default=True)
     attributes_json: str = Field(default="[]")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Brand(SQLModel, table=True):
@@ -47,7 +62,7 @@ class Brand(SQLModel, table=True):
     logo_url: str = Field(default="", max_length=500)
     description: str = Field(default="", max_length=1000)
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Product(SQLModel, table=True):
@@ -67,8 +82,8 @@ class Product(SQLModel, table=True):
     review_count: int = Field(default=0, ge=0)
     view_count: int = Field(default=0, ge=0)
     is_featured: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     published_at: Optional[datetime] = Field(default=None)
 
 
@@ -87,7 +102,7 @@ class ProductVariant(SQLModel, table=True):
     dimensions_json: str = Field(default="{}")
     is_default: bool = Field(default=False)
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ProductImage(SQLModel, table=True):
@@ -100,7 +115,7 @@ class ProductImage(SQLModel, table=True):
     alt_text: str = Field(default="", max_length=255)
     position: int = Field(default=0)
     is_primary: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Inventory(SQLModel, table=True):
@@ -114,7 +129,7 @@ class Inventory(SQLModel, table=True):
     reorder_level: int = Field(default=0, ge=0)
     reorder_qty: int = Field(default=0, ge=0)
     last_restocked_at: Optional[datetime] = Field(default=None)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class ProductReview(SQLModel, table=True):
@@ -127,4 +142,34 @@ class ProductReview(SQLModel, table=True):
     title: str = Field(default="", max_length=255)
     body: str = Field(default="", max_length=2000)
     status: ProductReviewStatus = Field(default=ProductReviewStatus.APPROVED)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ProductImportJob(SQLModel, table=True):
+    __tablename__ = "product_import_jobs"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    vendor_id: int = Field(foreign_key="vendors.id", index=True)
+    created_by_user_id: int = Field(foreign_key="user.id", index=True)
+    file_name: str = Field(default="", max_length=255)
+    status: ProductImportJobStatus = Field(default=ProductImportJobStatus.PREVIEW)
+    dry_run: bool = Field(default=True)
+    total_rows: int = Field(default=0, ge=0)
+    valid_rows: int = Field(default=0, ge=0)
+    invalid_rows: int = Field(default=0, ge=0)
+    summary_json: str = Field(default="{}")
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ProductImportRowResult(SQLModel, table=True):
+    __tablename__ = "product_import_row_results"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    job_id: int = Field(foreign_key="product_import_jobs.id", index=True)
+    row_number: int = Field(ge=1)
+    status: ProductImportRowStatus = Field(default=ProductImportRowStatus.VALID)
+    sku: str = Field(default="", max_length=120)
+    product_name: str = Field(default="", max_length=255)
+    error_message: str = Field(default="", max_length=1000)
+    payload_json: str = Field(default="{}")
+    created_at: datetime = Field(default_factory=utc_now)

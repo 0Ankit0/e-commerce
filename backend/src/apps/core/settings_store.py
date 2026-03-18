@@ -11,13 +11,14 @@ from src.apps.core.config import (
     settings,
 )
 from src.apps.core.models import GeneralSetting
+from src.apps.core.time import utc_now
 
 
 async def sync_general_settings(session: AsyncSession) -> None:
     env_snapshot = get_environment_settings_snapshot()
     result = await session.execute(select(GeneralSetting))
     existing_settings = {item.key: item for item in result.scalars().all()}
-    now = datetime.now()
+    now = utc_now()
 
     for key, env_value in env_snapshot.items():
         general_setting = existing_settings.get(key)

@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from src.apps.core.config import settings
+from src.apps.core.time import utc_now
 from src.apps.finance.models.payment import PaymentProvider, PaymentStatus, PaymentTransaction
 from src.apps.finance.schemas.payment import (
     InitiatePaymentRequest,
@@ -200,7 +201,7 @@ class PayPalService(BasePaymentProvider):
         tx.status = our_status
         tx.provider_transaction_id = sale_id or payment_id
         tx.extra_data = json.dumps({"payment_id": payment.id, "state": payment.state})
-        tx.updated_at = datetime.now()
+        tx.updated_at = utc_now()
         db.add(tx)
         await db.commit()
         await db.refresh(tx)

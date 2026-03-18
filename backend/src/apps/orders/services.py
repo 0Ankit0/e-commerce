@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import timedelta
 import json
 import random
 import string
@@ -12,21 +12,27 @@ from sqlmodel import select
 
 from src.apps.catalog.models import Inventory, Product, ProductVariant
 from src.apps.commerce.models import Address, Cart, CartItem
-from src.apps.commerce.services import build_cart_payload
+from src.apps.commerce.services import build_cart_payload, calculate_tax_amount
+from src.apps.core.time import utc_now
 from src.apps.finance.models.payment import PaymentStatus, PaymentTransaction
 from src.apps.finance.models.stored_value import WalletLedgerType
 from src.apps.finance.services.stored_value import create_wallet_entry, create_wallet_payment_transaction, get_wallet_balance
 from src.apps.logistics.services import quote_shipping
 from src.apps.orders.models import (
     CheckoutIdempotency,
+    InventoryReservation,
+    InventoryReservationStatus,
     Order,
+    OrderEvent,
     OrderItem,
+    OrderNote,
     OrderPaymentStatus,
     OrderStatus,
     OrderStatusHistory,
     PaymentMethod,
     RefundRecord,
     RefundStatus,
+    ReturnEvent,
     ReturnRequest,
     ReturnStatus,
     Shipment,
@@ -35,6 +41,7 @@ from src.apps.orders.models import (
     VendorOrderStatus,
 )
 from src.apps.promotions.models import Coupon
+from src.apps.promotions.services import record_coupon_usage
 from src.apps.vendors.models import CommissionTier, Vendor
 
 
@@ -60,6 +67,8 @@ async def create_order_from_cart(
     notes: str,
     db: AsyncSession,
     idempotency_key: str | None = None,
+    request_fingerprint: str = "",
+    shipping_option_code: str | None = None,
 ) -> Order:
     address = await db.get(Address, address_id)
     if address is None or address.user_id != user_id:
@@ -75,6 +84,11 @@ async def create_order_from_cart(
             )
         ).scalars().first()
         if existing_key:
+            if request_fingerprint and existing_key.request_fingerprint and existing_key.request_fingerprint != request_fingerprint:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Idempotency key already used for a different checkout request",
+                )
             existing_order = await db.get(Order, existing_key.order_id)
             if existing_order:
                 return existing_order
@@ -105,10 +119,23 @@ async def create_order_from_cart(
             payment_status = OrderPaymentStatus.FAILED
             order_status = OrderStatus.PENDING_PAYMENT
 
-    shipping_quote = await quote_shipping(address.pincode, payment_method == PaymentMethod.COD, db)
+    shipping_quote = await quote_shipping(
+        address.pincode,
+        payment_method == PaymentMethod.COD,
+        db,
+        shipping_option_code=shipping_option_code,
+    )
+    if not shipping_quote["serviceable"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Address is not serviceable")
     shipping_charge = round(float(shipping_quote["shipping_rate"]), 2)
     taxable_amount = max(float(cart_payload["subtotal"]) - float(cart_payload["discount"]), 0.0)
-    tax = round(taxable_amount * 0.13, 2)
+    tax_payload = await calculate_tax_amount(
+        address=address,
+        category_ids=set(cart_payload.get("category_ids", [])),
+        taxable_amount=taxable_amount,
+        db=db,
+    )
+    tax = float(tax_payload["tax"])
     order_total = round(taxable_amount + shipping_charge + tax, 2)
     if payment_method == PaymentMethod.WALLET:
         wallet_balance = await get_wallet_balance(user_id, db)
@@ -122,11 +149,14 @@ async def create_order_from_cart(
         "discount": float(cart_payload["discount"]),
         "shipping": shipping_charge,
         "tax": tax,
-        "tax_rate": 0.13,
+        "tax_rate": float(tax_payload["rate"]),
+        "tax_rule": tax_payload["rule"],
         "total": order_total,
         "coupon_code": coupon.code if coupon else "",
+        "shipping_option": shipping_quote.get("shipping_option"),
         "items": cart_payload["items"],
     }
+    reserve_only = payment_status != OrderPaymentStatus.PAID and payment_method not in {PaymentMethod.COD, PaymentMethod.WALLET}
     order = Order(
         order_number=generate_reference("ORD"),
         user_id=user_id,
@@ -145,7 +175,7 @@ async def create_order_from_cart(
         notes=notes,
         pricing_snapshot_json=json.dumps(pricing_snapshot),
         payment_transaction_id=payment_transaction_id,
-        confirmed_at=datetime.utcnow() if order_status == OrderStatus.CONFIRMED else None,
+        confirmed_at=utc_now() if order_status == OrderStatus.CONFIRMED else None,
     )
     db.add(order)
     await db.flush()
@@ -175,6 +205,7 @@ async def create_order_from_cart(
     cart_items = (
         await db.execute(select(CartItem).where(CartItem.cart_id == cart.id))
     ).scalars().all()
+    reservation_expiry = utc_now() + timedelta(minutes=30)
     for item in cart_items:
         variant = await db.get(ProductVariant, item.variant_id)
         if variant is None:
@@ -197,8 +228,26 @@ async def create_order_from_cart(
             if free_units <= 0:
                 continue
             deduction = min(remaining, free_units)
-            inventory.quantity -= deduction
-            inventory.updated_at = datetime.utcnow()
+            if reserve_only:
+                inventory.reserved_qty += deduction
+            else:
+                inventory.quantity -= deduction
+            inventory.updated_at = utc_now()
+            if reserve_only:
+                db.add(
+                    InventoryReservation(
+                        user_id=user_id,
+                        cart_id=cart.id,
+                        order_id=order.id,
+                        variant_id=variant.id,
+                        quantity=deduction,
+                        status=InventoryReservationStatus.ACTIVE,
+                        reserved_until=reservation_expiry,
+                        reason="checkout_pending_payment",
+                        idempotency_key=idempotency_key or "",
+                        metadata_json=json.dumps({"inventory_id": inventory.id}),
+                    )
+                )
             remaining -= deduction
             if remaining == 0:
                 break
@@ -228,7 +277,7 @@ async def create_order_from_cart(
             awb=generate_reference("AWB", 12),
             status=order.status,
             current_location="Vendor warehouse",
-            eta=datetime.utcnow() + timedelta(days=3),
+            eta=utc_now() + timedelta(days=3),
         )
         db.add(shipment)
         await db.flush()
@@ -262,15 +311,37 @@ async def create_order_from_cart(
             )
 
     db.add(OrderStatusHistory(order_id=order.id, status=order.status, note="Order created"))
+    await record_order_event(
+        order_id=order.id,
+        event_type="order.created",
+        message="Order created",
+        actor_user_id=user_id,
+        payload={"payment_status": order.payment_status.value, "status": order.status.value},
+        db=db,
+    )
 
     for item in cart_items:
         await db.delete(item)
     cart.coupon_id = None
-    cart.updated_at = datetime.utcnow()
+    cart.updated_at = utc_now()
     if coupon:
         coupon.used_count += 1
+        await record_coupon_usage(
+            coupon=coupon,
+            user_id=user_id,
+            order_id=order.id,
+            discount_amount=float(cart_payload["discount"]),
+            db=db,
+        )
     if idempotency_key:
-        db.add(CheckoutIdempotency(user_id=user_id, idempotency_key=idempotency_key, order_id=order.id))
+        db.add(
+            CheckoutIdempotency(
+                user_id=user_id,
+                idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+                order_id=order.id,
+            )
+        )
     await db.flush()
     return order
 
@@ -282,24 +353,46 @@ async def cancel_order(order: Order, db: AsyncSession) -> Order:
         return order
 
     order_items = (await db.execute(select(OrderItem).where(OrderItem.order_id == order.id))).scalars().all()
+    active_reservations = (
+        await db.execute(
+            select(InventoryReservation).where(
+                InventoryReservation.order_id == order.id,
+                InventoryReservation.status == InventoryReservationStatus.ACTIVE,
+            )
+        )
+    ).scalars().all()
+    reservations_by_variant: dict[int, list[InventoryReservation]] = defaultdict(list)
+    for reservation in active_reservations:
+        reservations_by_variant[reservation.variant_id].append(reservation)
     for item in order_items:
-        inventory = (
-            await db.execute(select(Inventory).where(Inventory.variant_id == item.variant_id))
-        ).scalars().first()
-        if inventory:
-            inventory.quantity += item.quantity
-            inventory.updated_at = datetime.utcnow()
+        reservations = reservations_by_variant.get(item.variant_id, [])
+        if reservations:
+            for reservation in reservations:
+                metadata = json.loads(reservation.metadata_json or "{}")
+                inventory = await db.get(Inventory, metadata.get("inventory_id")) if metadata.get("inventory_id") else None
+                if inventory:
+                    inventory.reserved_qty = max(inventory.reserved_qty - reservation.quantity, 0)
+                    inventory.updated_at = utc_now()
+                reservation.status = InventoryReservationStatus.RELEASED
+                reservation.updated_at = utc_now()
+        else:
+            inventory = (
+                await db.execute(select(Inventory).where(Inventory.variant_id == item.variant_id))
+            ).scalars().first()
+            if inventory:
+                inventory.quantity += item.quantity
+                inventory.updated_at = utc_now()
         item.status = VendorOrderStatus.CANCELLED
 
     vendor_orders = (await db.execute(select(VendorOrder).where(VendorOrder.order_id == order.id))).scalars().all()
     for vendor_order in vendor_orders:
         vendor_order.status = VendorOrderStatus.CANCELLED
-        vendor_order.updated_at = datetime.utcnow()
+        vendor_order.updated_at = utc_now()
 
     shipments = (await db.execute(select(Shipment).where(Shipment.order_id == order.id))).scalars().all()
     for shipment in shipments:
         shipment.status = OrderStatus.CANCELLED
-        shipment.updated_at = datetime.utcnow()
+        shipment.updated_at = utc_now()
         db.add(
             ShipmentTracking(
                 shipment_id=shipment.id,
@@ -310,8 +403,16 @@ async def cancel_order(order: Order, db: AsyncSession) -> Order:
         )
 
     order.status = OrderStatus.CANCELLED
-    order.cancelled_at = datetime.utcnow()
+    order.cancelled_at = utc_now()
     db.add(OrderStatusHistory(order_id=order.id, status=order.status, note="Order cancelled"))
+    await record_order_event(
+        order_id=order.id,
+        event_type="order.cancelled",
+        message="Order cancelled",
+        actor_user_id=order.user_id,
+        payload={},
+        db=db,
+    )
     return order
 
 
@@ -329,6 +430,12 @@ async def create_return_request(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Order does not belong to user")
     if order.status != OrderStatus.DELIVERED:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only delivered orders can be returned")
+    delivered_at = order.delivered_at or order.created_at
+    if delivered_at.tzinfo is None:
+        delivered_at = delivered_at.replace(tzinfo=utc_now().tzinfo)
+    eligible_until = delivered_at + timedelta(days=7)
+    if utc_now() > eligible_until:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Return window has expired")
 
     return_request = ReturnRequest(
         order_id=order.id,
@@ -337,6 +444,8 @@ async def create_return_request(
         reason=reason,
         details=details,
         refund_method=refund_method,
+        return_window_days=7,
+        eligible_until=eligible_until,
     )
     db.add(return_request)
     await db.flush()
@@ -362,6 +471,14 @@ async def create_return_request(
             notes=f"Wallet refund for order {order.order_number}",
             db=db,
         )
+    await record_return_event(
+        return_request_id=return_request.id or 0,
+        actor_user_id=user_id,
+        event_type="return.requested",
+        message="Return request created",
+        payload={"refund_method": refund_method},
+        db=db,
+    )
     return return_request
 
 
@@ -423,3 +540,145 @@ async def serialize_order(order: Order, db: AsyncSession) -> dict[str, object]:
             for shipment in shipments
         ],
     }
+
+
+async def record_order_event(
+    *,
+    order_id: int,
+    event_type: str,
+    message: str,
+    actor_user_id: int | None,
+    payload: dict[str, object],
+    db: AsyncSession,
+) -> None:
+    db.add(
+        OrderEvent(
+            order_id=order_id,
+            actor_user_id=actor_user_id,
+            event_type=event_type,
+            message=message,
+            payload_json=json.dumps(payload),
+        )
+    )
+
+
+async def add_order_note(
+    *,
+    order_id: int,
+    note: str,
+    db: AsyncSession,
+    created_by_user_id: int | None = None,
+    note_type: str = "internal",
+    is_customer_visible: bool = False,
+) -> OrderNote:
+    order_note = OrderNote(
+        order_id=order_id,
+        created_by_user_id=created_by_user_id,
+        note_type=note_type,
+        note=note,
+        is_customer_visible=is_customer_visible,
+    )
+    db.add(order_note)
+    await db.flush()
+    return order_note
+
+
+async def list_order_events(order_id: int, db: AsyncSession) -> list[OrderEvent]:
+    return (
+        await db.execute(select(OrderEvent).where(OrderEvent.order_id == order_id).order_by(OrderEvent.created_at.asc()))
+    ).scalars().all()
+
+
+async def list_order_notes(order_id: int, db: AsyncSession) -> list[OrderNote]:
+    return (
+        await db.execute(select(OrderNote).where(OrderNote.order_id == order_id).order_by(OrderNote.created_at.desc()))
+    ).scalars().all()
+
+
+async def record_return_event(
+    *,
+    return_request_id: int,
+    actor_user_id: int | None,
+    event_type: str,
+    message: str,
+    payload: dict[str, object],
+    db: AsyncSession,
+) -> None:
+    db.add(
+        ReturnEvent(
+            return_request_id=return_request_id,
+            actor_user_id=actor_user_id,
+            event_type=event_type,
+            message=message,
+            payload_json=json.dumps(payload),
+        )
+    )
+
+
+async def list_return_events(return_request_id: int, db: AsyncSession) -> list[ReturnEvent]:
+    return (
+        await db.execute(
+            select(ReturnEvent).where(ReturnEvent.return_request_id == return_request_id).order_by(ReturnEvent.created_at.asc())
+        )
+    ).scalars().all()
+
+
+async def update_return_request_status(
+    *,
+    return_request: ReturnRequest,
+    status_value: ReturnStatus,
+    db: AsyncSession,
+    actor_user_id: int | None = None,
+    message: str = "",
+    payload: dict[str, object] | None = None,
+) -> ReturnRequest:
+    return_request.status = status_value
+    if status_value in {ReturnStatus.REJECTED, ReturnStatus.REFUNDED}:
+        return_request.resolved_at = utc_now()
+    await record_return_event(
+        return_request_id=return_request.id or 0,
+        actor_user_id=actor_user_id,
+        event_type=f"return.{status_value.value}",
+        message=message or f"Return marked {status_value.value}",
+        payload=payload or {},
+        db=db,
+    )
+    return return_request
+
+
+async def commit_inventory_reservations_for_order(order: Order, db: AsyncSession) -> None:
+    reservations = (
+        await db.execute(
+            select(InventoryReservation).where(
+                InventoryReservation.order_id == order.id,
+                InventoryReservation.status == InventoryReservationStatus.ACTIVE,
+            )
+        )
+    ).scalars().all()
+    for reservation in reservations:
+        metadata = json.loads(reservation.metadata_json or "{}")
+        inventory = await db.get(Inventory, metadata.get("inventory_id")) if metadata.get("inventory_id") else None
+        if inventory:
+            inventory.reserved_qty = max(inventory.reserved_qty - reservation.quantity, 0)
+            inventory.quantity = max(inventory.quantity - reservation.quantity, 0)
+            inventory.updated_at = utc_now()
+        reservation.status = InventoryReservationStatus.COMMITTED
+        reservation.updated_at = utc_now()
+
+
+async def confirm_order_payment(order: Order, db: AsyncSession) -> None:
+    if order.payment_status == OrderPaymentStatus.PAID and order.status == OrderStatus.CONFIRMED:
+        return
+    await commit_inventory_reservations_for_order(order, db)
+    order.payment_status = OrderPaymentStatus.PAID
+    order.status = OrderStatus.CONFIRMED
+    order.confirmed_at = order.confirmed_at or utc_now()
+    db.add(OrderStatusHistory(order_id=order.id, status=order.status, note="Payment confirmed"))
+    await record_order_event(
+        order_id=order.id,
+        event_type="payment.confirmed",
+        message="Payment confirmed and inventory committed",
+        actor_user_id=order.user_id,
+        payload={},
+        db=db,
+    )

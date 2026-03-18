@@ -1,20 +1,27 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
-from datetime import datetime
+from difflib import SequenceMatcher
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
+from src.apps.core.time import utc_now
 from src.apps.catalog.models import (
     Brand,
     Category,
     Inventory,
     Product,
+    ProductImportJob,
+    ProductImportJobStatus,
+    ProductImportRowResult,
+    ProductImportRowStatus,
     ProductImage,
     ProductReview,
     ProductReviewStatus,
@@ -97,6 +104,154 @@ class ProductReviewRequest(BaseModel):
     rating: int = Field(ge=1, le=5)
     title: str = ""
     body: str = ""
+
+
+IMPORT_TEMPLATE_HEADERS = [
+    "product_slug",
+    "product_name",
+    "category_slug",
+    "brand_slug",
+    "short_description",
+    "description",
+    "status",
+    "sku",
+    "variant_name",
+    "mrp",
+    "selling_price",
+    "cost_price",
+    "quantity",
+    "is_default",
+    "image_url",
+]
+
+
+def _read_import_rows(csv_content: str) -> list[dict[str, str]]:
+    reader = csv.DictReader(io.StringIO(csv_content))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CSV file is empty")
+    missing = [field for field in IMPORT_TEMPLATE_HEADERS if field not in reader.fieldnames]
+    if missing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"CSV is missing required columns: {', '.join(missing)}")
+    return [{key: (value or "").strip() for key, value in row.items()} for row in reader]
+
+
+async def _preview_product_import(
+    *,
+    csv_content: str,
+    vendor: Vendor,
+    current_user: User,
+    db: AsyncSession,
+    dry_run: bool,
+) -> dict[str, object]:
+    rows = _read_import_rows(csv_content)
+    category_by_slug = {row.slug: row for row in (await db.execute(select(Category))).scalars().all()}
+    brand_by_slug = {row.slug: row for row in (await db.execute(select(Brand))).scalars().all()}
+    job = ProductImportJob(
+        vendor_id=vendor.id,
+        created_by_user_id=current_user.id,
+        file_name="upload.csv",
+        status=ProductImportJobStatus.PREVIEW if dry_run else ProductImportJobStatus.COMMITTED,
+        dry_run=dry_run,
+        total_rows=len(rows),
+    )
+    db.add(job)
+    await db.flush()
+
+    grouped: dict[str, list[dict[str, str]]] = {}
+    valid_rows = 0
+    invalid_rows = 0
+    errors: list[str] = []
+    for index, row in enumerate(rows, start=1):
+        error_messages: list[str] = []
+        if not row["product_slug"]:
+            error_messages.append("product_slug is required")
+        if not row["product_name"]:
+            error_messages.append("product_name is required")
+        if row["category_slug"] not in category_by_slug:
+            error_messages.append("category_slug does not exist")
+        if row["brand_slug"] and row["brand_slug"] not in brand_by_slug:
+            error_messages.append("brand_slug does not exist")
+        try:
+            if float(row["selling_price"]) > float(row["mrp"]):
+                error_messages.append("selling_price cannot exceed mrp")
+        except ValueError:
+            error_messages.append("mrp and selling_price must be numeric")
+        if not row["sku"]:
+            error_messages.append("sku is required")
+
+        status_value = ProductImportRowStatus.INVALID if error_messages else ProductImportRowStatus.VALID
+        db.add(
+            ProductImportRowResult(
+                job_id=job.id,
+                row_number=index,
+                status=status_value,
+                sku=row["sku"],
+                product_name=row["product_name"],
+                error_message="; ".join(error_messages),
+                payload_json=json.dumps(row),
+            )
+        )
+        if error_messages:
+            invalid_rows += 1
+            errors.extend(error_messages)
+        else:
+            valid_rows += 1
+            grouped.setdefault(row["product_slug"], []).append(row)
+
+    job.valid_rows = valid_rows
+    job.invalid_rows = invalid_rows
+    job.summary_json = json.dumps({"errors": errors[:20]})
+
+    created_products: list[str] = []
+    if not dry_run:
+        for product_slug, grouped_rows in grouped.items():
+            first_row = grouped_rows[0]
+            category = category_by_slug[first_row["category_slug"]]
+            brand = brand_by_slug.get(first_row["brand_slug"]) if first_row["brand_slug"] else None
+            product = Product(
+                vendor_id=vendor.id,
+                category_id=category.id,
+                brand_id=brand.id if brand else None,
+                name=first_row["product_name"],
+                slug=product_slug,
+                short_description=first_row["short_description"],
+                description=first_row["description"],
+                status=ProductStatus(first_row["status"] or ProductStatus.PENDING.value),
+                published_at=utc_now() if (first_row["status"] or ProductStatus.PENDING.value) == ProductStatus.ACTIVE.value else None,
+            )
+            db.add(product)
+            await db.flush()
+            if first_row["image_url"]:
+                db.add(ProductImage(product_id=product.id, url=first_row["image_url"], is_primary=True))
+            for row in grouped_rows:
+                variant = ProductVariant(
+                    product_id=product.id,
+                    sku=row["sku"],
+                    name=row["variant_name"],
+                    mrp=float(row["mrp"]),
+                    selling_price=float(row["selling_price"]),
+                    cost_price=float(row["cost_price"] or 0),
+                    is_default=str(row["is_default"]).lower() in {"1", "true", "yes"},
+                )
+                ensure_variant_pricing(variant)
+                db.add(variant)
+                await db.flush()
+                db.add(
+                    Inventory(
+                        variant_id=variant.id,
+                        quantity=int(row["quantity"] or 0),
+                    )
+                )
+            created_products.append(product.slug)
+        vendor.product_count += len(created_products)
+
+    return {
+        "job_id": encode_id(job.id or 0),
+        "total_rows": len(rows),
+        "valid_rows": valid_rows,
+        "invalid_rows": invalid_rows,
+        "created_products": created_products,
+    }
 
 
 @router.get("/categories")
@@ -264,7 +419,7 @@ async def create_product(
         specifications_json=json.dumps(payload.specifications),
         is_featured=payload.is_featured,
         status=payload.status,
-        published_at=datetime.utcnow() if payload.status == ProductStatus.ACTIVE else None,
+        published_at=utc_now() if payload.status == ProductStatus.ACTIVE else None,
     )
     db.add(product)
     await db.flush()
@@ -290,6 +445,70 @@ async def create_product(
     await db.commit()
     await db.refresh(product)
     return {"product": await serialize_product(product, db)}
+
+
+@router.get("/vendor/products/import/template")
+async def get_product_import_template(
+    _: User = Depends(get_current_user),
+):
+    sample = ",".join(IMPORT_TEMPLATE_HEADERS) + "\n" + ",".join(
+        [
+            "wireless-headphones",
+            "Wireless Headphones",
+            "electronics",
+            "acme-audio",
+            "Noise cancelling",
+            "Premium over-ear wireless headphones",
+            "pending",
+            "WH-001",
+            "Black",
+            "120",
+            "99",
+            "0",
+            "5",
+            "true",
+            "https://example.com/headphones.jpg",
+        ]
+    )
+    return {"headers": IMPORT_TEMPLATE_HEADERS, "sample_csv": sample}
+
+
+@router.post("/vendor/products/import/preview")
+async def preview_product_import(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_for_user(current_user, db)
+    ensure_vendor_active(vendor)
+    preview = await _preview_product_import(
+        csv_content=(await file.read()).decode("utf-8"),
+        vendor=vendor,
+        current_user=current_user,
+        db=db,
+        dry_run=True,
+    )
+    await db.commit()
+    return preview
+
+
+@router.post("/vendor/products/import/commit", status_code=status.HTTP_201_CREATED)
+async def commit_product_import(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_for_user(current_user, db)
+    ensure_vendor_active(vendor)
+    preview = await _preview_product_import(
+        csv_content=(await file.read()).decode("utf-8"),
+        vendor=vendor,
+        current_user=current_user,
+        db=db,
+        dry_run=False,
+    )
+    await db.commit()
+    return preview
 
 
 @router.get("/vendor/products")
@@ -324,7 +543,7 @@ async def update_vendor_product(
     product.specifications_json = json.dumps(payload.specifications)
     product.is_featured = payload.is_featured
     product.status = payload.status
-    product.updated_at = datetime.utcnow()
+    product.updated_at = utc_now()
     await db.commit()
     return {"product": await serialize_product(product, db)}
 
@@ -340,7 +559,7 @@ async def archive_vendor_product(
     if product is None or product.vendor_id != vendor.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     product.status = ProductStatus.ARCHIVED
-    product.updated_at = datetime.utcnow()
+    product.updated_at = utc_now()
     await db.commit()
     return {"success": True}
 
@@ -356,7 +575,7 @@ async def delete_vendor_product(
     if product is None or product.vendor_id != vendor.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     product.status = ProductStatus.ARCHIVED
-    product.updated_at = datetime.utcnow()
+    product.updated_at = utc_now()
     await db.commit()
     return {"success": True}
 
@@ -385,9 +604,67 @@ async def update_vendor_inventory(
     inventory.quantity = payload.quantity
     inventory.reorder_level = payload.reorder_level
     inventory.reorder_qty = payload.reorder_qty
-    inventory.updated_at = datetime.utcnow()
+    inventory.updated_at = utc_now()
     await db.commit()
     return {"variant_id": encode_id(variant.id or 0), "quantity": inventory.quantity}
+
+
+@router.get("/vendor/inventory/summary")
+async def get_vendor_inventory_summary(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_for_user(current_user, db)
+    products = (
+        await db.execute(select(Product).where(Product.vendor_id == vendor.id))
+    ).scalars().all()
+    items = []
+    for product in products:
+        variants = (
+            await db.execute(select(ProductVariant).where(ProductVariant.product_id == product.id))
+        ).scalars().all()
+        for variant in variants:
+            inventory_rows = (
+                await db.execute(select(Inventory).where(Inventory.variant_id == variant.id))
+            ).scalars().all()
+            quantity = sum(row.quantity for row in inventory_rows)
+            reserved = sum(row.reserved_qty for row in inventory_rows)
+            reorder_level = max((row.reorder_level for row in inventory_rows), default=0)
+            items.append(
+                {
+                    "product_id": encode_id(product.id or 0),
+                    "variant_id": encode_id(variant.id or 0),
+                    "sku": variant.sku,
+                    "quantity": quantity,
+                    "reserved_qty": reserved,
+                    "available_qty": max(quantity - reserved, 0),
+                    "low_stock": quantity <= reorder_level if reorder_level else False,
+                }
+            )
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/admin/catalog/inventory/reorder-report")
+async def get_reorder_report(
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    inventory_rows = (await db.execute(select(Inventory).order_by(Inventory.updated_at.asc()))).scalars().all()
+    items = []
+    for inventory in inventory_rows:
+        if inventory.reorder_level and inventory.quantity <= inventory.reorder_level:
+            variant = await db.get(ProductVariant, inventory.variant_id)
+            items.append(
+                {
+                    "variant_id": encode_id(inventory.variant_id),
+                    "sku": variant.sku if variant else "",
+                    "quantity": inventory.quantity,
+                    "reorder_level": inventory.reorder_level,
+                    "reorder_qty": inventory.reorder_qty,
+                    "warehouse_id": encode_id(inventory.warehouse_id) if inventory.warehouse_id else None,
+                }
+            )
+    return {"items": items, "total": len(items)}
 
 
 @router.post("/admin/catalog/products/{product_id}/approve")
@@ -400,8 +677,8 @@ async def approve_product(
     if product is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     product.status = ProductStatus.ACTIVE
-    product.published_at = datetime.utcnow()
-    product.updated_at = datetime.utcnow()
+    product.published_at = utc_now()
+    product.updated_at = utc_now()
     await db.commit()
     return {"product": await serialize_product(product, db)}
 
@@ -416,7 +693,7 @@ async def reject_product(
     if product is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     product.status = ProductStatus.REJECTED
-    product.updated_at = datetime.utcnow()
+    product.updated_at = utc_now()
     await db.commit()
     return {"product": await serialize_product(product, db)}
 
@@ -428,26 +705,49 @@ async def list_products(
     brand: str | None = Query(default=None),
     vendor_id: str | None = Query(default=None),
     in_stock: bool = Query(default=False),
+    min_price: float | None = Query(default=None, ge=0),
+    max_price: float | None = Query(default=None, ge=0),
+    min_rating: float | None = Query(default=None, ge=0, le=5),
+    is_featured: bool | None = Query(default=None),
+    attribute_key: str | None = Query(default=None),
+    attribute_value: str | None = Query(default=None),
     sort: str = Query(default="newest"),
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(Product).where(Product.status == ProductStatus.ACTIVE)
+    if q:
+        query = query.where(
+            (Product.name.ilike(f"%{q}%")) |
+            (Product.short_description.ilike(f"%{q}%")) |
+            (Product.description.ilike(f"%{q}%"))
+        )
+    if category:
+        query = query.where(Product.category_id == decode_id_or_404(category))
+    if brand:
+        query = query.where(Product.brand_id == decode_id_or_404(brand))
+    if vendor_id:
+        query = query.where(Product.vendor_id == decode_id_or_404(vendor_id))
+    if min_rating is not None:
+        query = query.where(Product.avg_rating >= min_rating)
+    if is_featured is not None:
+        query = query.where(Product.is_featured == is_featured)
     products = (await db.execute(query.order_by(Product.created_at.desc()))).scalars().all()
     filtered: list[dict[str, object]] = []
     for product in products:
-        if q and q.lower() not in f"{product.name} {product.short_description} {product.description}".lower():
-            continue
-        if category and product.category_id != decode_id_or_404(category):
-            continue
-        if brand and product.brand_id != decode_id_or_404(brand):
-            continue
-        if vendor_id and product.vendor_id != decode_id_or_404(vendor_id):
-            continue
         serialized = await serialize_product(product, db, include_variants=False)
         if in_stock and not serialized["in_stock"]:
             continue
+        if min_price is not None and (serialized["min_selling_price"] or 0) < min_price:
+            continue
+        if max_price is not None and (serialized["min_selling_price"] or 0) > max_price:
+            continue
+        if attribute_key and attribute_value:
+            specifications = serialized["specifications"]
+            value = specifications.get(attribute_key)
+            if str(value).lower() != attribute_value.lower():
+                continue
         filtered.append(serialized)
     if sort == "price_asc":
         filtered.sort(key=lambda item: item["min_selling_price"] or 0)
@@ -487,11 +787,22 @@ async def autocomplete_products(
     q_lower = q.lower()
     suggestions = []
     for product in products:
-        if product.name.lower().startswith(q_lower) or q_lower in product.name.lower():
-            suggestions.append({"id": encode_id(product.id or 0), "name": product.name, "slug": product.slug})
-        if len(suggestions) >= limit:
-            break
-    return {"items": suggestions, "total": len(suggestions)}
+        score = max(
+            SequenceMatcher(None, q_lower, product.name.lower()).ratio(),
+            1.0 if product.name.lower().startswith(q_lower) else 0.0,
+            0.9 if q_lower in product.name.lower() else 0.0,
+        )
+        if score >= 0.35:
+            suggestions.append(
+                {
+                    "id": encode_id(product.id or 0),
+                    "name": product.name,
+                    "slug": product.slug,
+                    "score": round(score, 3),
+                }
+            )
+    suggestions.sort(key=lambda item: item["score"], reverse=True)
+    return {"items": suggestions[:limit], "total": min(len(suggestions), limit)}
 
 
 @router.get("/products/{product_id}")

@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from src.apps.core.time import utc_now
 from src.apps.finance.models.payment import PaymentProvider, PaymentStatus, PaymentTransaction
 from src.apps.finance.models.stored_value import GiftCard, GiftCardStatus, WalletLedger, WalletLedgerType
 
@@ -55,7 +56,7 @@ async def redeem_gift_card(code: str, user_id: int, db: AsyncSession) -> GiftCar
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gift card not found")
     if gift_card.status != GiftCardStatus.ACTIVE:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Gift card is not active")
-    if gift_card.expires_at and gift_card.expires_at < datetime.now():
+    if gift_card.expires_at and gift_card.expires_at < utc_now():
         gift_card.status = GiftCardStatus.EXPIRED
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Gift card has expired")
     amount = gift_card.remaining_amount
@@ -73,7 +74,7 @@ async def redeem_gift_card(code: str, user_id: int, db: AsyncSession) -> GiftCar
     gift_card.remaining_amount = 0
     gift_card.status = GiftCardStatus.REDEEMED
     gift_card.redeemed_by_user_id = user_id
-    gift_card.redeemed_at = datetime.now()
+    gift_card.redeemed_at = utc_now()
     return gift_card
 
 

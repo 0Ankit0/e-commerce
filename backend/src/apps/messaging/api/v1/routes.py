@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from src.apps.core.time import utc_now
 from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import decode_id_or_404, encode_id
@@ -414,7 +415,7 @@ async def revoke_device(
 ):
     device = await get_active_device_or_404(device_id, current_user.id, db)
     device.is_active = False
-    device.revoked_at = datetime.utcnow()
+    device.revoked_at = utc_now()
     await db.commit()
     return {"success": True}
 

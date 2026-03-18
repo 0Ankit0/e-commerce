@@ -6,6 +6,8 @@ from typing import Optional
 
 from sqlmodel import Field, SQLModel
 
+from src.apps.core.time import utc_now
+
 
 class ChatConversationType(str, Enum):
     ORDER = "order"
@@ -30,7 +32,7 @@ class ChatDevice(SQLModel, table=True):
     signed_prekey_public: str = Field(max_length=4096)
     signed_prekey_signature: str = Field(max_length=4096)
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
     revoked_at: Optional[datetime] = Field(default=None)
 
 
@@ -42,7 +44,7 @@ class ChatSignedPreKey(SQLModel, table=True):
     key_id: int = Field(index=True)
     public_key: str = Field(max_length=4096)
     signature: str = Field(max_length=4096)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ChatOneTimePreKey(SQLModel, table=True):
@@ -54,7 +56,7 @@ class ChatOneTimePreKey(SQLModel, table=True):
     public_key: str = Field(max_length=4096)
     is_consumed: bool = Field(default=False)
     consumed_at: Optional[datetime] = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ChatConversation(SQLModel, table=True):
@@ -66,7 +68,7 @@ class ChatConversation(SQLModel, table=True):
     vendor_id: Optional[int] = Field(default=None, foreign_key="vendors.id", index=True)
     support_ticket_id: Optional[int] = Field(default=None, foreign_key="support_tickets.id", index=True)
     created_by_user_id: int = Field(foreign_key="user.id", index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
     closed_at: Optional[datetime] = Field(default=None)
 
 
@@ -77,7 +79,7 @@ class ChatParticipant(SQLModel, table=True):
     conversation_id: int = Field(foreign_key="chat_conversations.id", index=True)
     user_id: int = Field(foreign_key="user.id", index=True)
     role: ChatParticipantRole = Field(default=ChatParticipantRole.CUSTOMER)
-    joined_at: datetime = Field(default_factory=datetime.utcnow)
+    joined_at: datetime = Field(default_factory=utc_now)
     last_read_message_id: Optional[int] = Field(default=None, foreign_key="chat_message_envelopes.id")
 
 
@@ -92,7 +94,7 @@ class ChatMessageEnvelope(SQLModel, table=True):
     ciphertext: str = Field(max_length=32768)
     header_json: str = Field(default="{}")
     attachment_manifest_json: str = Field(default="[]")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ChatAttachment(SQLModel, table=True):
@@ -106,7 +108,7 @@ class ChatAttachment(SQLModel, table=True):
     encrypted_file_key: str = Field(max_length=4096)
     nonce: str = Field(max_length=1024)
     sha256: str = Field(default="", max_length=255)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ChatReadReceipt(SQLModel, table=True):
@@ -117,7 +119,7 @@ class ChatReadReceipt(SQLModel, table=True):
     message_id: int = Field(foreign_key="chat_message_envelopes.id", index=True)
     user_id: int = Field(foreign_key="user.id", index=True)
     device_id: Optional[int] = Field(default=None, foreign_key="chat_devices.id", index=True)
-    read_at: datetime = Field(default_factory=datetime.utcnow)
+    read_at: datetime = Field(default_factory=utc_now)
 
 
 class ChatKeyBackup(SQLModel, table=True):
@@ -129,8 +131,8 @@ class ChatKeyBackup(SQLModel, table=True):
     backup_version: str = Field(default="v1", max_length=20)
     salt: str = Field(max_length=1024)
     metadata_json: str = Field(default="{}")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class ChatReport(SQLModel, table=True):
@@ -141,4 +143,4 @@ class ChatReport(SQLModel, table=True):
     reported_by_user_id: int = Field(foreign_key="user.id", index=True)
     reason: str = Field(max_length=255)
     metadata_json: str = Field(default="{}")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)

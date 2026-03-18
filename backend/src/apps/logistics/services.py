@@ -7,10 +7,14 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from src.apps.core.time import utc_now
 from src.apps.logistics.models import (
     Branch,
+    BranchInventoryMovement,
     DeliveryAgent,
     DeliveryAgentStatus,
+    DeliveryException,
+    DeliveryExceptionStatus,
     DeliveryZone,
     Hub,
     LineHaulTrip,
@@ -35,24 +39,59 @@ async def get_zone_by_pincode(pincode: str, db: AsyncSession) -> DeliveryZone | 
     return None
 
 
-async def quote_shipping(pincode: str, cod: bool, db: AsyncSession) -> dict[str, object]:
+async def quote_shipping(
+    pincode: str,
+    cod: bool,
+    db: AsyncSession,
+    *,
+    shipping_option_code: str | None = None,
+) -> dict[str, object]:
     zone = await get_zone_by_pincode(pincode, db)
     if zone is None:
+        option = None
+        if shipping_option_code:
+            option = (
+                await db.execute(
+                    select(ShippingOption).where(
+                        ShippingOption.code == shipping_option_code,
+                        ShippingOption.zone_id == None,  # noqa: E711
+                        ShippingOption.is_active == True,  # noqa: E712
+                    )
+                )
+            ).scalars().first()
+        else:
+            option = (
+                await db.execute(
+                    select(ShippingOption).where(
+                        ShippingOption.zone_id == None,  # noqa: E711
+                        ShippingOption.is_active == True,  # noqa: E712
+                    ).order_by(ShippingOption.rate.asc())
+                )
+            ).scalars().first()
+        if option is None:
+            return {
+                "serviceable": False,
+                "zone_code": None,
+                "shipping_rate": 0.0,
+                "cod_enabled": False,
+                "shipping_option": None,
+            }
         return {
             "serviceable": True,
-            "zone_code": "DEFAULT",
-            "shipping_rate": 0.0,
-            "cod_enabled": True,
-            "shipping_option": None,
+            "zone_code": "GLOBAL",
+            "shipping_rate": option.rate,
+            "cod_enabled": option.cod_enabled,
+            "shipping_option": option.code,
         }
-    option = (
-        await db.execute(
-            select(ShippingOption).where(
-                ShippingOption.zone_id == zone.id,
-                ShippingOption.is_active == True,  # noqa: E712
-            ).order_by(ShippingOption.rate.asc())
-        )
-    ).scalars().first()
+    option_query = select(ShippingOption).where(
+        ShippingOption.zone_id == zone.id,
+        ShippingOption.is_active == True,  # noqa: E712
+    )
+    if shipping_option_code:
+        option_query = option_query.where(ShippingOption.code == shipping_option_code)
+    else:
+        option_query = option_query.order_by(ShippingOption.rate.asc())
+    option = (await db.execute(option_query)).scalars().first()
     effective_cod = option.cod_enabled if option else zone.cod_enabled
     if cod and not effective_cod:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="COD not supported for this zone")
@@ -98,7 +137,7 @@ async def update_shipment_tracking(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
     shipment.status = status_value
     shipment.current_location = location
-    shipment.updated_at = datetime.utcnow()
+    shipment.updated_at = utc_now()
     db.add(
         ShipmentTracking(
             shipment_id=shipment.id,
@@ -141,11 +180,11 @@ async def assign_pickup_job(pickup_job: PickupJob, agent: DeliveryAgent, db: Asy
 
 async def complete_pickup_job(pickup_job: PickupJob, location: str, db: AsyncSession) -> None:
     pickup_job.status = PickupJobStatus.PICKED_UP
-    pickup_job.picked_up_at = datetime.utcnow()
+    pickup_job.picked_up_at = utc_now()
     vendor_order = await db.get(VendorOrder, pickup_job.vendor_order_id)
     if vendor_order:
         vendor_order.status = VendorOrderStatus.SHIPPED
-        vendor_order.updated_at = datetime.utcnow()
+        vendor_order.updated_at = utc_now()
     await update_shipment_tracking(pickup_job.shipment_id, OrderStatus.SHIPPED, location, "Package picked up from vendor", db)
 
 
@@ -154,9 +193,9 @@ async def start_line_haul_trip(trip: LineHaulTrip, db: AsyncSession) -> None:
     if manifest is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Manifest not found")
     manifest.status = ShipmentManifestStatus.DISPATCHED
-    manifest.updated_at = datetime.utcnow()
+    manifest.updated_at = utc_now()
     trip.status = LineHaulTripStatus.IN_TRANSIT
-    trip.departed_at = datetime.utcnow()
+    trip.departed_at = utc_now()
     for shipment_id in json.loads(manifest.shipment_ids_json or "[]"):
         await update_shipment_tracking(shipment_id, OrderStatus.SHIPPED, "Line haul", "Manifest dispatched", db)
 
@@ -166,9 +205,9 @@ async def arrive_line_haul_trip(trip: LineHaulTrip, db: AsyncSession) -> None:
     if manifest is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Manifest not found")
     manifest.status = ShipmentManifestStatus.RECEIVED
-    manifest.updated_at = datetime.utcnow()
+    manifest.updated_at = utc_now()
     trip.status = LineHaulTripStatus.ARRIVED
-    trip.arrived_at = datetime.utcnow()
+    trip.arrived_at = utc_now()
     destination_hub = await db.get(Hub, manifest.destination_hub_id) if manifest.destination_hub_id else None
     location = destination_hub.name if destination_hub else "Destination hub"
     for shipment_id in json.loads(manifest.shipment_ids_json or "[]"):
@@ -191,7 +230,104 @@ async def assign_reverse_pickup(job: ReversePickupJob, agent: DeliveryAgent, db:
 
 async def complete_reverse_pickup(job: ReversePickupJob, db: AsyncSession) -> None:
     job.status = ReversePickupStatus.PICKED_UP
-    job.picked_up_at = datetime.utcnow()
+    job.picked_up_at = utc_now()
+
+
+async def record_branch_inventory_movement(
+    *,
+    branch_id: int,
+    shipment_id: int | None,
+    variant_id: int | None,
+    movement_type: str,
+    quantity: int,
+    notes: str,
+    db: AsyncSession,
+) -> BranchInventoryMovement:
+    movement = BranchInventoryMovement(
+        branch_id=branch_id,
+        shipment_id=shipment_id,
+        variant_id=variant_id,
+        movement_type=movement_type,
+        quantity=quantity,
+        notes=notes,
+    )
+    db.add(movement)
+    await db.flush()
+    return movement
+
+
+async def create_delivery_exception(
+    *,
+    shipment: Shipment,
+    exception_type: str,
+    failure_reason: str,
+    notes: str,
+    agent_id: int | None,
+    rescheduled_for: datetime | None,
+    db: AsyncSession,
+) -> DeliveryException:
+    exception = DeliveryException(
+        shipment_id=shipment.id or 0,
+        agent_id=agent_id,
+        exception_type=exception_type,
+        failure_reason=failure_reason,
+        notes=notes,
+        rescheduled_for=rescheduled_for,
+    )
+    shipment.updated_at = utc_now()
+    shipment.current_location = "Delivery exception"
+    db.add(exception)
+    db.add(
+        ShipmentTracking(
+            shipment_id=shipment.id or 0,
+            status=shipment.status,
+            location="Delivery exception",
+            remarks=failure_reason or exception_type,
+        )
+    )
+    await db.flush()
+    return exception
+
+
+async def reschedule_delivery_exception(
+    exception: DeliveryException,
+    shipment: Shipment,
+    rescheduled_for: datetime,
+    db: AsyncSession,
+) -> None:
+    exception.status = DeliveryExceptionStatus.RESCHEDULED
+    exception.rescheduled_for = rescheduled_for
+    exception.updated_at = utc_now()
+    shipment.updated_at = utc_now()
+    db.add(
+        ShipmentTracking(
+            shipment_id=shipment.id or 0,
+            status=shipment.status,
+            location=shipment.current_location or "Delivery branch",
+            remarks=f"Delivery rescheduled for {rescheduled_for.isoformat()}",
+        )
+    )
+
+
+async def initiate_rto_for_exception(
+    exception: DeliveryException,
+    shipment: Shipment,
+    db: AsyncSession,
+) -> None:
+    exception.status = DeliveryExceptionStatus.RTO_INITIATED
+    exception.rto_initiated_at = utc_now()
+    exception.updated_at = utc_now()
+    shipment.status = OrderStatus.RETURNED
+    shipment.current_location = "RTO initiated"
+    shipment.updated_at = utc_now()
+    db.add(
+        ShipmentTracking(
+            shipment_id=shipment.id or 0,
+            status=OrderStatus.RETURNED,
+            location="Origin return flow",
+            remarks="Return to origin initiated",
+        )
+    )
 
 
 async def create_shipment_proof(

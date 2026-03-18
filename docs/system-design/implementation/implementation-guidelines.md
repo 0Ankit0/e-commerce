@@ -3,6 +3,11 @@
 ## Overview
 This document provides implementation guidelines, coding standards, and best practices for developing the e-commerce platform.
 
+Current implementation note:
+
+- The live backend in this repository is a FastAPI monolith under [`backend/src`](/Users/ankit/Projects/Python/fastapi/e-commerce/backend/src), not the service-split layout shown below.
+- Use [the backend guide](/Users/ankit/Projects/Python/fastapi/e-commerce/backend/README.md) and [the backend status matrix](/Users/ankit/Projects/Python/fastapi/e-commerce/docs/system-design/implementation/backend-status-matrix.md) as the source of truth for what is implemented today.
+
 ---
 
 ## Technology Stack

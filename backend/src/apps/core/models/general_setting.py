@@ -4,6 +4,8 @@ from typing import Optional
 from sqlalchemy import Column, Text
 from sqlmodel import Field, SQLModel
 
+from src.apps.core.time import utc_now
+
 
 class GeneralSetting(SQLModel, table=True):
     __tablename__ = "generalsetting"  # type: ignore[assignment]
@@ -14,5 +16,5 @@ class GeneralSetting(SQLModel, table=True):
     db_value: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
     use_db_value: bool = Field(default=False)
     is_runtime_editable: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)

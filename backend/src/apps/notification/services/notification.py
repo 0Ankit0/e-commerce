@@ -1,12 +1,12 @@
 """Notification service — persistence plus multi-channel delivery."""
 import logging
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
+from src.apps.core.time import utc_now
 from src.apps.notification.models.notification import Notification
 from src.apps.notification.models.notification_device import (
     NotificationDevice,
@@ -66,10 +66,13 @@ async def serialize_preference(
 ) -> NotificationPreferenceRead:
     devices = await list_devices(db, pref.user_id)
     push_providers = sorted({device.provider.value for device in devices})
-    data = NotificationPreferenceRead.model_validate(pref).model_dump()
-    data["push_provider"] = push_providers[0] if len(push_providers) == 1 else None
-    data["push_providers"] = push_providers
-    return NotificationPreferenceRead.model_validate(data)
+    payload = NotificationPreferenceRead.model_validate(pref)
+    return payload.model_copy(
+        update={
+            "push_provider": push_providers[0] if len(push_providers) == 1 else None,
+            "push_providers": push_providers,
+        }
+    )
 
 
 async def register_device(
@@ -100,8 +103,8 @@ async def register_device(
     device.subscription_id = payload.subscription_id
     device.device_metadata = payload.device_metadata
     device.is_active = True
-    device.last_seen_at = datetime.now()
-    device.updated_at = datetime.now()
+    device.last_seen_at = utc_now()
+    device.updated_at = utc_now()
     db.add(device)
     await db.commit()
     await db.refresh(device)
@@ -114,7 +117,7 @@ async def remove_device(db: AsyncSession, user_id: int, device_id: int) -> bool:
     if not device or device.user_id != user_id:
         return False
     device.is_active = False
-    device.updated_at = datetime.now()
+    device.updated_at = utc_now()
     db.add(device)
     await db.commit()
     await _sync_preference_push_fields(db, user_id)
@@ -131,7 +134,7 @@ async def remove_webpush_subscription(db: AsyncSession, user_id: int) -> None:
     )
     for device in result.scalars().all():
         device.is_active = False
-        device.updated_at = datetime.now()
+        device.updated_at = utc_now()
         db.add(device)
     await db.commit()
     await _sync_preference_push_fields(db, user_id)

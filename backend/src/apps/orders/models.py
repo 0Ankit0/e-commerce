@@ -6,6 +6,8 @@ from typing import Optional
 
 from sqlmodel import Field, SQLModel
 
+from src.apps.core.time import utc_now
+
 
 class OrderStatus(str, Enum):
     PENDING_PAYMENT = "pending_payment"
@@ -50,6 +52,7 @@ class ReturnStatus(str, Enum):
     REQUESTED = "requested"
     APPROVED = "approved"
     REJECTED = "rejected"
+    REVERSE_PICKUP_ASSIGNED = "reverse_pickup_assigned"
     PICKED_UP = "picked_up"
     RECEIVED = "received"
     REFUNDED = "refunded"
@@ -59,6 +62,13 @@ class RefundStatus(str, Enum):
     PENDING = "pending"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class InventoryReservationStatus(str, Enum):
+    ACTIVE = "active"
+    COMMITTED = "committed"
+    RELEASED = "released"
+    EXPIRED = "expired"
 
 
 class Order(SQLModel, table=True):
@@ -86,7 +96,7 @@ class Order(SQLModel, table=True):
         foreign_key="payment_transactions.id",
         index=True,
     )
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
     confirmed_at: Optional[datetime] = Field(default=None)
     shipped_at: Optional[datetime] = Field(default=None)
     delivered_at: Optional[datetime] = Field(default=None)
@@ -109,7 +119,7 @@ class OrderItem(SQLModel, table=True):
     unit_price: float = Field(ge=0)
     total_price: float = Field(ge=0)
     status: VendorOrderStatus = Field(default=VendorOrderStatus.PENDING)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class VendorOrder(SQLModel, table=True):
@@ -123,8 +133,8 @@ class VendorOrder(SQLModel, table=True):
     subtotal: float = Field(default=0, ge=0)
     commission: float = Field(default=0, ge=0)
     vendor_amount: float = Field(default=0, ge=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class OrderStatusHistory(SQLModel, table=True):
@@ -134,7 +144,7 @@ class OrderStatusHistory(SQLModel, table=True):
     order_id: int = Field(foreign_key="orders.id", index=True)
     status: OrderStatus = Field(default=OrderStatus.PENDING_PAYMENT)
     note: str = Field(default="", max_length=500)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ReturnRequest(SQLModel, table=True):
@@ -148,7 +158,9 @@ class ReturnRequest(SQLModel, table=True):
     details: str = Field(default="", max_length=1000)
     refund_method: str = Field(default="original", max_length=30)
     status: ReturnStatus = Field(default=ReturnStatus.REQUESTED)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    return_window_days: int = Field(default=7, ge=0)
+    eligible_until: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=utc_now)
     resolved_at: Optional[datetime] = Field(default=None)
 
 
@@ -164,7 +176,19 @@ class RefundRecord(SQLModel, table=True):
     )
     amount: float = Field(ge=0)
     status: RefundStatus = Field(default=RefundStatus.PENDING)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ReturnEvent(SQLModel, table=True):
+    __tablename__ = "return_events"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    return_request_id: int = Field(foreign_key="return_requests.id", index=True)
+    actor_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    event_type: str = Field(max_length=80, index=True)
+    message: str = Field(default="", max_length=500)
+    payload_json: str = Field(default="{}")
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Shipment(SQLModel, table=True):
@@ -177,8 +201,8 @@ class Shipment(SQLModel, table=True):
     status: OrderStatus = Field(default=OrderStatus.CONFIRMED)
     current_location: str = Field(default="", max_length=255)
     eta: Optional[datetime] = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class ShipmentTracking(SQLModel, table=True):
@@ -189,7 +213,7 @@ class ShipmentTracking(SQLModel, table=True):
     status: OrderStatus = Field(default=OrderStatus.CONFIRMED)
     location: str = Field(default="", max_length=255)
     remarks: str = Field(default="", max_length=500)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=utc_now)
 
 
 class CheckoutIdempotency(SQLModel, table=True):
@@ -198,5 +222,48 @@ class CheckoutIdempotency(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", index=True)
     idempotency_key: str = Field(max_length=255, index=True)
+    request_fingerprint: str = Field(default="", max_length=255)
     order_id: int = Field(foreign_key="orders.id", index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class InventoryReservation(SQLModel, table=True):
+    __tablename__ = "inventory_reservations"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    cart_id: Optional[int] = Field(default=None, foreign_key="carts.id", index=True)
+    order_id: Optional[int] = Field(default=None, foreign_key="orders.id", index=True)
+    variant_id: int = Field(foreign_key="product_variants.id", index=True)
+    quantity: int = Field(ge=1)
+    status: InventoryReservationStatus = Field(default=InventoryReservationStatus.ACTIVE)
+    reserved_until: datetime = Field(default_factory=utc_now, index=True)
+    reason: str = Field(default="checkout", max_length=50)
+    idempotency_key: str = Field(default="", max_length=255, index=True)
+    metadata_json: str = Field(default="{}")
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class OrderEvent(SQLModel, table=True):
+    __tablename__ = "order_events"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    order_id: int = Field(foreign_key="orders.id", index=True)
+    actor_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    event_type: str = Field(max_length=80, index=True)
+    message: str = Field(default="", max_length=500)
+    payload_json: str = Field(default="{}")
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class OrderNote(SQLModel, table=True):
+    __tablename__ = "order_notes"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    order_id: int = Field(foreign_key="orders.id", index=True)
+    created_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    note_type: str = Field(default="internal", max_length=50)
+    note: str = Field(max_length=2000)
+    is_customer_visible: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=utc_now)

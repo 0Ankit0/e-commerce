@@ -369,6 +369,21 @@ async def test_vendor_delivery_and_customer_return_flow(client: AsyncClient, db_
         },
     )
     assert return_resp.status_code == 201, return_resp.text
+    return_request_id = return_resp.json()["return_request_id"]
+
+    admin_approve_return = await client.post(
+        f"/api/v1/admin/returns/{return_request_id}/status",
+        headers=admin_headers,
+        json={"status": "approved", "note": "Return approved"},
+    )
+    assert admin_approve_return.status_code == 200, admin_approve_return.text
+
+    return_timeline_resp = await client.get(
+        f"/api/v1/returns/{return_request_id}/timeline",
+        headers=customer_headers,
+    )
+    assert return_timeline_resp.status_code == 200, return_timeline_resp.text
+    assert len(return_timeline_resp.json()["items"]) >= 2
 
     result = await db_session.execute(select(ReturnRequest))
     assert result.scalars().first() is not None
@@ -518,9 +533,186 @@ async def test_internal_logistics_and_support_flow(client: AsyncClient, db_sessi
         json={"subject": "Need delivery update", "description": "Where is my parcel?", "order_id": order_resp.json()["order"]["id"]},
     )
     assert ticket_resp.status_code == 201, ticket_resp.text
+    ticket_id = ticket_resp.json()["ticket_id"]
+    admin_ticket_comment = await client.post(
+        f"/api/v1/admin/support/tickets/{ticket_id}/comments",
+        headers=admin_headers,
+        json={"body": "We are checking with the branch", "is_internal": False},
+    )
+    assert admin_ticket_comment.status_code == 201, admin_ticket_comment.text
+    admin_ticket_status = await client.post(
+        f"/api/v1/admin/support/tickets/{ticket_id}/status",
+        headers=admin_headers,
+        json={"status": "in_progress", "assignee_user_id": encode_id(admin.id)},
+    )
+    assert admin_ticket_status.status_code == 200, admin_ticket_status.text
+    customer_ticket_detail = await client.get(f"/api/v1/support/tickets/{ticket_id}", headers=customer_headers)
+    assert customer_ticket_detail.status_code == 200, customer_ticket_detail.text
+    assert customer_ticket_detail.json()["comments"][0]["body"] == "We are checking with the branch"
+
+    exception_resp = await client.post(
+        f"/api/v1/logistics/shipments/{shipment_id}/exceptions",
+        headers=admin_headers,
+        json={
+            "exception_type": "failed_delivery",
+            "failure_reason": "Customer unavailable",
+            "notes": "Will retry tomorrow",
+            "agent_id": agent_id,
+        },
+    )
+    assert exception_resp.status_code == 201, exception_resp.text
+    exception_id = exception_resp.json()["exception_id"]
+    reschedule_resp = await client.post(
+        f"/api/v1/logistics/exceptions/{exception_id}/reschedule",
+        headers=admin_headers,
+        json={"rescheduled_for": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()},
+    )
+    assert reschedule_resp.status_code == 200, reschedule_resp.text
+    rto_resp = await client.post(
+        f"/api/v1/logistics/exceptions/{exception_id}/rto",
+        headers=admin_headers,
+    )
+    assert rto_resp.status_code == 200, rto_resp.text
+    agent_availability_resp = await client.get("/api/v1/logistics/agents/availability", headers=admin_headers)
+    assert agent_availability_resp.status_code == 200, agent_availability_resp.text
+    branch_performance_resp = await client.get(
+        f"/api/v1/logistics/branches/{branch_id}/performance",
+        headers=admin_headers,
+    )
+    assert branch_performance_resp.status_code == 200, branch_performance_resp.text
+    hub_performance_resp = await client.get(
+        f"/api/v1/logistics/hubs/{hub_id}/performance",
+        headers=admin_headers,
+    )
+    assert hub_performance_resp.status_code == 200, hub_performance_resp.text
     admin_tickets = await client.get("/api/v1/admin/support/tickets", headers=admin_headers)
     assert admin_tickets.status_code == 200
     assert admin_tickets.json()["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_vendor_payout_content_and_reporting_flow(client: AsyncClient, db_session: AsyncSession):
+    admin, admin_headers = await _create_user_headers(
+        db_session,
+        username="ops_admin_two",
+        email="ops_admin_two@example.com",
+        is_superuser=True,
+    )
+    vendor_user, vendor_headers = await _create_user_headers(
+        db_session,
+        username="vendor_finance",
+        email="vendor_finance@example.com",
+    )
+    customer_user, customer_headers = await _create_user_headers(
+        db_session,
+        username="content_customer",
+        email="content_customer@example.com",
+    )
+    tenant = await _create_tenant_for_owner(db_session, vendor_user, "vendor-finance-tenant")
+    encode_id = __import__("src.apps.iam.utils.hashid", fromlist=["encode_id"]).encode_id
+
+    vendor_resp = await client.post(
+        "/api/v1/vendor/profile",
+        headers=vendor_headers,
+        json={
+            "tenant_id": encode_id(tenant.id),
+            "business_name": "Finance Vendor",
+            "display_name": "Finance Vendor",
+            "slug": "finance-vendor",
+        },
+    )
+    assert vendor_resp.status_code == 201, vendor_resp.text
+    vendor_id = vendor_resp.json()["vendor"]["id"]
+    under_review_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/mark-under-review", headers=admin_headers)
+    assert under_review_resp.status_code == 200, under_review_resp.text
+    resubmission_resp = await client.post(
+        f"/api/v1/admin/vendors/{vendor_id}/request-resubmission",
+        headers=admin_headers,
+        json={"reason": "Upload KYC files"},
+    )
+    assert resubmission_resp.status_code == 200, resubmission_resp.text
+
+    document_resp = await client.post(
+        "/api/v1/vendor/documents",
+        headers=vendor_headers,
+        json={"doc_type": "pan", "doc_number": "PAN123", "file_url": "https://example.com/pan.pdf"},
+    )
+    assert document_resp.status_code == 201, document_resp.text
+    bank_resp = await client.post(
+        "/api/v1/vendor/bank-accounts",
+        headers=vendor_headers,
+        json={"account_name": "Finance Vendor", "account_number": "1234567890", "ifsc_code": "NMBL0001", "bank_name": "NMB"},
+    )
+    assert bank_resp.status_code == 201, bank_resp.text
+    verify_doc_resp = await client.post(
+        f"/api/v1/admin/vendor-documents/{document_resp.json()['document_id']}/verify",
+        headers=admin_headers,
+        json={"remarks": "Looks good"},
+    )
+    assert verify_doc_resp.status_code == 200, verify_doc_resp.text
+    verify_bank_resp = await client.post(
+        f"/api/v1/admin/vendor-bank-accounts/{bank_resp.json()['bank_account_id']}/verify",
+        headers=admin_headers,
+    )
+    assert verify_bank_resp.status_code == 200, verify_bank_resp.text
+    approve_vendor_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    assert approve_vendor_resp.status_code == 200, approve_vendor_resp.text
+
+    payout_request_resp = await client.post(
+        "/api/v1/vendor/payout-requests",
+        headers=vendor_headers,
+        json={"amount": 1250, "notes": "Weekly settlement"},
+    )
+    assert payout_request_resp.status_code == 201, payout_request_resp.text
+    payout_request_id = payout_request_resp.json()["payout_request"]["id"]
+    approve_payout_request_resp = await client.post(
+        f"/api/v1/admin/vendor-payout-requests/{payout_request_id}/approve",
+        headers=admin_headers,
+    )
+    assert approve_payout_request_resp.status_code == 200, approve_payout_request_resp.text
+    payout_batch_resp = await client.post(
+        "/api/v1/admin/vendor-payouts/batches",
+        headers=admin_headers,
+        json={"payout_request_ids": [payout_request_id], "notes": "Friday batch"},
+    )
+    assert payout_batch_resp.status_code == 201, payout_batch_resp.text
+    settlement_export_resp = await client.get(
+        f"/api/v1/admin/vendors/{vendor_id}/settlement-export",
+        headers=admin_headers,
+    )
+    assert settlement_export_resp.status_code == 200, settlement_export_resp.text
+    assert "reference,amount,commission_amount,status" in settlement_export_resp.text
+
+    banner_resp = await client.post(
+        "/api/v1/admin/content/banners",
+        headers=admin_headers,
+        json={"title": "Dashain Sale", "subtitle": "Up to 40% off", "placement": "home", "image_url": "https://example.com/banner.jpg"},
+    )
+    assert banner_resp.status_code == 201, banner_resp.text
+    page_resp = await client.post(
+        "/api/v1/admin/content/pages",
+        headers=admin_headers,
+        json={"slug": "about-us", "title": "About Us", "body_markdown": "Trusted marketplace", "status": "published"},
+    )
+    assert page_resp.status_code == 201, page_resp.text
+    list_banners_resp = await client.get("/api/v1/content/banners", headers=customer_headers)
+    assert list_banners_resp.status_code == 200, list_banners_resp.text
+    assert list_banners_resp.json()["total"] == 1
+    static_page_resp = await client.get("/api/v1/content/pages/about-us", headers=customer_headers)
+    assert static_page_resp.status_code == 200, static_page_resp.text
+    assert static_page_resp.json()["page"]["title"] == "About Us"
+
+    report_job_resp = await client.post(
+        "/api/v1/admin/reports/jobs",
+        headers=admin_headers,
+        json={"report_type": "orders", "output_format": "csv"},
+    )
+    assert report_job_resp.status_code == 201, report_job_resp.text
+    report_jobs_resp = await client.get("/api/v1/admin/reports/jobs", headers=admin_headers)
+    assert report_jobs_resp.status_code == 200, report_jobs_resp.text
+    report_export_resp = await client.get("/api/v1/admin/reports/export?report_type=orders", headers=admin_headers)
+    assert report_export_resp.status_code == 200, report_export_resp.text
+    assert "order_id,order_number,status,payment_status,total,created_at" in report_export_resp.text
 
 
 @pytest.mark.asyncio

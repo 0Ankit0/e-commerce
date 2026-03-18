@@ -11,7 +11,12 @@
 | 3 | [high-level-design](./high-level-design/) | Sequence diagrams, domain model, DFD, architecture, C4 |
 | 4 | [detailed-design](./detailed-design/) | Class, sequence, state diagrams, ERD, API design |
 | 5 | [infrastructure](./infrastructure/) | Deployment, network, cloud architecture |
-| 6 | [implementation](./implementation/) | Implementation guidelines, C4 code diagram |
+| 6 | [implementation](./implementation/) | Implementation guidelines, C4 code diagram, backend status matrix |
+
+## Current Backend Docs
+
+- [Backend runtime/setup guide](../../backend/README.md)
+- [Backend capability status matrix](./implementation/backend-status-matrix.md)
 
 ## System Overview
 

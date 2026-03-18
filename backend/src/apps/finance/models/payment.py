@@ -3,6 +3,8 @@ from enum import Enum
 from typing import Optional
 from sqlmodel import Field, SQLModel
 
+from src.apps.core.time import utc_now
+
 
 class PaymentProvider(str, Enum):
     KHALTI = "khalti"
@@ -107,8 +109,8 @@ class PaymentTransaction(PaymentTransactionBase, table=True):
     __tablename__ = "payment_transactions" # type: ignore
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class PaymentWebhookBase(SQLModel):
@@ -142,7 +144,7 @@ class PaymentWebhook(PaymentWebhookBase, table=True):
     __tablename__ = "payment_webhooks" # type: ignore
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    received_at: datetime = Field(default_factory=datetime.now)
+    received_at: datetime = Field(default_factory=utc_now)
 
 
 class PaymentRefundStatus(str, Enum):
@@ -161,7 +163,7 @@ class PaymentRefund(SQLModel, table=True):
     destination: str = Field(default="original", max_length=50)
     reason: str = Field(default="", max_length=255)
     provider_refund_id: Optional[str] = Field(default=None, max_length=255)
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class PaymentAudit(SQLModel, table=True):
@@ -172,4 +174,4 @@ class PaymentAudit(SQLModel, table=True):
     event_type: str = Field(max_length=100, index=True)
     actor_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
     payload_json: str = Field(default="{}")
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)

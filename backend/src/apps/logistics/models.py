@@ -6,6 +6,8 @@ from typing import Optional
 
 from sqlmodel import Field, SQLModel
 
+from src.apps.core.time import utc_now
+
 
 class HubType(str, Enum):
     NATIONAL = "national"
@@ -47,8 +49,16 @@ class ReversePickupStatus(str, Enum):
     REQUESTED = "requested"
     ASSIGNED = "assigned"
     PICKED_UP = "picked_up"
+    RECEIVED = "received"
     RETURNED_TO_VENDOR = "returned_to_vendor"
     CANCELLED = "cancelled"
+
+
+class DeliveryExceptionStatus(str, Enum):
+    OPEN = "open"
+    RESCHEDULED = "rescheduled"
+    RTO_INITIATED = "rto_initiated"
+    RESOLVED = "resolved"
 
 
 class ShippingOption(SQLModel, table=True):
@@ -62,7 +72,7 @@ class ShippingOption(SQLModel, table=True):
     cod_enabled: bool = Field(default=True)
     estimated_days: int = Field(default=3, ge=0)
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class DeliveryZone(SQLModel, table=True):
@@ -77,7 +87,7 @@ class DeliveryZone(SQLModel, table=True):
     cod_enabled: bool = Field(default=True)
     is_active: bool = Field(default=True)
     shipping_rate: float = Field(default=0, ge=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Hub(SQLModel, table=True):
@@ -91,7 +101,7 @@ class Hub(SQLModel, table=True):
     state: str = Field(default="", max_length=120)
     hub_type: HubType = Field(default=HubType.LOCAL)
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Branch(SQLModel, table=True):
@@ -107,7 +117,7 @@ class Branch(SQLModel, table=True):
     state: str = Field(default="", max_length=120)
     contact_phone: str = Field(default="", max_length=20)
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class DeliveryAgent(SQLModel, table=True):
@@ -121,7 +131,7 @@ class DeliveryAgent(SQLModel, table=True):
     status: DeliveryAgentStatus = Field(default=DeliveryAgentStatus.AVAILABLE)
     capacity: int = Field(default=20, ge=0)
     current_load: int = Field(default=0, ge=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ShipmentManifest(SQLModel, table=True):
@@ -134,8 +144,8 @@ class ShipmentManifest(SQLModel, table=True):
     branch_id: Optional[int] = Field(default=None, foreign_key="logistics_branches.id", index=True)
     shipment_ids_json: str = Field(default="[]")
     status: ShipmentManifestStatus = Field(default=ShipmentManifestStatus.DRAFT)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class LineHaulTrip(SQLModel, table=True):
@@ -149,7 +159,7 @@ class LineHaulTrip(SQLModel, table=True):
     status: LineHaulTripStatus = Field(default=LineHaulTripStatus.PLANNED)
     departed_at: Optional[datetime] = Field(default=None)
     arrived_at: Optional[datetime] = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class PickupJob(SQLModel, table=True):
@@ -164,7 +174,7 @@ class PickupJob(SQLModel, table=True):
     scheduled_for: Optional[datetime] = Field(default=None)
     picked_up_at: Optional[datetime] = Field(default=None)
     failure_reason: str = Field(default="", max_length=255)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ReversePickupJob(SQLModel, table=True):
@@ -178,7 +188,8 @@ class ReversePickupJob(SQLModel, table=True):
     status: ReversePickupStatus = Field(default=ReversePickupStatus.REQUESTED)
     scheduled_for: Optional[datetime] = Field(default=None)
     picked_up_at: Optional[datetime] = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    received_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class BranchInventory(SQLModel, table=True):
@@ -189,7 +200,7 @@ class BranchInventory(SQLModel, table=True):
     shipment_id: Optional[int] = Field(default=None, foreign_key="shipments.id", index=True)
     variant_id: Optional[int] = Field(default=None, foreign_key="product_variants.id", index=True)
     quantity: int = Field(default=0, ge=0)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class ShipmentProof(SQLModel, table=True):
@@ -203,4 +214,33 @@ class ShipmentProof(SQLModel, table=True):
     photo_url: str = Field(default="", max_length=500)
     signature_url: str = Field(default="", max_length=500)
     notes: str = Field(default="", max_length=255)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class DeliveryException(SQLModel, table=True):
+    __tablename__ = "delivery_exceptions"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    shipment_id: int = Field(foreign_key="shipments.id", index=True)
+    agent_id: Optional[int] = Field(default=None, foreign_key="delivery_agents.id", index=True)
+    exception_type: str = Field(max_length=80, index=True)
+    failure_reason: str = Field(default="", max_length=255)
+    notes: str = Field(default="", max_length=500)
+    rescheduled_for: Optional[datetime] = Field(default=None)
+    rto_initiated_at: Optional[datetime] = Field(default=None)
+    status: DeliveryExceptionStatus = Field(default=DeliveryExceptionStatus.OPEN)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class BranchInventoryMovement(SQLModel, table=True):
+    __tablename__ = "branch_inventory_movements"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    branch_id: int = Field(foreign_key="logistics_branches.id", index=True)
+    shipment_id: Optional[int] = Field(default=None, foreign_key="shipments.id", index=True)
+    variant_id: Optional[int] = Field(default=None, foreign_key="product_variants.id", index=True)
+    movement_type: str = Field(max_length=40, index=True)
+    quantity: int = Field(default=0)
+    notes: str = Field(default="", max_length=255)
+    created_at: datetime = Field(default_factory=utc_now)

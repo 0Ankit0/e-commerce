@@ -1,3 +1,3 @@
-from .models import SupportTicket, SupportTicketStatus
+from .models import SupportTicket, SupportTicketComment, SupportTicketEvent, SupportTicketStatus
 
-__all__ = ["SupportTicket", "SupportTicketStatus"]
+__all__ = ["SupportTicket", "SupportTicketComment", "SupportTicketEvent", "SupportTicketStatus"]

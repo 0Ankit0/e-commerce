@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime
+import csv
+import io
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, func
 
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
+from src.apps.core.time import utc_now
 from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import decode_id_or_404
@@ -21,8 +23,11 @@ from src.apps.vendors.models import (
     VendorDocument,
     VendorDocumentStatus,
     VendorPayout,
+    VendorPayoutBatch,
+    VendorPayoutRequest,
     VendorPayoutStatus,
     VendorStatus,
+    VendorTimelineEvent,
     Warehouse,
 )
 from src.apps.vendors.services import (
@@ -30,8 +35,11 @@ from src.apps.vendors.services import (
     get_vendor_for_user,
     get_vendor_or_404,
     mark_vendor_status,
+    record_vendor_timeline_event,
     require_tenant_admin,
     serialize_vendor,
+    serialize_vendor_payout,
+    serialize_vendor_payout_request,
 )
 
 router = APIRouter()
@@ -78,6 +86,20 @@ class VendorStatusUpdateRequest(BaseModel):
     reason: str = ""
 
 
+class VendorDocumentReviewRequest(BaseModel):
+    remarks: str = ""
+
+
+class PayoutRequestCreateRequest(BaseModel):
+    amount: float = Field(gt=0)
+    notes: str = ""
+
+
+class PayoutBatchCreateRequest(BaseModel):
+    payout_request_ids: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
 @router.post("/vendor/profile", status_code=status.HTTP_201_CREATED)
 async def create_vendor_profile(
     payload: VendorCreateRequest,
@@ -106,6 +128,15 @@ async def create_vendor_profile(
     db.add(vendor)
     await db.commit()
     await db.refresh(vendor)
+    await record_vendor_timeline_event(
+        vendor=vendor,
+        event_type="vendor.profile_created",
+        message="Vendor profile submitted for review",
+        actor_user_id=current_user.id,
+        payload={"tenant_id": vendor.tenant_id},
+        db=db,
+    )
+    await db.commit()
 
     await analytics.capture(
         str(current_user.id),
@@ -160,8 +191,22 @@ async def get_my_vendor_profile(
                 "bank_name": bank.bank_name,
                 "verification_status": bank.verification_status.value,
                 "is_primary": bank.is_primary,
+                "remarks": bank.remarks,
             }
             for bank in bank_accounts
+        ],
+        "timeline": [
+            {
+                "id": encode_id(event.id or 0),
+                "event_type": event.event_type,
+                "message": event.message,
+                "created_at": event.created_at.isoformat(),
+            }
+            for event in (
+                await db.execute(
+                    select(VendorTimelineEvent).where(VendorTimelineEvent.vendor_id == vendor.id).order_by(VendorTimelineEvent.created_at.desc())
+                )
+            ).scalars().all()
         ],
     }
 
@@ -192,6 +237,15 @@ async def upload_vendor_document(
     db.add(document)
     await db.commit()
     await db.refresh(document)
+    await record_vendor_timeline_event(
+        vendor=vendor,
+        event_type="vendor.document_uploaded",
+        message=f"Document uploaded: {document.doc_type}",
+        actor_user_id=current_user.id,
+        payload={"document_id": document.id, "doc_type": document.doc_type},
+        db=db,
+    )
+    await db.commit()
     return {"document_id": encode_id(document.id)}
 
 
@@ -206,7 +260,74 @@ async def create_bank_account(
     db.add(bank)
     await db.commit()
     await db.refresh(bank)
+    await record_vendor_timeline_event(
+        vendor=vendor,
+        event_type="vendor.bank_account_added",
+        message="Bank account submitted for verification",
+        actor_user_id=current_user.id,
+        payload={"bank_account_id": bank.id},
+        db=db,
+    )
+    await db.commit()
     return {"bank_account_id": encode_id(bank.id)}
+
+
+@router.post("/vendor/documents/{document_id}/resubmit")
+async def resubmit_vendor_document(
+    document_id: str,
+    payload: VendorDocumentCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_for_user(current_user, db)
+    document = await db.get(VendorDocument, decode_id_or_404(document_id))
+    if document is None or document.vendor_id != vendor.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor document not found")
+    document.doc_type = payload.doc_type
+    document.doc_number = payload.doc_number
+    document.file_url = payload.file_url
+    document.status = VendorDocumentStatus.PENDING
+    document.remarks = ""
+    document.uploaded_at = utc_now()
+    await record_vendor_timeline_event(
+        vendor=vendor,
+        event_type="vendor.document_resubmitted",
+        message=f"Document resubmitted: {document.doc_type}",
+        actor_user_id=current_user.id,
+        payload={"document_id": document.id},
+        db=db,
+    )
+    await db.commit()
+    return {"success": True}
+
+
+@router.post("/vendor/bank-accounts/{bank_account_id}/resubmit")
+async def resubmit_bank_account(
+    bank_account_id: str,
+    payload: BankAccountCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_for_user(current_user, db)
+    bank = await db.get(BankAccount, decode_id_or_404(bank_account_id))
+    if bank is None or bank.vendor_id != vendor.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bank account not found")
+    bank.account_name = payload.account_name
+    bank.account_number = payload.account_number
+    bank.ifsc_code = payload.ifsc_code
+    bank.bank_name = payload.bank_name
+    bank.verification_status = BankAccountVerificationStatus.PENDING
+    bank.remarks = ""
+    await record_vendor_timeline_event(
+        vendor=vendor,
+        event_type="vendor.bank_account_resubmitted",
+        message="Bank account resubmitted for verification",
+        actor_user_id=current_user.id,
+        payload={"bank_account_id": bank.id},
+        db=db,
+    )
+    await db.commit()
+    return {"success": True}
 
 
 @router.get("/vendor/analytics")
@@ -241,20 +362,73 @@ async def list_vendor_payouts(
     payouts = (
         await db.execute(select(VendorPayout).where(VendorPayout.vendor_id == vendor.id).order_by(VendorPayout.created_at.desc()))
     ).scalars().all()
+    return {"items": [serialize_vendor_payout(payout) for payout in payouts], "total": len(payouts)}
+
+
+@router.get("/vendor/timeline")
+async def list_vendor_timeline(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_for_user(current_user, db)
+    events = (
+        await db.execute(
+            select(VendorTimelineEvent).where(VendorTimelineEvent.vendor_id == vendor.id).order_by(VendorTimelineEvent.created_at.desc())
+        )
+    ).scalars().all()
     return {
         "items": [
             {
-                "id": encode_id(payout.id),
-                "amount": payout.amount,
-                "commission_amount": payout.commission_amount,
-                "status": payout.status.value,
-                "reference": payout.reference,
-                "created_at": payout.created_at.isoformat(),
+                "id": encode_id(event.id or 0),
+                "event_type": event.event_type,
+                "message": event.message,
+                "created_at": event.created_at.isoformat(),
             }
-            for payout in payouts
+            for event in events
         ],
-        "total": len(payouts),
+        "total": len(events),
     }
+
+
+@router.post("/vendor/payout-requests", status_code=status.HTTP_201_CREATED)
+async def create_payout_request(
+    payload: PayoutRequestCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_for_user(current_user, db)
+    request = VendorPayoutRequest(
+        vendor_id=vendor.id,
+        requested_by_user_id=current_user.id,
+        amount=payload.amount,
+        notes=payload.notes,
+    )
+    db.add(request)
+    await record_vendor_timeline_event(
+        vendor=vendor,
+        event_type="vendor.payout_requested",
+        message="Vendor requested payout",
+        actor_user_id=current_user.id,
+        payload={"amount": payload.amount},
+        db=db,
+    )
+    await db.commit()
+    await db.refresh(request)
+    return {"payout_request": serialize_vendor_payout_request(request)}
+
+
+@router.get("/vendor/payout-requests")
+async def list_vendor_payout_requests(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_for_user(current_user, db)
+    requests = (
+        await db.execute(
+            select(VendorPayoutRequest).where(VendorPayoutRequest.vendor_id == vendor.id).order_by(VendorPayoutRequest.created_at.desc())
+        )
+    ).scalars().all()
+    return {"items": [serialize_vendor_payout_request(request) for request in requests], "total": len(requests)}
 
 
 @router.get("/admin/vendors")
@@ -274,6 +448,12 @@ async def approve_vendor(
 ):
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
     mark_vendor_status(vendor, VendorStatus.APPROVED)
+    await record_vendor_timeline_event(
+        vendor=vendor,
+        event_type="vendor.approved",
+        message="Vendor approved",
+        db=db,
+    )
     await db.commit()
     await db.refresh(vendor)
     return {"vendor": serialize_vendor(vendor)}
@@ -288,6 +468,13 @@ async def reject_vendor(
 ):
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
     mark_vendor_status(vendor, VendorStatus.REJECTED, payload.reason)
+    await record_vendor_timeline_event(
+        vendor=vendor,
+        event_type="vendor.rejected",
+        message="Vendor rejected",
+        payload={"reason": payload.reason},
+        db=db,
+    )
     await db.commit()
     await db.refresh(vendor)
     return {"vendor": serialize_vendor(vendor)}
@@ -302,14 +489,60 @@ async def suspend_vendor(
 ):
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
     mark_vendor_status(vendor, VendorStatus.SUSPENDED, payload.reason)
+    await record_vendor_timeline_event(
+        vendor=vendor,
+        event_type="vendor.suspended",
+        message="Vendor suspended",
+        payload={"reason": payload.reason},
+        db=db,
+    )
     await db.commit()
     await db.refresh(vendor)
+    return {"vendor": serialize_vendor(vendor)}
+
+
+@router.post("/admin/vendors/{vendor_id}/mark-under-review")
+async def mark_vendor_under_review(
+    vendor_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
+    mark_vendor_status(vendor, VendorStatus.UNDER_REVIEW)
+    await record_vendor_timeline_event(
+        vendor=vendor,
+        event_type="vendor.under_review",
+        message="Vendor moved to under review",
+        db=db,
+    )
+    await db.commit()
+    return {"vendor": serialize_vendor(vendor)}
+
+
+@router.post("/admin/vendors/{vendor_id}/request-resubmission")
+async def request_vendor_resubmission(
+    vendor_id: str,
+    payload: VendorDecisionRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
+    mark_vendor_status(vendor, VendorStatus.NEEDS_RESUBMISSION, payload.reason)
+    await record_vendor_timeline_event(
+        vendor=vendor,
+        event_type="vendor.resubmission_requested",
+        message="Vendor asked to resubmit verification details",
+        payload={"reason": payload.reason},
+        db=db,
+    )
+    await db.commit()
     return {"vendor": serialize_vendor(vendor)}
 
 
 @router.post("/admin/vendor-documents/{document_id}/verify")
 async def verify_vendor_document(
     document_id: str,
+    payload: VendorDocumentReviewRequest | None = None,
     _: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
@@ -317,7 +550,43 @@ async def verify_vendor_document(
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor document not found")
     document.status = VendorDocumentStatus.VERIFIED
-    document.verified_at = datetime.utcnow()
+    document.remarks = payload.remarks if payload else ""
+    document.verified_at = utc_now()
+    vendor = await db.get(Vendor, document.vendor_id)
+    if vendor:
+        await record_vendor_timeline_event(
+            vendor=vendor,
+            event_type="vendor.document_verified",
+            message=f"Document verified: {document.doc_type}",
+            payload={"document_id": document.id},
+            db=db,
+        )
+    await db.commit()
+    return {"success": True}
+
+
+@router.post("/admin/vendor-documents/{document_id}/reject")
+async def reject_vendor_document(
+    document_id: str,
+    payload: VendorDocumentReviewRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    document = await db.get(VendorDocument, decode_id_or_404(document_id))
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor document not found")
+    document.status = VendorDocumentStatus.REJECTED
+    document.remarks = payload.remarks
+    vendor = await db.get(Vendor, document.vendor_id)
+    if vendor:
+        mark_vendor_status(vendor, VendorStatus.NEEDS_RESUBMISSION, payload.remarks)
+        await record_vendor_timeline_event(
+            vendor=vendor,
+            event_type="vendor.document_rejected",
+            message=f"Document rejected: {document.doc_type}",
+            payload={"document_id": document.id, "remarks": payload.remarks},
+            db=db,
+        )
     await db.commit()
     return {"success": True}
 
@@ -332,6 +601,42 @@ async def verify_vendor_bank_account(
     if bank_account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bank account not found")
     bank_account.verification_status = BankAccountVerificationStatus.VERIFIED
+    bank_account.remarks = ""
+    vendor = await db.get(Vendor, bank_account.vendor_id)
+    if vendor:
+        await record_vendor_timeline_event(
+            vendor=vendor,
+            event_type="vendor.bank_verified",
+            message="Bank account verified",
+            payload={"bank_account_id": bank_account.id},
+            db=db,
+        )
+    await db.commit()
+    return {"success": True}
+
+
+@router.post("/admin/vendor-bank-accounts/{bank_account_id}/reject")
+async def reject_vendor_bank_account(
+    bank_account_id: str,
+    payload: VendorDocumentReviewRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    bank_account = await db.get(BankAccount, decode_id_or_404(bank_account_id))
+    if bank_account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bank account not found")
+    bank_account.verification_status = BankAccountVerificationStatus.FAILED
+    bank_account.remarks = payload.remarks
+    vendor = await db.get(Vendor, bank_account.vendor_id)
+    if vendor:
+        mark_vendor_status(vendor, VendorStatus.NEEDS_RESUBMISSION, payload.remarks)
+        await record_vendor_timeline_event(
+            vendor=vendor,
+            event_type="vendor.bank_rejected",
+            message="Bank account verification failed",
+            payload={"bank_account_id": bank_account.id, "remarks": payload.remarks},
+            db=db,
+        )
     await db.commit()
     return {"success": True}
 
@@ -356,12 +661,150 @@ async def create_vendor_payout(
         amount=net_amount,
         commission_amount=commission_amount,
         status=VendorPayoutStatus.PENDING,
-        reference=f"PO-{decoded_vendor_id}-{int(datetime.utcnow().timestamp())}",
+        reference=f"PO-{decoded_vendor_id}-{int(utc_now().timestamp())}",
     )
     db.add(payout)
+    await record_vendor_timeline_event(
+        vendor=vendor,
+        event_type="vendor.payout_created",
+        message="Vendor payout created",
+        payload={"payout_reference": payout.reference, "amount": payout.amount},
+        db=db,
+    )
     await db.commit()
     await db.refresh(payout)
     return {"payout_id": encode_id(payout.id)}
+
+
+@router.get("/admin/vendor-payout-requests")
+async def list_admin_vendor_payout_requests(
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    requests = (await db.execute(select(VendorPayoutRequest).order_by(VendorPayoutRequest.created_at.desc()))).scalars().all()
+    return {"items": [serialize_vendor_payout_request(request) for request in requests], "total": len(requests)}
+
+
+@router.post("/admin/vendor-payout-requests/{request_id}/approve")
+async def approve_vendor_payout_request(
+    request_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    payout_request = await db.get(VendorPayoutRequest, decode_id_or_404(request_id))
+    if payout_request is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payout request not found")
+    payout_request.status = VendorPayoutStatus.PENDING
+    payout_request.reviewed_at = utc_now()
+    payout = VendorPayout(
+        vendor_id=payout_request.vendor_id,
+        amount=payout_request.amount,
+        commission_amount=0,
+        status=VendorPayoutStatus.PENDING,
+        reference=f"REQ-{payout_request.vendor_id}-{int(utc_now().timestamp())}",
+    )
+    db.add(payout)
+    vendor = await db.get(Vendor, payout_request.vendor_id)
+    if vendor:
+        await record_vendor_timeline_event(
+            vendor=vendor,
+            event_type="vendor.payout_request_approved",
+            message="Vendor payout request approved",
+            payload={"payout_request_id": payout_request.id},
+            db=db,
+        )
+    await db.commit()
+    await db.refresh(payout)
+    return {"payout": serialize_vendor_payout(payout)}
+
+
+@router.post("/admin/vendor-payouts/batches", status_code=status.HTTP_201_CREATED)
+async def create_vendor_payout_batch(
+    payload: PayoutBatchCreateRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    decoded_ids = [decode_id_or_404(request_id) for request_id in payload.payout_request_ids]
+    payout_requests = (
+        await db.execute(select(VendorPayoutRequest).where(VendorPayoutRequest.id.in_(decoded_ids)))
+    ).scalars().all() if decoded_ids else []
+    batch = VendorPayoutBatch(
+        code=f"BATCH-{int(utc_now().timestamp())}",
+        status=VendorPayoutStatus.PENDING,
+        total_amount=round(sum(request.amount for request in payout_requests), 2),
+        item_count=len(payout_requests),
+        notes=payload.notes,
+    )
+    db.add(batch)
+    await db.flush()
+    for request in payout_requests:
+        request.status = VendorPayoutStatus.PROCESSING
+        request.reviewed_at = utc_now()
+        payout = VendorPayout(
+            vendor_id=request.vendor_id,
+            amount=request.amount,
+            commission_amount=0,
+            status=VendorPayoutStatus.PROCESSING,
+            payout_batch_id=batch.id,
+            reference=f"{batch.code}-{request.vendor_id}",
+        )
+        db.add(payout)
+    await db.commit()
+    return {"batch_id": encode_id(batch.id or 0), "code": batch.code}
+
+
+@router.get("/admin/vendor-payouts/batches")
+async def list_vendor_payout_batches(
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    batches = (await db.execute(select(VendorPayoutBatch).order_by(VendorPayoutBatch.created_at.desc()))).scalars().all()
+    return {
+        "items": [
+            {
+                "id": encode_id(batch.id or 0),
+                "code": batch.code,
+                "status": batch.status.value,
+                "total_amount": batch.total_amount,
+                "item_count": batch.item_count,
+                "notes": batch.notes,
+                "created_at": batch.created_at.isoformat(),
+            }
+            for batch in batches
+        ],
+        "total": len(batches),
+    }
+
+
+@router.get("/admin/vendors/{vendor_id}/settlement-export")
+async def export_vendor_settlement(
+    vendor_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    decoded_vendor_id = decode_id_or_404(vendor_id)
+    payouts = (
+        await db.execute(select(VendorPayout).where(VendorPayout.vendor_id == decoded_vendor_id).order_by(VendorPayout.created_at.desc()))
+    ).scalars().all()
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["reference", "amount", "commission_amount", "status", "created_at", "paid_at"])
+    for payout in payouts:
+        writer.writerow(
+            [
+                payout.reference,
+                payout.amount,
+                payout.commission_amount,
+                payout.status.value,
+                payout.created_at.isoformat(),
+                payout.paid_at.isoformat() if payout.paid_at else "",
+            ]
+        )
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="vendor-settlements-{decoded_vendor_id}.csv"'},
+    )
 
 
 def encode_id(value: int | None) -> str | None:

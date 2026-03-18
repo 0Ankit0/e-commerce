@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from src.apps.core.time import utc_now
 from src.apps.catalog.models import (
     Brand,
     Category,
@@ -122,7 +122,7 @@ async def recalculate_product_rating(product_id: int, db: AsyncSession) -> None:
         return
     product.review_count = len(reviews)
     product.avg_rating = round(sum(review.rating for review in reviews) / len(reviews), 2)
-    product.updated_at = datetime.utcnow()
+    product.updated_at = utc_now()
 
 
 def ensure_product_active(product: Product) -> None:

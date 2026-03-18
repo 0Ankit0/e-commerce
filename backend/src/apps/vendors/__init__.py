@@ -6,8 +6,11 @@ from .models import (
     VendorDocument,
     VendorDocumentStatus,
     VendorPayout,
+    VendorPayoutBatch,
+    VendorPayoutRequest,
     VendorPayoutStatus,
     VendorStatus,
+    VendorTimelineEvent,
     Warehouse,
 )
 
@@ -19,7 +22,10 @@ __all__ = [
     "VendorDocument",
     "VendorDocumentStatus",
     "VendorPayout",
+    "VendorPayoutBatch",
+    "VendorPayoutRequest",
     "VendorPayoutStatus",
     "VendorStatus",
+    "VendorTimelineEvent",
     "Warehouse",
 ]

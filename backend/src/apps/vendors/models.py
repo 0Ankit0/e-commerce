@@ -6,9 +6,13 @@ from typing import Optional
 
 from sqlmodel import Field, SQLModel
 
+from src.apps.core.time import utc_now
+
 
 class VendorStatus(str, Enum):
     PENDING = "pending"
+    NEEDS_RESUBMISSION = "needs_resubmission"
+    UNDER_REVIEW = "under_review"
     APPROVED = "approved"
     REJECTED = "rejected"
     SUSPENDED = "suspended"
@@ -51,10 +55,12 @@ class Vendor(SQLModel, table=True):
     rating: float = Field(default=0.0, ge=0, le=5)
     rating_count: int = Field(default=0, ge=0)
     product_count: int = Field(default=0, ge=0)
+    onboarding_step: str = Field(default="profile_submitted", max_length=80)
+    verification_timeline_json: str = Field(default="[]")
     approved_at: Optional[datetime] = Field(default=None)
     rejected_reason: str = Field(default="", max_length=500)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class VendorDocument(SQLModel, table=True):
@@ -67,7 +73,7 @@ class VendorDocument(SQLModel, table=True):
     file_url: str = Field(default="", max_length=500)
     status: VendorDocumentStatus = Field(default=VendorDocumentStatus.PENDING)
     remarks: str = Field(default="", max_length=500)
-    uploaded_at: datetime = Field(default_factory=datetime.utcnow)
+    uploaded_at: datetime = Field(default_factory=utc_now)
     verified_at: Optional[datetime] = Field(default=None)
 
 
@@ -84,7 +90,8 @@ class BankAccount(SQLModel, table=True):
     verification_status: BankAccountVerificationStatus = Field(
         default=BankAccountVerificationStatus.PENDING
     )
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    remarks: str = Field(default="", max_length=500)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Warehouse(SQLModel, table=True):
@@ -102,10 +109,11 @@ class Warehouse(SQLModel, table=True):
     longitude: Optional[float] = Field(default=None)
     is_default: bool = Field(default=False)
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class VendorPayoutStatus(str, Enum):
+    REQUESTED = "requested"
     PENDING = "pending"
     PROCESSING = "processing"
     PAID = "paid"
@@ -123,5 +131,46 @@ class VendorPayout(SQLModel, table=True):
     period_end: Optional[datetime] = Field(default=None)
     status: VendorPayoutStatus = Field(default=VendorPayoutStatus.PENDING)
     reference: str = Field(default="", max_length=120)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    payout_batch_id: Optional[int] = Field(default=None, foreign_key="vendor_payout_batches.id", index=True)
+    created_at: datetime = Field(default_factory=utc_now)
     paid_at: Optional[datetime] = Field(default=None)
+
+
+class VendorTimelineEvent(SQLModel, table=True):
+    __tablename__ = "vendor_timeline_events"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    vendor_id: int = Field(foreign_key="vendors.id", index=True)
+    actor_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    event_type: str = Field(max_length=80, index=True)
+    message: str = Field(default="", max_length=500)
+    payload_json: str = Field(default="{}")
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class VendorPayoutRequest(SQLModel, table=True):
+    __tablename__ = "vendor_payout_requests"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    vendor_id: int = Field(foreign_key="vendors.id", index=True)
+    requested_by_user_id: int = Field(foreign_key="user.id", index=True)
+    amount: float = Field(default=0, ge=0)
+    currency: str = Field(default="NPR", max_length=3)
+    notes: str = Field(default="", max_length=500)
+    status: VendorPayoutStatus = Field(default=VendorPayoutStatus.REQUESTED)
+    created_at: datetime = Field(default_factory=utc_now)
+    reviewed_at: Optional[datetime] = Field(default=None)
+
+
+class VendorPayoutBatch(SQLModel, table=True):
+    __tablename__ = "vendor_payout_batches"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    code: str = Field(max_length=80, unique=True, index=True)
+    status: VendorPayoutStatus = Field(default=VendorPayoutStatus.PENDING)
+    total_amount: float = Field(default=0, ge=0)
+    item_count: int = Field(default=0, ge=0)
+    settlement_export_url: str = Field(default="", max_length=500)
+    notes: str = Field(default="", max_length=500)
+    created_at: datetime = Field(default_factory=utc_now)
+    processed_at: Optional[datetime] = Field(default=None)

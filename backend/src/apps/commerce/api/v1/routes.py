@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,8 +8,15 @@ from sqlmodel import select
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
 from src.apps.catalog.models import Product, ProductVariant
-from src.apps.commerce.models import Address, CartItem, WishlistItem
-from src.apps.commerce.services import build_cart_payload, get_or_create_cart
+from src.apps.commerce.models import Address, CartItem, TaxRule, WishlistItem
+from src.apps.commerce.services import (
+    autocomplete_address_suggestions,
+    build_cart_payload,
+    calculate_tax_amount,
+    get_or_create_cart,
+)
+from src.apps.core.models import Banner, StaticPage, StaticPageStatus
+from src.apps.core.time import utc_now
 from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User, UserProfile
 from src.apps.iam.utils.hashid import decode_id_or_404, encode_id
@@ -63,6 +68,39 @@ class ApplyCouponRequest(BaseModel):
     code: str
 
 
+class TaxRuleCreateRequest(BaseModel):
+    name: str
+    country: str = "Nepal"
+    state: str = ""
+    city: str = ""
+    pincode_prefix: str = ""
+    category_id: str | None = None
+    rate: float = Field(default=0.13, ge=0)
+    priority: int = 100
+    is_active: bool = True
+
+
+class BannerCreateRequest(BaseModel):
+    title: str
+    subtitle: str = ""
+    image_url: str = ""
+    cta_label: str = ""
+    cta_url: str = ""
+    placement: str = "home"
+    is_active: bool = True
+    sort_order: int = 0
+
+
+class StaticPageCreateRequest(BaseModel):
+    slug: str
+    title: str
+    summary: str = ""
+    body_markdown: str = ""
+    status: StaticPageStatus = StaticPageStatus.DRAFT
+    seo_title: str = ""
+    seo_description: str = ""
+
+
 def _serialize_address(address: Address) -> dict[str, object]:
     return {
         "id": encode_id(address.id or 0),
@@ -104,6 +142,23 @@ async def list_addresses(
     return {
         "items": [_serialize_address(address) for address in addresses],
         "total": len(addresses),
+    }
+
+
+@router.get("/addresses/autocomplete")
+async def autocomplete_addresses(
+    q: str,
+    limit: int = 5,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return {
+        "items": await autocomplete_address_suggestions(
+            query=q,
+            current_user_id=current_user.id,
+            db=db,
+            limit=limit,
+        )
     }
 
 
@@ -245,7 +300,7 @@ async def update_cart_item(
     if item is None or item.cart_id != cart.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cart item not found")
     item.quantity = payload.quantity
-    cart.updated_at = datetime.utcnow()
+    cart.updated_at = utc_now()
     await db.commit()
     return await build_cart_payload(cart, db)
 
@@ -294,6 +349,57 @@ async def list_wishlist(
         if product:
             payload.append({"id": encode_id(item.id or 0), "product_id": encode_id(product.id or 0), "name": product.name})
     return {"items": payload, "total": len(payload)}
+
+
+@router.get("/content/banners")
+async def list_active_banners(
+    placement: str = "home",
+    db: AsyncSession = Depends(get_db),
+):
+    banners = (
+        await db.execute(
+            select(Banner).where(Banner.placement == placement, Banner.is_active == True).order_by(Banner.sort_order.asc(), Banner.id.desc())  # noqa: E712
+        )
+    ).scalars().all()
+    return {
+        "items": [
+            {
+                "id": encode_id(banner.id or 0),
+                "title": banner.title,
+                "subtitle": banner.subtitle,
+                "image_url": banner.image_url,
+                "cta_label": banner.cta_label,
+                "cta_url": banner.cta_url,
+                "placement": banner.placement,
+            }
+            for banner in banners
+        ],
+        "total": len(banners),
+    }
+
+
+@router.get("/content/pages/{slug}")
+async def get_static_page(
+    slug: str,
+    db: AsyncSession = Depends(get_db),
+):
+    page = (
+        await db.execute(select(StaticPage).where(StaticPage.slug == slug, StaticPage.status == StaticPageStatus.PUBLISHED))
+    ).scalars().first()
+    if page is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Page not found")
+    return {
+        "page": {
+            "id": encode_id(page.id or 0),
+            "slug": page.slug,
+            "title": page.title,
+            "summary": page.summary,
+            "body_markdown": page.body_markdown,
+            "seo_title": page.seo_title,
+            "seo_description": page.seo_description,
+            "published_at": page.published_at.isoformat() if page.published_at else None,
+        }
+    }
 
 
 @router.post("/wishlist/{product_id}", status_code=status.HTTP_201_CREATED)
@@ -374,6 +480,77 @@ async def list_customers(
     return {"items": items, "total": len(items)}
 
 
+@router.post("/admin/content/banners", status_code=status.HTTP_201_CREATED)
+async def create_banner(
+    payload: BannerCreateRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    banner = Banner(**payload.model_dump())
+    db.add(banner)
+    await db.commit()
+    await db.refresh(banner)
+    return {"banner_id": encode_id(banner.id or 0)}
+
+
+@router.get("/admin/content/banners")
+async def list_admin_banners(
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    banners = (await db.execute(select(Banner).order_by(Banner.sort_order.asc(), Banner.id.desc()))).scalars().all()
+    return {
+        "items": [
+            {
+                "id": encode_id(banner.id or 0),
+                "title": banner.title,
+                "placement": banner.placement,
+                "is_active": banner.is_active,
+                "sort_order": banner.sort_order,
+            }
+            for banner in banners
+        ],
+        "total": len(banners),
+    }
+
+
+@router.post("/admin/content/pages", status_code=status.HTTP_201_CREATED)
+async def create_static_page(
+    payload: StaticPageCreateRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    page = StaticPage(
+        **payload.model_dump(),
+        published_at=utc_now() if payload.status == StaticPageStatus.PUBLISHED else None,
+    )
+    db.add(page)
+    await db.commit()
+    await db.refresh(page)
+    return {"page_id": encode_id(page.id or 0)}
+
+
+@router.get("/admin/content/pages")
+async def list_admin_pages(
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    pages = (await db.execute(select(StaticPage).order_by(StaticPage.updated_at.desc()))).scalars().all()
+    return {
+        "items": [
+            {
+                "id": encode_id(page.id or 0),
+                "slug": page.slug,
+                "title": page.title,
+                "status": page.status.value,
+                "published_at": page.published_at.isoformat() if page.published_at else None,
+            }
+            for page in pages
+        ],
+        "total": len(pages),
+    }
+
+
 @router.get("/admin/customers/{customer_id}")
 async def get_customer_detail(
     customer_id: str,
@@ -401,3 +578,77 @@ async def get_customer_detail(
         },
         "orders": [{"id": encode_id(order.id or 0), "order_number": order.order_number, "total": order.total, "status": order.status.value} for order in orders],
     }
+
+
+@router.post("/admin/tax-rules", status_code=status.HTTP_201_CREATED)
+async def create_tax_rule(
+    payload: TaxRuleCreateRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    tax_rule = TaxRule(
+        name=payload.name,
+        country=payload.country,
+        state=payload.state,
+        city=payload.city,
+        pincode_prefix=payload.pincode_prefix,
+        category_id=decode_id_or_404(payload.category_id) if payload.category_id else None,
+        rate=payload.rate,
+        priority=payload.priority,
+        is_active=payload.is_active,
+    )
+    db.add(tax_rule)
+    await db.commit()
+    await db.refresh(tax_rule)
+    return {
+        "tax_rule": {
+            "id": encode_id(tax_rule.id or 0),
+            "name": tax_rule.name,
+            "rate": tax_rule.rate,
+            "priority": tax_rule.priority,
+        }
+    }
+
+
+@router.get("/admin/tax-rules")
+async def list_tax_rules(
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    rules = (await db.execute(select(TaxRule).order_by(TaxRule.priority.asc(), TaxRule.id.desc()))).scalars().all()
+    return {
+        "items": [
+            {
+                "id": encode_id(rule.id or 0),
+                "name": rule.name,
+                "country": rule.country,
+                "state": rule.state,
+                "city": rule.city,
+                "pincode_prefix": rule.pincode_prefix,
+                "category_id": encode_id(rule.category_id) if rule.category_id else None,
+                "rate": rule.rate,
+                "priority": rule.priority,
+                "is_active": rule.is_active,
+            }
+            for rule in rules
+        ],
+        "total": len(rules),
+    }
+
+
+@router.get("/admin/tax-rules/estimate")
+async def estimate_tax(
+    address_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    address = await db.get(Address, decode_id_or_404(address_id))
+    if address is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Address not found")
+    taxable_amount = 0.0
+    category_ids: set[int] = set()
+    orders = (await db.execute(select(Order).where(Order.address_id == address.id))).scalars().all()
+    for order in orders:
+        taxable_amount += order.subtotal
+    tax_payload = await calculate_tax_amount(address=address, category_ids=category_ids, taxable_amount=taxable_amount, db=db)
+    return tax_payload

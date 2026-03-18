@@ -18,6 +18,7 @@ class TestPasswordHashing:
         hashed = security.get_password_hash(password)
         assert hashed != password
         assert len(hashed) > 0
+        assert hashed.startswith("$pbkdf2-sha256$")
     
     def test_verify_correct_password(self):
         """Test password verification with correct password."""

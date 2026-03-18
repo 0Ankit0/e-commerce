@@ -1,0 +1,159 @@
+# Backend Guide
+
+## Overview
+
+This backend is a FastAPI monolith for a multi-vendor e-commerce platform. It now includes:
+
+- auth, multitenancy, RBAC, notifications, analytics, websocket presence
+- vendor onboarding, warehouse and payout workflows
+- catalog management, CSV bulk product import, advanced filtering, fuzzy search autocomplete
+- cart, wishlist, tax rules, address autocomplete, checkout fingerprinting, idempotent order creation
+- payment flows for `khalti`, `esewa`, `stripe`, `paypal`, `wallet`, and `cod`
+- inventory reservations for unpaid online checkouts, stock commit on payment confirmation, stock release on cancel
+- orders, invoices, order notes, order timeline, returns, refunds, reverse pickup, shipment proofs
+- logistics zones, shipping options, pickup jobs, manifests, line-haul trips, delivery exceptions, reschedule, RTO, branch/hub performance
+- support tickets with comments, assignment, SLA timestamps, and timeline events
+- admin content management for banners and static pages
+- admin reporting overview, CSV exports, and report-job records
+
+Hashids remain the canonical public identifier format. Numeric IDs are accepted on selected endpoints as backward-compatible input, but responses continue to return hashids.
+
+## Local Run
+
+```bash
+cd backend
+uv sync
+cp .env.example .env
+uv run uvicorn src.main:app --reload
+```
+
+The app creates tables automatically in test mode. For local development, point `DATABASE_URL` and `SYNC_DATABASE_URL` at SQLite or PostgreSQL.
+
+## Workers And Infra
+
+- Redis/Celery back async notifications and background tasks.
+- Set `REDIS_URL`, `CELERY_BROKER_URL`, and `CELERY_RESULT_BACKEND` for non-eager workers.
+- In local/dev, `CELERY_TASK_ALWAYS_EAGER=True` is enough for most API work.
+- Local media storage uses `MEDIA_DIR` and `MEDIA_URL`. S3-style storage is supported through the existing storage settings.
+
+## Key Configuration
+
+Important groups in [`.env.example`](/Users/ankit/Projects/Python/fastapi/e-commerce/backend/.env.example):
+
+- Core/auth: `SECRET_KEY`, `PASSWORD_PEPPER`, token expiry, password policy, login lockout.
+- Runtime/features: `DEBUG`, `TESTING`, `FEATURE_*`.
+- DB/cache: `DATABASE_URL`, `SYNC_DATABASE_URL`, Redis and pool settings.
+- Maps: `MAP_PROVIDER`, `OSM_MAPS_ENABLED`, `GOOGLE_MAPS_ENABLED`, `GOOGLE_MAPS_API_KEY`.
+- Payments: `KHALTI_*`, `ESEWA_*`, `STRIPE_*`, `PAYPAL_*`.
+- Notifications: email, SMS, push, VAPID, FCM, OneSignal.
+- Throttling: `RATE_LIMIT_*`, burst/error spike settings.
+
+## Provider Notes
+
+### Payments
+
+Supported now:
+
+- `khalti`
+- `esewa`
+- `stripe`
+- `paypal`
+- `wallet`
+- `cod`
+
+Not implemented yet:
+
+- Razorpay
+
+### Webhooks
+
+Payment webhooks are exposed at:
+
+```text
+POST /api/v1/payments/webhooks/{provider}
+```
+
+Headers:
+
+- `X-Webhook-Signature`
+- `X-Webhook-Event`
+
+Verification accepts an HMAC-SHA256 signature of the raw request body using the provider secret. A direct secret header match is still accepted as a backward-compatible fallback.
+
+## Behavior By Module
+
+### Catalog And Inventory
+
+- Vendor bulk import endpoints:
+  - `GET /api/v1/vendor/products/import/template`
+  - `POST /api/v1/vendor/products/import/preview`
+  - `POST /api/v1/vendor/products/import/commit`
+- Product listing supports filters for price, rating, category, brand, vendor, stock state, featured state, and attribute key/value.
+- Search autocomplete uses SQL candidate selection plus application-side fuzzy scoring.
+- Inventory reservations are created for unpaid online checkouts and committed after payment confirmation.
+- Inventory summary and reorder reporting are available for vendors/admin.
+
+### Checkout And Pricing
+
+- Tax calculation is rule-driven through admin tax rules.
+- Shipping is serviceability-aware and supports explicit shipping option selection.
+- Checkout quote fingerprints protect clients from stale totals.
+- Idempotency keys are persisted and tied to checkout requests.
+- Address autocomplete prefers saved addresses and can use OSM or Google depending on config.
+
+### Orders, Returns, Refunds
+
+- Orders expose invoice, timeline, note, tracking, vendor split, and shipment data.
+- Admin can add order notes.
+- Returns enforce a policy window and now emit timeline events.
+- Payment reconciliation updates linked orders after verification, capture, void, refund, and webhooks.
+
+### Vendors
+
+- Vendor onboarding states include pending, under review, needs resubmission, approved, rejected, and suspended.
+- Document and bank-account verification support resubmission and admin review.
+- Vendor timeline events capture onboarding and payout workflow milestones.
+- Vendors can create payout requests; admins can approve requests, create payout batches, and export settlements.
+
+### Logistics And Support
+
+- Delivery exceptions support failed-delivery recording, reschedule, and RTO initiation.
+- Shipping label metadata, agent availability, branch inventory movements, and hub/branch performance endpoints are available.
+- Support tickets include assignment, SLA timestamps, customer/admin comments, and timeline events.
+
+### Content And Reporting
+
+- Admin content endpoints manage banners and static pages.
+- Public content endpoints expose active banners and published pages.
+- Admin reporting includes overview, CSV export, and persisted report-job records.
+
+## Verification
+
+The current completion pass was verified with:
+
+```bash
+cd backend
+uv run python -m compileall src
+uv run pytest -q tests/unit/notification/test_notifications.py::TestNotificationAPI::test_mark_single_read tests/unit/notification/test_notifications.py::TestNotificationAPI::test_delete_notification_endpoint tests/unit/notification/test_notifications.py::TestNotificationAPI::test_push_subscription_compatibility_wrapper_uses_device_registry tests/unit/websocket/test_websocket.py::TestWSRestEndpoints::test_online_check tests/unit/core/test_security.py::TestPasswordHashing::test_hash_password tests/integration/ecommerce/test_marketplace_flow.py
+```
+
+## Status Matrix And Future Work
+
+See [backend-status-matrix.md](/Users/ankit/Projects/Python/fastapi/e-commerce/docs/system-design/implementation/backend-status-matrix.md).
+
+Future-only items called out explicitly:
+
+- Razorpay integration
+- external route-optimization engines
+- real-time courier GPS ingestion
+- ML-grade recommendation ranking
+
+## References Consulted
+
+These official references informed the backend hardening and feature surface:
+
+- Stripe idempotent requests: https://docs.stripe.com/api/idempotent_requests
+- Stripe webhooks: https://docs.stripe.com/webhooks
+- Medusa inventory concepts and reservation items: https://docs.medusajs.com/resources/commerce-modules/inventory/concepts
+- commercetools cart discounts: https://docs.commercetools.com/api/projects/cartDiscounts
+- OWASP API Security Top 10: https://owasp.org/API-Security/

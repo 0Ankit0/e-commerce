@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from src.apps.core.config import settings
+from src.apps.core.time import utc_now
 from src.apps.finance.models.payment import PaymentProvider, PaymentStatus, PaymentTransaction
 from src.apps.finance.schemas.payment import (
     InitiatePaymentRequest,
@@ -161,7 +162,7 @@ class StripeService(BasePaymentProvider):
             "payment_status": session.payment_status,
             "payment_intent": session.payment_intent,
         })
-        tx.updated_at = datetime.now()
+        tx.updated_at = utc_now()
         db.add(tx)
         await db.commit()
         await db.refresh(tx)

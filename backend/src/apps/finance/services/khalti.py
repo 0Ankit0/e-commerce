@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.apps.core.config import settings
 from src.apps.core.http import default_timeout
+from src.apps.core.time import utc_now
 from src.apps.finance.models.payment import PaymentProvider, PaymentStatus, PaymentTransaction
 from src.apps.finance.schemas.payment import (
     InitiatePaymentRequest,
@@ -217,7 +218,7 @@ class KhaltiService(BasePaymentProvider):
         tx.status = our_status
         tx.provider_transaction_id = transaction_id_provider
         tx.extra_data = json.dumps(data)
-        tx.updated_at = datetime.now()
+        tx.updated_at = utc_now()
         db.add(tx)
         await db.commit()
         await db.refresh(tx)

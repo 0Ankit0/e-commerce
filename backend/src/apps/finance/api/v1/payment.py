@@ -6,6 +6,8 @@ POST /payments/verify       — verify / process a provider callback
 GET  /payments/{id}         — retrieve a stored transaction record
 GET  /payments/             — list transactions (authenticated users)
 """
+import hashlib
+import hmac
 import json
 from typing import Optional
 
@@ -87,6 +89,14 @@ def _webhook_secret_for(provider: PaymentProvider) -> str:
     return ""
 
 
+def _is_valid_webhook_signature(*, raw_body: bytes, provided_signature: str, secret: str) -> bool:
+    if not secret or not provided_signature:
+        return False
+    expected_hmac = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    normalized_signature = provided_signature.removeprefix("sha256=").strip()
+    return hmac.compare_digest(normalized_signature, expected_hmac) or hmac.compare_digest(provided_signature, secret)
+
+
 def _serialize_wallet_entry(entry: WalletLedger) -> dict[str, object]:
     return {
         "id": encode_id(entry.id or 0),
@@ -141,6 +151,32 @@ def _get_provider(provider: PaymentProvider) -> BasePaymentProvider:
             detail=f"Payment provider '{provider}' is not supported.",
         )
     return svc
+
+
+async def _sync_order_after_transaction(
+    tx: PaymentTransaction,
+    db: AsyncSession,
+) -> None:
+    from src.apps.orders.models import Order, OrderPaymentStatus, OrderStatus
+    from src.apps.orders.services import cancel_order, confirm_order_payment
+
+    order = (
+        await db.execute(select(Order).where(Order.payment_transaction_id == tx.id))
+    ).scalars().first()
+    if order is None:
+        order = (await db.execute(select(Order).where(Order.order_number == tx.purchase_order_id))).scalars().first()
+        if order is not None and order.payment_transaction_id is None:
+            order.payment_transaction_id = tx.id
+    if order is None:
+        return
+
+    if tx.status == PaymentStatus.COMPLETED:
+        await confirm_order_payment(order, db)
+    elif tx.status == PaymentStatus.CANCELLED and order.status == OrderStatus.PENDING_PAYMENT:
+        await cancel_order(order, db)
+        order.payment_status = OrderPaymentStatus.FAILED
+    elif tx.status == PaymentStatus.REFUNDED:
+        order.payment_status = OrderPaymentStatus.REFUNDED
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +257,9 @@ async def verify_payment(
     provider_svc = _get_provider(request_body.provider)
     try:
         result = await provider_svc.verify_payment(request_body, db)
+        tx = await db.get(PaymentTransaction, result.transaction_id)
+        if tx is not None:
+            await _sync_order_after_transaction(tx, db)
         from src.apps.finance.models.payment import PaymentStatus
         event = (
             PaymentEvents.PAYMENT_COMPLETED
@@ -256,7 +295,11 @@ async def ingest_payment_webhook(
     raw_body = await request.body()
     provided_signature = request.headers.get("X-Webhook-Signature", "")
     expected_signature = _webhook_secret_for(provider)
-    is_verified = bool(expected_signature and provided_signature == expected_signature)
+    is_verified = _is_valid_webhook_signature(
+        raw_body=raw_body,
+        provided_signature=provided_signature,
+        secret=expected_signature,
+    )
     webhook = PaymentWebhook(
         provider=provider,
         event_type=request.headers.get("X-Webhook-Event", "callback"),
@@ -296,6 +339,7 @@ async def ingest_payment_webhook(
             tx.status = PaymentStatus.COMPLETED
             tx.captured_amount = tx.amount
         webhook.transaction_id = tx.id
+        await _sync_order_after_transaction(tx, db)
         await _log_payment_audit(
             event_type="webhook.received",
             transaction_id=tx.id,
@@ -344,6 +388,7 @@ async def capture_transaction(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid capture amount")
     tx.captured_amount = capture_amount
     tx.status = PaymentStatus.COMPLETED
+    await _sync_order_after_transaction(tx, db)
     await _log_payment_audit(
         event_type="capture",
         transaction_id=tx.id,
@@ -368,6 +413,7 @@ async def void_transaction(
     if tx.status not in {PaymentStatus.INITIATED, PaymentStatus.PENDING}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Transaction cannot be voided")
     tx.status = PaymentStatus.CANCELLED
+    await _sync_order_after_transaction(tx, db)
     await _log_payment_audit(
         event_type="void",
         transaction_id=tx.id,
@@ -406,6 +452,7 @@ async def refund_transaction(
     tx.refunded_amount += payload.amount
     if tx.refunded_amount >= tx.captured_amount:
         tx.status = PaymentStatus.REFUNDED
+    await _sync_order_after_transaction(tx, db)
     if payload.destination == "wallet" and tx.user_id:
         await create_wallet_entry(
             user_id=tx.user_id,

@@ -6,17 +6,20 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
+from sqlmodel import select, func
 
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
+from src.apps.core.time import utc_now
 from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import decode_id_or_404, encode_id
 from src.apps.logistics.models import (
     Branch,
+    BranchInventoryMovement,
     DeliveryAgent,
     DeliveryAgentStatus,
+    DeliveryException,
     DeliveryZone,
     Hub,
     HubType,
@@ -33,13 +36,17 @@ from src.apps.logistics.services import (
     assign_reverse_pickup,
     complete_pickup_job,
     complete_reverse_pickup,
+    create_delivery_exception,
     create_shipment_proof,
     create_pickup_job_for_vendor_order,
     create_reverse_pickup,
     get_manifest_or_404,
     get_pickup_job_or_404,
     get_trip_or_404,
+    initiate_rto_for_exception,
     quote_shipping,
+    record_branch_inventory_movement,
+    reschedule_delivery_exception,
     start_line_haul_trip,
     update_shipment_tracking,
 )
@@ -126,6 +133,27 @@ class ShipmentProofRequest(BaseModel):
     otp_code: str = ""
     photo_url: str = ""
     signature_url: str = ""
+    notes: str = ""
+
+
+class DeliveryExceptionCreateRequest(BaseModel):
+    exception_type: str = Field(default="failed_delivery", min_length=3, max_length=80)
+    failure_reason: str = Field(default="", max_length=255)
+    notes: str = ""
+    agent_id: str | None = None
+    rescheduled_for: datetime | None = None
+
+
+class DeliveryExceptionRescheduleRequest(BaseModel):
+    rescheduled_for: datetime
+
+
+class BranchInventoryMovementCreateRequest(BaseModel):
+    branch_id: str
+    shipment_id: str | None = None
+    variant_id: str | None = None
+    movement_type: str = Field(min_length=3, max_length=40)
+    quantity: int
     notes: str = ""
 
 
@@ -318,6 +346,22 @@ async def list_agents(
     }
 
 
+@router.get("/logistics/agents/availability")
+async def get_agent_availability(
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    agents = (await db.execute(select(DeliveryAgent))).scalars().all()
+    status_counts = {status.value: 0 for status in DeliveryAgentStatus}
+    for agent in agents:
+        status_counts[agent.status.value] += 1
+    return {
+        "total_agents": len(agents),
+        "status_counts": status_counts,
+        "available_capacity": sum(max(agent.capacity - agent.current_load, 0) for agent in agents if agent.status == DeliveryAgentStatus.AVAILABLE),
+    }
+
+
 @router.post("/logistics/manifests", status_code=status.HTTP_201_CREATED)
 async def create_manifest(
     payload: ManifestCreateRequest,
@@ -423,6 +467,17 @@ async def complete_pickup(
 ):
     pickup_job = await get_pickup_job_or_404(decode_id_or_404(pickup_job_id), db)
     await complete_pickup_job(pickup_job, location, db)
+    if pickup_job.branch_id:
+        shipment = await db.get(Shipment, pickup_job.shipment_id)
+        await record_branch_inventory_movement(
+            branch_id=pickup_job.branch_id,
+            shipment_id=pickup_job.shipment_id,
+            variant_id=None,
+            movement_type="inbound_pickup",
+            quantity=1,
+            notes=f"Shipment {shipment.awb if shipment else pickup_job.shipment_id} received from vendor",
+            db=db,
+        )
     await db.commit()
     return {"success": True}
 
@@ -473,6 +528,64 @@ async def complete_return_pickup(
     return {"success": True}
 
 
+@router.post("/logistics/shipments/{shipment_id}/exceptions", status_code=status.HTTP_201_CREATED)
+async def report_delivery_exception(
+    shipment_id: str,
+    payload: DeliveryExceptionCreateRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    shipment = await db.get(Shipment, decode_id_or_404(shipment_id))
+    if shipment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
+    exception = await create_delivery_exception(
+        shipment=shipment,
+        exception_type=payload.exception_type,
+        failure_reason=payload.failure_reason,
+        notes=payload.notes,
+        agent_id=decode_id_or_404(payload.agent_id) if payload.agent_id else None,
+        rescheduled_for=payload.rescheduled_for,
+        db=db,
+    )
+    await db.commit()
+    return {"exception_id": encode_id(exception.id or 0)}
+
+
+@router.post("/logistics/exceptions/{exception_id}/reschedule")
+async def reschedule_exception(
+    exception_id: str,
+    payload: DeliveryExceptionRescheduleRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    exception = await db.get(DeliveryException, decode_id_or_404(exception_id))
+    if exception is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery exception not found")
+    shipment = await db.get(Shipment, exception.shipment_id)
+    if shipment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
+    await reschedule_delivery_exception(exception, shipment, payload.rescheduled_for, db)
+    await db.commit()
+    return {"success": True}
+
+
+@router.post("/logistics/exceptions/{exception_id}/rto")
+async def initiate_exception_rto(
+    exception_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    exception = await db.get(DeliveryException, decode_id_or_404(exception_id))
+    if exception is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery exception not found")
+    shipment = await db.get(Shipment, exception.shipment_id)
+    if shipment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
+    await initiate_rto_for_exception(exception, shipment, db)
+    await db.commit()
+    return {"success": True}
+
+
 @router.post("/logistics/shipments/{shipment_id}/status")
 async def update_shipment_status(
     shipment_id: str,
@@ -491,6 +604,30 @@ async def update_shipment_status(
     await db.commit()
     await analytics.capture("system", "shipment_status_updated", {"shipment_id": shipment.id, "status": payload.status.value})
     return {"success": True}
+
+
+@router.get("/logistics/shipments/{shipment_id}/label")
+async def get_shipping_label_metadata(
+    shipment_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    shipment = await db.get(Shipment, decode_id_or_404(shipment_id))
+    if shipment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
+    vendor_order = await db.get(VendorOrder, shipment.vendor_order_id) if shipment.vendor_order_id else None
+    return {
+        "shipment_id": encode_id(shipment.id or 0),
+        "awb": shipment.awb,
+        "carrier": "platform-logistics",
+        "label": {
+            "generated_at": utc_now().isoformat(),
+            "shipment_status": shipment.status.value,
+            "vendor_order_number": vendor_order.vendor_order_number if vendor_order else None,
+            "current_location": shipment.current_location,
+            "eta": shipment.eta.isoformat() if shipment.eta else None,
+        },
+    }
 
 
 @router.post("/logistics/shipments/{shipment_id}/pod", status_code=status.HTTP_201_CREATED)
@@ -552,4 +689,77 @@ async def list_shipment_proofs(
             for proof in proofs
         ],
         "total": len(proofs),
+    }
+
+
+@router.post("/logistics/branch-inventory/movements", status_code=status.HTTP_201_CREATED)
+async def create_inventory_movement(
+    payload: BranchInventoryMovementCreateRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    movement = await record_branch_inventory_movement(
+        branch_id=decode_id_or_404(payload.branch_id),
+        shipment_id=decode_id_or_404(payload.shipment_id) if payload.shipment_id else None,
+        variant_id=decode_id_or_404(payload.variant_id) if payload.variant_id else None,
+        movement_type=payload.movement_type,
+        quantity=payload.quantity,
+        notes=payload.notes,
+        db=db,
+    )
+    await db.commit()
+    return {"movement_id": encode_id(movement.id or 0)}
+
+
+@router.get("/logistics/branches/{branch_id}/performance")
+async def get_branch_performance(
+    branch_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    decoded_branch_id = decode_id_or_404(branch_id)
+    agents = (await db.execute(select(DeliveryAgent).where(DeliveryAgent.branch_id == decoded_branch_id))).scalars().all()
+    pickup_jobs = (await db.execute(select(PickupJob).where(PickupJob.branch_id == decoded_branch_id))).scalars().all()
+    reverse_pickups = (await db.execute(select(ReversePickupJob).where(ReversePickupJob.branch_id == decoded_branch_id))).scalars().all()
+    movements = (
+        await db.execute(select(BranchInventoryMovement).where(BranchInventoryMovement.branch_id == decoded_branch_id))
+    ).scalars().all()
+    return {
+        "branch_id": branch_id,
+        "agent_count": len(agents),
+        "active_agent_count": len([agent for agent in agents if agent.status == DeliveryAgentStatus.AVAILABLE]),
+        "pickup_jobs": len(pickup_jobs),
+        "reverse_pickups": len(reverse_pickups),
+        "inventory_movements": len(movements),
+        "total_moved_units": sum(movement.quantity for movement in movements),
+    }
+
+
+@router.get("/logistics/hubs/{hub_id}/performance")
+async def get_hub_performance(
+    hub_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    decoded_hub_id = decode_id_or_404(hub_id)
+    branches = (await db.execute(select(Branch).where(Branch.hub_id == decoded_hub_id))).scalars().all()
+    manifests = (
+        await db.execute(
+            select(ShipmentManifest).where(
+                (ShipmentManifest.origin_hub_id == decoded_hub_id) | (ShipmentManifest.destination_hub_id == decoded_hub_id)
+            )
+        )
+    ).scalars().all()
+    trips = (
+        await db.execute(select(LineHaulTrip).join(ShipmentManifest, ShipmentManifest.id == LineHaulTrip.manifest_id).where(
+            (ShipmentManifest.origin_hub_id == decoded_hub_id) | (ShipmentManifest.destination_hub_id == decoded_hub_id)
+        ))
+    ).scalars().all()
+    return {
+        "hub_id": hub_id,
+        "branch_count": len(branches),
+        "manifest_count": len(manifests),
+        "trip_count": len(trips),
+        "dispatched_manifest_count": len([manifest for manifest in manifests if manifest.status.value == "dispatched"]),
+        "received_manifest_count": len([manifest for manifest in manifests if manifest.status.value == "received"]),
     }
