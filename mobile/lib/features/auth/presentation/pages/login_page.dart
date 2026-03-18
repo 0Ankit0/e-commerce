@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -31,13 +32,17 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
-    await ref.read(authNotifierProvider.notifier).login(
-          _usernameController.text.trim(),
-          _passwordController.text,
-        );
+    await ref
+        .read(authNotifierProvider.notifier)
+        .login(_usernameController.text.trim(), _passwordController.text);
   }
 
   Future<void> _socialLogin(String provider) async {
+    if (provider == 'google' && !kIsWeb) {
+      await _nativeGoogleLogin();
+      return;
+    }
+
     final result = await Navigator.of(context).push<SocialAuthResult>(
       MaterialPageRoute(
         builder: (_) => SocialAuthWebViewPage(provider: provider),
@@ -59,6 +64,30 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     await secureStorage.saveAccessToken(result.accessToken!);
     await secureStorage.saveRefreshToken(result.refreshToken!);
     await ref.read(authNotifierProvider.notifier).refreshSession();
+  }
+
+  Future<void> _nativeGoogleLogin() async {
+    try {
+      final idToken = await ref
+          .read(nativeGoogleSignInServiceProvider)
+          .signInAndGetIdToken();
+
+      if (idToken == null) {
+        return;
+      }
+
+      await ref.read(authNotifierProvider.notifier).loginWithGoogleIdToken(
+            idToken,
+          );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Google sign-in failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   @override
@@ -110,9 +139,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 const SizedBox(height: 8),
                 Text(
                   'Sign in to your account',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Colors.grey,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: Colors.grey),
                   textAlign: TextAlign.center,
                 ).animate().fadeIn(delay: 300.ms),
                 const SizedBox(height: 40),
@@ -130,9 +159,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   prefixIcon: Icons.lock_outline,
                   obscureText: _obscurePassword,
                   suffixIcon: IconButton(
-                    icon: Icon(_obscurePassword
-                        ? Icons.visibility_off_outlined
-                        : Icons.visibility_outlined),
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                    ),
                     onPressed: () =>
                         setState(() => _obscurePassword = !_obscurePassword),
                   ),
@@ -200,10 +231,9 @@ class _SocialLoginSection extends ConsumerWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text(
                     'Or continue with',
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(color: Colors.grey),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: Colors.grey),
                   ),
                 ),
                 const Expanded(child: Divider()),

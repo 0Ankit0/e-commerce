@@ -61,35 +61,37 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
         ? (nprAmount * 100).round()
         : nprAmount.round();
 
-    final returnUrl = 'http://localhost:3000/payment-callback?provider=${_selectedProvider!.name}';
+    final returnUrl =
+        'http://localhost:3000/payment-callback?provider=${_selectedProvider!.name}';
 
     setState(() => _initiating = true);
 
     try {
       final repo = ref.read(paymentRepositoryProvider);
-      final result = await repo.initiatePayment(InitiatePaymentRequest(
-        provider: _selectedProvider!,
-        amount: amount,
-        purchaseOrderId: _orderId!,
-        purchaseOrderName: _orderNameCtrl.text.trim(),
-        returnUrl: returnUrl,
-        websiteUrl: 'http://localhost:3000',
-        customerName: _customerNameCtrl.text.trim().isEmpty
-            ? null
-            : _customerNameCtrl.text.trim(),
-        customerPhone: _customerPhoneCtrl.text.trim().isEmpty
-            ? null
-            : _customerPhoneCtrl.text.trim(),
-      ));
-
-      ref.read(analyticsServiceProvider).capture(
-        PaymentAnalyticsEvents.paymentInitiated,
-        {
-          'provider': _selectedProvider!.name,
-          'amount': nprAmount,
-          'order_id': _orderId!,
-        },
+      final result = await repo.initiatePayment(
+        InitiatePaymentRequest(
+          provider: _selectedProvider!,
+          amount: amount,
+          purchaseOrderId: _orderId!,
+          purchaseOrderName: _orderNameCtrl.text.trim(),
+          returnUrl: returnUrl,
+          websiteUrl: 'http://localhost:3000',
+          customerName: _customerNameCtrl.text.trim().isEmpty
+              ? null
+              : _customerNameCtrl.text.trim(),
+          customerPhone: _customerPhoneCtrl.text.trim().isEmpty
+              ? null
+              : _customerPhoneCtrl.text.trim(),
+        ),
       );
+
+      ref
+          .read(analyticsServiceProvider)
+          .capture(PaymentAnalyticsEvents.paymentInitiated, {
+        'provider': _selectedProvider!.name,
+        'amount': nprAmount,
+        'order_id': _orderId!,
+      });
 
       if (!mounted) return;
       setState(() => _initiating = false);
@@ -184,8 +186,9 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
   }
 
   void _showError(String msg) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
   }
 
   @override
@@ -270,9 +273,12 @@ class _PaymentForm extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('New Payment',
-                  style: theme.textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.bold)),
+              Text(
+                'New Payment',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
               const SizedBox(height: 16),
 
               // Provider chips
@@ -328,7 +334,9 @@ class _PaymentForm extends ConsumerWidget {
               // Amount
               TextFormField(
                 controller: amountCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(
                   labelText: 'Amount (NPR)',
                   hintText: 'e.g. 100',
@@ -403,14 +411,18 @@ class _PaymentForm extends ConsumerWidget {
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
                         )
                       : const Icon(Icons.open_in_new),
-                  label: Text(initiating
-                      ? 'Initiating…'
-                      : selectedProvider != null
-                          ? 'Pay with ${selectedProvider!.displayName}'
-                          : 'Select a provider'),
+                  label: Text(
+                    initiating
+                        ? 'Initiating…'
+                        : selectedProvider != null
+                            ? 'Pay with ${selectedProvider!.displayName}'
+                            : 'Select a provider',
+                  ),
                 ),
               ),
             ],
@@ -435,10 +447,9 @@ class _TransactionList extends ConsumerWidget {
       children: [
         Text(
           'Transaction History',
-          style: Theme.of(context)
-              .textTheme
-              .titleMedium
-              ?.copyWith(fontWeight: FontWeight.bold),
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 12),
         txAsync.when(
@@ -449,15 +460,18 @@ class _TransactionList extends ConsumerWidget {
                       txList.map((tx) => _TransactionTile(tx: tx)).toList(),
                 ),
           loading: () => const Center(
-              child: Padding(
-            padding: EdgeInsets.all(32),
-            child: CircularProgressIndicator.adaptive(),
-          )),
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: CircularProgressIndicator.adaptive(),
+            ),
+          ),
           error: (e, _) => Center(
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: Text('Failed to load transactions: $e',
-                  style: const TextStyle(color: Colors.red)),
+              child: Text(
+                'Failed to load transactions: $e',
+                style: const TextStyle(color: Colors.red),
+              ),
             ),
           ),
         ),
@@ -499,8 +513,10 @@ class _TransactionTile extends StatelessWidget {
           backgroundColor: _statusColor().withValues(alpha: 0.15),
           child: Icon(Icons.payment, color: _statusColor(), size: 20),
         ),
-        title: Text(tx.purchaseOrderName,
-            style: const TextStyle(fontWeight: FontWeight.w500)),
+        title: Text(
+          tx.purchaseOrderName,
+          style: const TextStyle(fontWeight: FontWeight.w500),
+        ),
         subtitle: Text('${tx.provider.displayName} · $amountDisplay'),
         trailing: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -511,9 +527,10 @@ class _TransactionTile extends StatelessWidget {
           child: Text(
             tx.status.name.toUpperCase(),
             style: TextStyle(
-                color: _statusColor(),
-                fontSize: 10,
-                fontWeight: FontWeight.bold),
+              color: _statusColor(),
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ),
       ),
@@ -534,8 +551,7 @@ class _EmptyTransactions extends StatelessWidget {
           children: [
             Icon(Icons.receipt_long_outlined, size: 48, color: Colors.grey),
             SizedBox(height: 12),
-            Text('No transactions yet',
-                style: TextStyle(color: Colors.grey)),
+            Text('No transactions yet', style: TextStyle(color: Colors.grey)),
           ],
         ),
       ),
@@ -570,9 +586,10 @@ class _CredentialHint extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title,
-              style: const TextStyle(
-                  fontWeight: FontWeight.bold, fontSize: 12)),
+          Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+          ),
           const SizedBox(height: 2),
           ...lines.map((l) => Text(l, style: const TextStyle(fontSize: 11))),
         ],

@@ -52,7 +52,9 @@ class PushRegistrationService {
       return;
     }
 
-    final app = Firebase.apps.where((candidate) => candidate.name == 'template-push');
+    final app = Firebase.apps.where(
+      (candidate) => candidate.name == 'template-push',
+    );
 
     if (app.isEmpty) {
       await Firebase.initializeApp(
@@ -83,10 +85,7 @@ class PushRegistrationService {
       'provider': 'fcm',
       'platform': _platform,
       'token': token,
-      'device_metadata': {
-        'user_id': userId,
-        'platform': _platform,
-      },
+      'device_metadata': {'user_id': userId, 'platform': _platform},
     });
   }
 
@@ -109,10 +108,7 @@ class PushRegistrationService {
       'provider': 'onesignal',
       'platform': _platform,
       'subscription_id': subscriptionId,
-      'device_metadata': {
-        'user_id': userId,
-        'platform': _platform,
-      },
+      'device_metadata': {'user_id': userId, 'platform': _platform},
     });
   }
 

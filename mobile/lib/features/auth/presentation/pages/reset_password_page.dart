@@ -41,13 +41,23 @@ class _ResetPasswordPageState extends ConsumerState<ResetPasswordPage> {
     setState(() => _isLoading = true);
     try {
       final dio = ref.read(dioClientProvider).dio;
-      await dio.post(ApiEndpoints.passwordResetConfirm, data: {
-        'token': widget.token,
-        'new_password': _newPasswordController.text,
-        'confirm_password': _confirmPasswordController.text,
-      });
-      if (mounted) setState(() { _isLoading = false; _success = true; });
-      ref.read(analyticsServiceProvider).capture(AuthAnalyticsEvents.passwordResetCompleted);
+      await dio.post(
+        ApiEndpoints.passwordResetConfirm,
+        data: {
+          'token': widget.token,
+          'new_password': _newPasswordController.text,
+          'confirm_password': _confirmPasswordController.text,
+        },
+      );
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _success = true;
+        });
+      }
+      ref
+          .read(analyticsServiceProvider)
+          .capture(AuthAnalyticsEvents.passwordResetCompleted);
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -65,7 +75,9 @@ class _ResetPasswordPageState extends ConsumerState<ResetPasswordPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        leading: BackButton(onPressed: () => context.go(AppConstants.loginRoute)),
+        leading: BackButton(
+          onPressed: () => context.go(AppConstants.loginRoute),
+        ),
         title: const Text('Reset Password'),
       ),
       body: SafeArea(
@@ -75,14 +87,17 @@ class _ResetPasswordPageState extends ConsumerState<ResetPasswordPage> {
               ? Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.check_circle_outline,
-                            size: 80, color: Colors.green)
-                        .animate()
-                        .scale(),
+                    const Icon(
+                      Icons.check_circle_outline,
+                      size: 80,
+                      color: Colors.green,
+                    ).animate().scale(),
                     const SizedBox(height: 24),
-                    Text('Password Reset Successful',
-                        style: Theme.of(context).textTheme.headlineSmall,
-                        textAlign: TextAlign.center),
+                    Text(
+                      'Password Reset Successful',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                      textAlign: TextAlign.center,
+                    ),
                     const SizedBox(height: 12),
                     const Text(
                       'Your password has been updated. You can now sign in with your new password.',
@@ -120,15 +135,21 @@ class _ResetPasswordPageState extends ConsumerState<ResetPasswordPage> {
                         prefixIcon: Icons.lock_outline,
                         obscureText: _obscureNew,
                         suffixIcon: IconButton(
-                          icon: Icon(_obscureNew
-                              ? Icons.visibility_off_outlined
-                              : Icons.visibility_outlined),
+                          icon: Icon(
+                            _obscureNew
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                          ),
                           onPressed: () =>
                               setState(() => _obscureNew = !_obscureNew),
                         ),
                         validator: (v) {
-                          if (v == null || v.isEmpty) return 'Enter new password';
-                          if (v.length < 8) return 'Password must be at least 8 characters';
+                          if (v == null || v.isEmpty) {
+                            return 'Enter new password';
+                          }
+                          if (v.length < 8) {
+                            return 'Password must be at least 8 characters';
+                          }
                           return null;
                         },
                       ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.1),
@@ -139,14 +160,19 @@ class _ResetPasswordPageState extends ConsumerState<ResetPasswordPage> {
                         prefixIcon: Icons.lock_outline,
                         obscureText: _obscureConfirm,
                         suffixIcon: IconButton(
-                          icon: Icon(_obscureConfirm
-                              ? Icons.visibility_off_outlined
-                              : Icons.visibility_outlined),
-                          onPressed: () =>
-                              setState(() => _obscureConfirm = !_obscureConfirm),
+                          icon: Icon(
+                            _obscureConfirm
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                          ),
+                          onPressed: () => setState(
+                            () => _obscureConfirm = !_obscureConfirm,
+                          ),
                         ),
                         validator: (v) {
-                          if (v == null || v.isEmpty) return 'Confirm your password';
+                          if (v == null || v.isEmpty) {
+                            return 'Confirm your password';
+                          }
                           if (v != _newPasswordController.text) {
                             return 'Passwords do not match';
                           }

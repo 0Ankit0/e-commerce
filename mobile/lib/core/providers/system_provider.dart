@@ -9,8 +9,9 @@ final systemRepositoryProvider = Provider<SystemRepository>((ref) {
   return SystemRepository(ref.watch(dioClientProvider));
 });
 
-final systemCapabilitiesProvider =
-    FutureProvider<CapabilitySummary>((ref) async {
+final systemCapabilitiesProvider = FutureProvider<CapabilitySummary>((
+  ref,
+) async {
   return ref.watch(systemRepositoryProvider).getCapabilities();
 });
 

@@ -47,9 +47,7 @@ class DioClient {
               final response = await _dio.post(
                 '/auth/refresh/?set_cookie=false',
                 data: {'refresh_token': refreshToken},
-                options: Options(
-                  headers: {'Authorization': null},
-                ),
+                options: Options(headers: {'Authorization': null}),
               );
 
               final newAccessToken = response.data['access'] as String;

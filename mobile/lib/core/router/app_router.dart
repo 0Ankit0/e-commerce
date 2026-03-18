@@ -6,9 +6,13 @@ import '../../features/auth/presentation/pages/forgot_password_page.dart';
 import '../../features/auth/presentation/pages/otp_verify_page.dart';
 import '../../features/auth/presentation/pages/reset_password_page.dart';
 import '../../features/auth/presentation/providers/auth_provider.dart';
+import '../../features/commerce/presentation/pages/cart_page.dart';
+import '../../features/commerce/presentation/pages/checkout_page.dart';
+import '../../features/commerce/presentation/pages/order_detail_page.dart';
+import '../../features/commerce/presentation/pages/orders_page.dart';
+import '../../features/commerce/presentation/pages/product_detail_page.dart';
 import '../../features/home/presentation/pages/home_page.dart';
 import '../../features/notifications/presentation/pages/notifications_page.dart';
-import '../../features/payments/presentation/pages/payments_page.dart';
 import '../../features/profile/presentation/pages/profile_page.dart';
 import '../../features/profile/presentation/pages/tokens_page.dart';
 import '../../features/settings/presentation/pages/settings_page.dart';
@@ -35,8 +39,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       if (!isAuthenticated && !onAuthPage) {
         return AppConstants.loginRoute;
       }
-      if (isAuthenticated && (location == AppConstants.loginRoute ||
-          location == AppConstants.registerRoute)) {
+      if (isAuthenticated &&
+          (location == AppConstants.loginRoute ||
+              location == AppConstants.registerRoute)) {
         return AppConstants.homeRoute;
       }
       return null;
@@ -65,7 +70,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: AppConstants.resetPasswordRoute,
         builder: (context, state) {
           final token = state.extra as String? ??
-              state.uri.queryParameters['token'] ?? '';
+              state.uri.queryParameters['token'] ??
+              '';
           return ResetPasswordPage(token: token);
         },
       ),
@@ -81,34 +87,46 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 builder: (context, state) => const HomeTab(),
                 routes: [
                   GoRoute(
-                    path: 'payments',
-                    builder: (context, state) => const PaymentsPage(),
+                    path: 'products/:productId',
+                    builder: (context, state) => ProductDetailPage(
+                      productId: state.pathParameters['productId'] ?? '',
+                    ),
+                  ),
+                  GoRoute(
+                    path: 'cart',
+                    builder: (context, state) => const CartPage(),
+                  ),
+                  GoRoute(
+                    path: 'checkout',
+                    builder: (context, state) => const CheckoutPage(),
                   ),
                 ],
               ),
             ],
           ),
-          // Branch 1: Notifications
+          // Branch 1: Orders
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: AppConstants.ordersRoute,
+                builder: (context, state) => const OrdersPage(),
+                routes: [
+                  GoRoute(
+                    path: ':orderId',
+                    builder: (context, state) => OrderDetailPage(
+                      orderId: state.pathParameters['orderId'] ?? '',
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          // Branch 2: Notifications
           StatefulShellBranch(
             routes: [
               GoRoute(
                 path: AppConstants.notificationsRoute,
                 builder: (context, state) => const NotificationsPage(),
-              ),
-            ],
-          ),
-          // Branch 2: Settings
-          StatefulShellBranch(
-            routes: [
-              GoRoute(
-                path: AppConstants.settingsRoute,
-                builder: (context, state) => const SettingsPage(),
-                routes: [
-                  GoRoute(
-                    path: 'tokens',
-                    builder: (context, state) => const TokensPage(),
-                  ),
-                ],
               ),
             ],
           ),
@@ -118,6 +136,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               GoRoute(
                 path: AppConstants.profileRoute,
                 builder: (context, state) => const ProfilePage(),
+                routes: [
+                  GoRoute(
+                    path: 'settings',
+                    builder: (context, state) => const SettingsPage(),
+                    routes: [
+                      GoRoute(
+                        path: 'tokens',
+                        builder: (context, state) => const TokensPage(),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ],
           ),

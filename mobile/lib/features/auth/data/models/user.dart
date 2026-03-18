@@ -49,7 +49,9 @@ class User {
       imageUrl: json['image_url'] as String?,
       createdAt: json['created_at'] as String?,
       bio: json['bio'] as String?,
-      roles: (json['roles'] as List<dynamic>?)?.map((e) => e as String).toList() ?? [],
+      roles:
+          (json['roles'] as List<dynamic>?)?.map((e) => e as String).toList() ??
+              [],
     );
   }
 
@@ -72,7 +74,10 @@ class User {
       };
 
   String get displayName {
-    if (firstName != null && lastName != null && firstName!.isNotEmpty && lastName!.isNotEmpty) {
+    if (firstName != null &&
+        lastName != null &&
+        firstName!.isNotEmpty &&
+        lastName!.isNotEmpty) {
       return '$firstName $lastName';
     }
     if (firstName != null && firstName!.isNotEmpty) return firstName!;
@@ -81,7 +86,9 @@ class User {
 
   String get initials {
     if (firstName != null && firstName!.isNotEmpty) {
-      final last = lastName != null && lastName!.isNotEmpty ? lastName![0].toUpperCase() : '';
+      final last = lastName != null && lastName!.isNotEmpty
+          ? lastName![0].toUpperCase()
+          : '';
       return '${firstName![0].toUpperCase()}$last';
     }
     return username.isNotEmpty ? username[0].toUpperCase() : '?';

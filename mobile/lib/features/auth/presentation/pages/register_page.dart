@@ -81,7 +81,9 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
 
     return Scaffold(
       appBar: AppBar(
-        leading: BackButton(onPressed: () => context.go(AppConstants.loginRoute)),
+        leading: BackButton(
+          onPressed: () => context.go(AppConstants.loginRoute),
+        ),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -100,10 +102,9 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                 const SizedBox(height: 8),
                 Text(
                   'Join us today',
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodyMedium
-                      ?.copyWith(color: Colors.grey),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: Colors.grey),
                 ).animate().fadeIn(delay: 100.ms),
                 const SizedBox(height: 32),
                 AppTextField(
@@ -132,15 +133,19 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
                   prefixIcon: Icons.lock_outline,
                   obscureText: _obscurePassword,
                   suffixIcon: IconButton(
-                    icon: Icon(_obscurePassword
-                        ? Icons.visibility_off_outlined
-                        : Icons.visibility_outlined),
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                    ),
                     onPressed: () =>
                         setState(() => _obscurePassword = !_obscurePassword),
                   ),
                   validator: (v) {
                     if (v == null || v.isEmpty) return 'Enter a password';
-                    if (v.length < 8) return 'Password must be at least 8 characters';
+                    if (v.length < 8) {
+                      return 'Password must be at least 8 characters';
+                    }
                     return null;
                   },
                 ).animate().fadeIn(delay: 400.ms).slideY(begin: 0.1),
@@ -196,10 +201,9 @@ class _SocialLoginSection extends ConsumerWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text(
                     'Or continue with',
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(color: Colors.grey),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: Colors.grey),
                   ),
                 ),
                 const Expanded(child: Divider()),

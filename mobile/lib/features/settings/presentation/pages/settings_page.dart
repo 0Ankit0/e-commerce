@@ -45,19 +45,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
           tabs: const [
             Tab(icon: Icon(Icons.person_outline), text: 'Account'),
             Tab(
-                icon: Icon(Icons.notifications_outlined),
-                text: 'Notifications'),
+              icon: Icon(Icons.notifications_outlined),
+              text: 'Notifications',
+            ),
             Tab(icon: Icon(Icons.security_outlined), text: 'Privacy'),
           ],
         ),
       ),
       body: TabBarView(
         controller: _tabController,
-        children: const [
-          _AccountTab(),
-          _NotificationsTab(),
-          _PrivacyTab(),
-        ],
+        children: const [_AccountTab(), _NotificationsTab(), _PrivacyTab()],
       ),
     );
   }
@@ -142,19 +139,29 @@ class _AccountTabState extends ConsumerState<_AccountTab> {
                   const Divider(height: 16),
                   Row(
                     children: [
-                      const Icon(Icons.email_outlined,
-                          size: 20, color: Colors.grey),
+                      const Icon(
+                        Icons.email_outlined,
+                        size: 20,
+                        color: Colors.grey,
+                      ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('Email',
-                                style: TextStyle(
-                                    fontSize: 12, color: Colors.grey)),
-                            Text(user.email,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w500)),
+                            const Text(
+                              'Email',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey,
+                              ),
+                            ),
+                            Text(
+                              user.email,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -175,8 +182,10 @@ class _AccountTabState extends ConsumerState<_AccountTab> {
                             ? const SizedBox(
                                 width: 16,
                                 height: 16,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2))
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
                             : const Icon(Icons.send_outlined, size: 16),
                         label: const Text('Resend Verification Email'),
                       ),
@@ -203,10 +212,9 @@ class _AccountTabState extends ConsumerState<_AccountTab> {
           ).animate().fadeIn(delay: 100.ms).slideY(begin: 0.05),
           const SizedBox(height: 16),
           const _SectionHeader(label: 'Runtime Configuration'),
-          _RuntimeSettingsCard(settingsAsync: generalSettingsAsync)
-              .animate()
-              .fadeIn(delay: 180.ms)
-              .slideY(begin: 0.05),
+          _RuntimeSettingsCard(
+            settingsAsync: generalSettingsAsync,
+          ).animate().fadeIn(delay: 180.ms).slideY(begin: 0.05),
         ],
       ),
     );
@@ -238,10 +246,7 @@ class _NotificationsTab extends ConsumerWidget {
     }
   }
 
-  Future<void> _syncCurrentDevice(
-    WidgetRef ref,
-    BuildContext context,
-  ) async {
+  Future<void> _syncCurrentDevice(WidgetRef ref, BuildContext context) async {
     try {
       final authState = ref.read(authNotifierProvider).valueOrNull;
       final user = authState?.user;
@@ -434,7 +439,8 @@ class _NotificationsTab extends ConsumerWidget {
                                       color: Colors.white,
                                       borderRadius: BorderRadius.circular(12),
                                       border: Border.all(
-                                          color: Colors.grey.shade200),
+                                        color: Colors.grey.shade200,
+                                      ),
                                     ),
                                     padding: const EdgeInsets.all(12),
                                     child: Row(
@@ -465,9 +471,13 @@ class _NotificationsTab extends ConsumerWidget {
                                         ),
                                         IconButton(
                                           onPressed: () => _removeDevice(
-                                              ref, context, device.id),
-                                          icon:
-                                              const Icon(Icons.delete_outline),
+                                            ref,
+                                            context,
+                                            device.id,
+                                          ),
+                                          icon: const Icon(
+                                            Icons.delete_outline,
+                                          ),
                                           color: Colors.red,
                                         ),
                                       ],
@@ -540,8 +550,10 @@ class _PrivacyTab extends ConsumerWidget {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.warning_amber_outlined,
-                          color: Colors.red.shade700),
+                      Icon(
+                        Icons.warning_amber_outlined,
+                        color: Colors.red.shade700,
+                      ),
                       const SizedBox(width: 8),
                       Text(
                         'Revoke All Sessions',
@@ -567,15 +579,20 @@ class _PrivacyTab extends ConsumerWidget {
                           builder: (ctx) => AlertDialog(
                             title: const Text('Revoke All Sessions'),
                             content: const Text(
-                                'This will log you out of all devices. Continue?'),
+                              'This will log you out of all devices. Continue?',
+                            ),
                             actions: [
                               TextButton(
-                                  onPressed: () => Navigator.pop(ctx, false),
-                                  child: const Text('Cancel')),
+                                onPressed: () => Navigator.pop(ctx, false),
+                                child: const Text('Cancel'),
+                              ),
                               TextButton(
-                                  onPressed: () => Navigator.pop(ctx, true),
-                                  child: const Text('Revoke All',
-                                      style: TextStyle(color: Colors.red))),
+                                onPressed: () => Navigator.pop(ctx, true),
+                                child: const Text(
+                                  'Revoke All',
+                                  style: TextStyle(color: Colors.red),
+                                ),
+                              ),
                             ],
                           ),
                         );
@@ -605,10 +622,15 @@ class _PrivacyTab extends ConsumerWidget {
                           }
                         }
                       },
-                      icon:
-                          const Icon(Icons.logout, color: Colors.red, size: 18),
-                      label: const Text('Revoke All Sessions',
-                          style: TextStyle(color: Colors.red)),
+                      icon: const Icon(
+                        Icons.logout,
+                        color: Colors.red,
+                        size: 18,
+                      ),
+                      label: const Text(
+                        'Revoke All Sessions',
+                        style: TextStyle(color: Colors.red),
+                      ),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.red),
                       ),
@@ -761,8 +783,10 @@ class _SettingsRow extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(label,
-                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              Text(
+                label,
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
               Text(
                 value,
                 style: TextStyle(
@@ -794,8 +818,11 @@ class _StatusBadge extends StatelessWidget {
       ),
       child: Text(
         label,
-        style:
-            TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 12),
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.bold,
+          fontSize: 12,
+        ),
       ),
     );
   }
@@ -849,10 +876,14 @@ class _PrivacyCard extends StatelessWidget {
     return Card(
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor:
-              Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
-          child: Icon(icon,
-              color: Theme.of(context).colorScheme.primary, size: 20),
+          backgroundColor: Theme.of(
+            context,
+          ).colorScheme.primary.withValues(alpha: 0.1),
+          child: Icon(
+            icon,
+            color: Theme.of(context).colorScheme.primary,
+            size: 20,
+          ),
         ),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
         subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),

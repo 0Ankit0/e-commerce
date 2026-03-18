@@ -18,25 +18,33 @@ class PaymentRepository {
     }
   }
 
-  Future<InitiatePaymentResponse> initiatePayment(InitiatePaymentRequest request) async {
+  Future<InitiatePaymentResponse> initiatePayment(
+    InitiatePaymentRequest request,
+  ) async {
     try {
       final response = await _dioClient.dio.post(
         ApiEndpoints.paymentInitiate,
         data: request.toJson(),
       );
-      return InitiatePaymentResponse.fromJson(response.data as Map<String, dynamic>);
+      return InitiatePaymentResponse.fromJson(
+        response.data as Map<String, dynamic>,
+      );
     } catch (e) {
       throw ErrorHandler.handle(e);
     }
   }
 
-  Future<VerifyPaymentResponse> verifyPayment(VerifyPaymentRequest request) async {
+  Future<VerifyPaymentResponse> verifyPayment(
+    VerifyPaymentRequest request,
+  ) async {
     try {
       final response = await _dioClient.dio.post(
         ApiEndpoints.paymentVerify,
         data: request.toJson(),
       );
-      return VerifyPaymentResponse.fromJson(response.data as Map<String, dynamic>);
+      return VerifyPaymentResponse.fromJson(
+        response.data as Map<String, dynamic>,
+      );
     } catch (e) {
       throw ErrorHandler.handle(e);
     }
@@ -54,9 +62,11 @@ class PaymentRepository {
     }
   }
 
-  Future<PaymentTransaction> getTransaction(int transactionId) async {
+  Future<PaymentTransaction> getTransaction(String transactionId) async {
     try {
-      final response = await _dioClient.dio.get('${ApiEndpoints.payments}$transactionId/');
+      final response = await _dioClient.dio.get(
+        '${ApiEndpoints.payments}$transactionId/',
+      );
       return PaymentTransaction.fromJson(response.data as Map<String, dynamic>);
     } catch (e) {
       throw ErrorHandler.handle(e);

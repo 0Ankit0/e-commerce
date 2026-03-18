@@ -25,7 +25,10 @@ class AnalyticsService {
     }
   }
 
-  Future<void> identify(String userId, [Map<String, Object>? properties]) async {
+  Future<void> identify(
+    String userId, [
+    Map<String, Object>? properties,
+  ]) async {
     try {
       await _adapter?.identify(userId, properties);
     } catch (e) {
@@ -41,7 +44,10 @@ class AnalyticsService {
     }
   }
 
-  Future<void> screen(String screenName, [Map<String, Object>? properties]) async {
+  Future<void> screen(
+    String screenName, [
+    Map<String, Object>? properties,
+  ]) async {
     try {
       await _adapter?.screen(screenName, properties);
     } catch (e) {
@@ -70,10 +76,16 @@ class AnalyticsService {
     bool defaultValue = false,
   }) async {
     try {
-      return await _adapter?.isFeatureFlagEnabled(flagKey, defaultValue: defaultValue) ??
+      return await _adapter?.isFeatureFlagEnabled(
+            flagKey,
+            defaultValue: defaultValue,
+          ) ??
           defaultValue;
     } catch (e) {
-      developer.log('Analytics isFeatureFlagEnabled error: $e', name: 'Analytics');
+      developer.log(
+        'Analytics isFeatureFlagEnabled error: $e',
+        name: 'Analytics',
+      );
       return defaultValue;
     }
   }
@@ -82,7 +94,10 @@ class AnalyticsService {
     try {
       return await _adapter?.getAllFeatureFlags() ?? {};
     } catch (e) {
-      developer.log('Analytics getAllFeatureFlags error: $e', name: 'Analytics');
+      developer.log(
+        'Analytics getAllFeatureFlags error: $e',
+        name: 'Analytics',
+      );
       return {};
     }
   }

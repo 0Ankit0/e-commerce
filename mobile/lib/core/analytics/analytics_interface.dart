@@ -38,7 +38,10 @@ abstract class AnalyticsAdapter {
   // ------------------------------------------------------------------
 
   /// Return the value of a feature flag, or [defaultValue] on failure.
-  Future<bool> isFeatureFlagEnabled(String flagKey, {bool defaultValue = false});
+  Future<bool> isFeatureFlagEnabled(
+    String flagKey, {
+    bool defaultValue = false,
+  });
 
   /// Return all feature flags for the current user.
   Future<Map<String, Object>> getAllFeatureFlags();

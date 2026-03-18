@@ -17,6 +17,7 @@ class ApiEndpoints {
   // Social Auth
   static const String socialProviders = '/auth/social/providers/';
   static String socialLogin(String provider) => '/auth/social/$provider/';
+  static const String socialGoogleNativeLogin = '/auth/social/google/native/';
 
   // OTP / 2FA
   static const String otpEnable = '/auth/otp/enable/';
@@ -48,4 +49,19 @@ class ApiEndpoints {
   static const String paymentProviders = '/payments/providers/';
   static const String paymentInitiate = '/payments/initiate/';
   static const String paymentVerify = '/payments/verify/';
+
+  // Commerce
+  static const String products = '/products';
+  static String productById(String id) => '/products/$id';
+  static const String categories = '/categories';
+  static const String cart = '/cart';
+  static const String cartItems = '/cart/items';
+  static String cartItemById(String id) => '/cart/items/$id';
+  static const String addresses = '/addresses';
+  static String addressDefault(String id) => '/addresses/$id/default';
+  static const String checkoutQuote = '/checkout/quote';
+  static const String checkout = '/checkout';
+  static const String orders = '/orders';
+  static String orderById(String id) => '/orders/$id';
+  static String orderTracking(String id) => '/tracking/$id';
 }

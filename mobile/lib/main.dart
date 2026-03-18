@@ -10,10 +10,10 @@ Future<void> main() async {
 
   final analytics = await buildAnalyticsService();
 
-  runApp(ProviderScope(
-    overrides: [
-      analyticsServiceProvider.overrideWithValue(analytics),
-    ],
-    child: const App(),
-  ));
+  runApp(
+    ProviderScope(
+      overrides: [analyticsServiceProvider.overrideWithValue(analytics)],
+      child: const App(),
+    ),
+  );
 }

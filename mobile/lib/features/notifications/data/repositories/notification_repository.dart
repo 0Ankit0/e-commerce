@@ -57,24 +57,28 @@ class NotificationRepository {
 
   Future<NotificationPreference> getPreferences() async {
     try {
-      final response =
-          await _dioClient.dio.get(ApiEndpoints.notificationPreferences);
+      final response = await _dioClient.dio.get(
+        ApiEndpoints.notificationPreferences,
+      );
       return NotificationPreference.fromJson(
-          response.data as Map<String, dynamic>);
+        response.data as Map<String, dynamic>,
+      );
     } catch (e) {
       throw ErrorHandler.handle(e);
     }
   }
 
   Future<NotificationPreference> updatePreferences(
-      Map<String, bool> updates) async {
+    Map<String, bool> updates,
+  ) async {
     try {
       final response = await _dioClient.dio.patch(
         ApiEndpoints.notificationPreferences,
         data: updates,
       );
       return NotificationPreference.fromJson(
-          response.data as Map<String, dynamic>);
+        response.data as Map<String, dynamic>,
+      );
     } catch (e) {
       throw ErrorHandler.handle(e);
     }
@@ -82,26 +86,29 @@ class NotificationRepository {
 
   Future<List<NotificationDevice>> getDevices() async {
     try {
-      final response = await _dioClient.dio.get(ApiEndpoints.notificationDevices);
+      final response = await _dioClient.dio.get(
+        ApiEndpoints.notificationDevices,
+      );
       final data = response.data as List<dynamic>;
       return data
-          .map((item) => NotificationDevice.fromJson(item as Map<String, dynamic>))
+          .map(
+            (item) => NotificationDevice.fromJson(item as Map<String, dynamic>),
+          )
           .toList();
     } catch (e) {
       throw ErrorHandler.handle(e);
     }
   }
 
-  Future<NotificationDevice> registerDevice(Map<String, dynamic> payload) async {
+  Future<NotificationDevice> registerDevice(
+    Map<String, dynamic> payload,
+  ) async {
     try {
       final provider = payload['provider'] as String?;
       final endpoint = provider == null
           ? ApiEndpoints.notificationDevices
           : ApiEndpoints.notificationDevicesByProvider(provider);
-      final response = await _dioClient.dio.post(
-        endpoint,
-        data: payload,
-      );
+      final response = await _dioClient.dio.post(endpoint, data: payload);
       return NotificationDevice.fromJson(response.data as Map<String, dynamic>);
     } catch (e) {
       throw ErrorHandler.handle(e);
@@ -118,7 +125,9 @@ class NotificationRepository {
 
   Future<PushConfig> getPushConfig() async {
     try {
-      final response = await _dioClient.dio.get(ApiEndpoints.notificationPushConfig);
+      final response = await _dioClient.dio.get(
+        ApiEndpoints.notificationPushConfig,
+      );
       return PushConfig.fromJson(response.data as Map<String, dynamic>);
     } catch (e) {
       throw ErrorHandler.handle(e);

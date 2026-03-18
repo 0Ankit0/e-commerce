@@ -81,7 +81,7 @@ class InitiatePaymentRequest {
 }
 
 class InitiatePaymentResponse {
-  final int transactionId;
+  final String transactionId;
   final PaymentProvider provider;
   final PaymentStatus status;
   final String? paymentUrl;
@@ -99,12 +99,16 @@ class InitiatePaymentResponse {
 
   factory InitiatePaymentResponse.fromJson(Map<String, dynamic> json) {
     return InitiatePaymentResponse(
-      transactionId: json['transaction_id'] as int,
-      provider: PaymentProvider.fromString(json['provider'] as String? ?? 'khalti'),
+      transactionId: json['transaction_id']?.toString() ?? '',
+      provider: PaymentProvider.fromString(
+        json['provider'] as String? ?? 'khalti',
+      ),
       status: PaymentStatus.fromString(json['status'] as String? ?? 'pending'),
       paymentUrl: json['payment_url'] as String?,
       providerPidx: json['provider_pidx'] as String?,
-      extra: json['extra'] as Map<String, dynamic>?,
+      extra: json['extra'] is Map
+          ? Map<String, dynamic>.from(json['extra'] as Map)
+          : null,
     );
   }
 }
@@ -115,7 +119,7 @@ class VerifyPaymentRequest {
   final String? oid;
   final String? refId;
   final String? data;
-  final int? transactionId;
+  final String? transactionId;
 
   const VerifyPaymentRequest({
     required this.provider,
@@ -138,7 +142,7 @@ class VerifyPaymentRequest {
 }
 
 class VerifyPaymentResponse {
-  final int transactionId;
+  final String transactionId;
   final PaymentProvider provider;
   final PaymentStatus status;
   final int? amount;
@@ -156,18 +160,22 @@ class VerifyPaymentResponse {
 
   factory VerifyPaymentResponse.fromJson(Map<String, dynamic> json) {
     return VerifyPaymentResponse(
-      transactionId: json['transaction_id'] as int,
-      provider: PaymentProvider.fromString(json['provider'] as String? ?? 'khalti'),
+      transactionId: json['transaction_id']?.toString() ?? '',
+      provider: PaymentProvider.fromString(
+        json['provider'] as String? ?? 'khalti',
+      ),
       status: PaymentStatus.fromString(json['status'] as String? ?? 'pending'),
       amount: json['amount'] as int?,
       providerTransactionId: json['provider_transaction_id'] as String?,
-      extra: json['extra'] as Map<String, dynamic>?,
+      extra: json['extra'] is Map
+          ? Map<String, dynamic>.from(json['extra'] as Map)
+          : null,
     );
   }
 }
 
 class PaymentTransaction {
-  final int id;
+  final String id;
   final PaymentProvider provider;
   final PaymentStatus status;
   final int amount;
@@ -197,8 +205,10 @@ class PaymentTransaction {
 
   factory PaymentTransaction.fromJson(Map<String, dynamic> json) {
     return PaymentTransaction(
-      id: json['id'] as int,
-      provider: PaymentProvider.fromString(json['provider'] as String? ?? 'khalti'),
+      id: json['id']?.toString() ?? '',
+      provider: PaymentProvider.fromString(
+        json['provider'] as String? ?? 'khalti',
+      ),
       status: PaymentStatus.fromString(json['status'] as String? ?? 'pending'),
       amount: json['amount'] as int? ?? 0,
       currency: json['currency'] as String? ?? 'NPR',

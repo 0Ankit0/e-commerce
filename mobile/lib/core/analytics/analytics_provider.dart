@@ -49,14 +49,20 @@ Future<AnalyticsService> buildAnalyticsService() async {
       final apiKey = dotenv.env['POSTHOG_API_KEY'];
       final host = dotenv.env['POSTHOG_HOST'] ?? 'https://us.i.posthog.com';
       if (apiKey != null && apiKey.isNotEmpty) {
-        adapter = await PostHogAnalyticsAdapter.init(apiKey: apiKey, host: host);
+        adapter = await PostHogAnalyticsAdapter.init(
+          apiKey: apiKey,
+          host: host,
+        );
       }
       break;
     case 'mixpanel':
       final token = dotenv.env['MIXPANEL_PROJECT_TOKEN'];
       final host = dotenv.env['MIXPANEL_API_HOST'];
       if (token != null && token.isNotEmpty) {
-        adapter = await MixpanelAnalyticsAdapter.init(token: token, serverUrl: host);
+        adapter = await MixpanelAnalyticsAdapter.init(
+          token: token,
+          serverUrl: host,
+        );
       }
       break;
     default:

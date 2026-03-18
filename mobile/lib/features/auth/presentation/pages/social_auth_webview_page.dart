@@ -41,16 +41,20 @@ class _SocialAuthWebViewPageState extends State<SocialAuthWebViewPage> {
     super.initState();
 
     final baseUrl = dotenv.env['BASE_URL'] ?? 'http://127.0.0.1:8000/api/v1';
-    final apiBase = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+    final apiBase = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
     final loginUrl = '$apiBase${ApiEndpoints.socialLogin(widget.provider)}';
 
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(NavigationDelegate(
-        onPageStarted: (_) => setState(() => _loading = true),
-        onPageFinished: (_) => setState(() => _loading = false),
-        onNavigationRequest: _onNavigationRequest,
-      ))
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageStarted: (_) => setState(() => _loading = true),
+          onPageFinished: (_) => setState(() => _loading = false),
+          onNavigationRequest: _onNavigationRequest,
+        ),
+      )
       ..loadRequest(Uri.parse(loginUrl));
   }
 
@@ -63,17 +67,21 @@ class _SocialAuthWebViewPageState extends State<SocialAuthWebViewPage> {
       final error = uri.queryParameters['error'];
 
       if (error != null) {
-        Navigator.of(context).pop(
-          SocialAuthResult(success: false, error: error),
-        );
+        Navigator.of(
+          context,
+        ).pop(SocialAuthResult(success: false, error: error));
       } else if (access != null && refresh != null) {
         Navigator.of(context).pop(
-          SocialAuthResult(success: true, accessToken: access, refreshToken: refresh),
+          SocialAuthResult(
+            success: true,
+            accessToken: access,
+            refreshToken: refresh,
+          ),
         );
       } else {
-        Navigator.of(context).pop(
-          const SocialAuthResult(success: false, error: 'oauth_failed'),
-        );
+        Navigator.of(
+          context,
+        ).pop(const SocialAuthResult(success: false, error: 'oauth_failed'));
       }
       return NavigationDecision.prevent;
     }
@@ -100,16 +108,15 @@ class _SocialAuthWebViewPageState extends State<SocialAuthWebViewPage> {
         title: Text('Sign in with $_providerLabel'),
         leading: IconButton(
           icon: const Icon(Icons.close),
-          onPressed: () => Navigator.of(context).pop(
-            const SocialAuthResult(success: false, error: 'cancelled'),
-          ),
+          onPressed: () => Navigator.of(
+            context,
+          ).pop(const SocialAuthResult(success: false, error: 'cancelled')),
         ),
       ),
       body: Stack(
         children: [
           WebViewWidget(controller: _controller),
-          if (_loading)
-            const Center(child: CircularProgressIndicator()),
+          if (_loading) const Center(child: CircularProgressIndicator()),
         ],
       ),
     );

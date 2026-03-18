@@ -24,7 +24,8 @@ class ErrorHandler {
           return ServerException(message: message, statusCode: statusCode);
         case DioExceptionType.connectionError:
           return const NetworkException(
-              message: 'No internet connection. Please check your network.');
+            message: 'No internet connection. Please check your network.',
+          );
         default:
           return AppException(message: error.message ?? 'Unknown error.');
       }

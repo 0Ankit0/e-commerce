@@ -23,9 +23,8 @@ class App extends ConsumerWidget {
       darkTheme: AppTheme.darkTheme,
       themeMode: themeMode,
       routerConfig: router,
-      builder: (context, child) => NotificationBootstrapper(
-        child: child ?? const SizedBox.shrink(),
-      ),
+      builder: (context, child) =>
+          NotificationBootstrapper(child: child ?? const SizedBox.shrink()),
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,

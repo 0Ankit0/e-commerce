@@ -26,18 +26,15 @@ class PostHogAnalyticsAdapter implements AnalyticsAdapter {
 
   @override
   Future<void> capture(String event, [Map<String, Object>? properties]) async {
-    await Posthog().capture(
-      eventName: event,
-      properties: properties,
-    );
+    await Posthog().capture(eventName: event, properties: properties);
   }
 
   @override
-  Future<void> identify(String userId, [Map<String, Object>? properties]) async {
-    await Posthog().identify(
-      userId: userId,
-      userProperties: properties,
-    );
+  Future<void> identify(
+    String userId, [
+    Map<String, Object>? properties,
+  ]) async {
+    await Posthog().identify(userId: userId, userProperties: properties);
   }
 
   @override
@@ -46,11 +43,11 @@ class PostHogAnalyticsAdapter implements AnalyticsAdapter {
   }
 
   @override
-  Future<void> screen(String screenName, [Map<String, Object>? properties]) async {
-    await Posthog().screen(
-      screenName: screenName,
-      properties: properties,
-    );
+  Future<void> screen(
+    String screenName, [
+    Map<String, Object>? properties,
+  ]) async {
+    await Posthog().screen(screenName: screenName, properties: properties);
   }
 
   @override

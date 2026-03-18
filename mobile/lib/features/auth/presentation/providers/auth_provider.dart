@@ -8,6 +8,7 @@ import '../../data/models/login_request.dart';
 import '../../data/models/register_request.dart';
 import '../../data/models/user.dart';
 import '../../data/repositories/auth_repository.dart';
+import '../../data/services/native_google_sign_in_service.dart';
 
 class AuthState {
   final User? user;
@@ -48,14 +49,21 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
   return AuthRepository(dioClient);
 });
 
+final nativeGoogleSignInServiceProvider = Provider<NativeGoogleSignInService>((
+  ref,
+) {
+  return NativeGoogleSignInService();
+});
+
 /// FutureProvider that fetches the list of enabled social auth providers from the backend.
 final socialProvidersProvider = FutureProvider<List<String>>((ref) async {
   final repo = ref.watch(authRepositoryProvider);
   return repo.getEnabledSocialProviders();
 });
 
-final authNotifierProvider =
-    AsyncNotifierProvider<AuthNotifier, AuthState>(AuthNotifier.new);
+final authNotifierProvider = AsyncNotifierProvider<AuthNotifier, AuthState>(
+  AuthNotifier.new,
+);
 
 class AuthNotifier extends AsyncNotifier<AuthState> {
   late AuthRepository _authRepository;
@@ -67,6 +75,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     _secureStorage = ref.watch(secureStorageProvider);
     return _restoreSession();
   }
+
   Future<AuthState> _restoreSession() async {
     try {
       final accessToken = await _secureStorage.getAccessToken();
@@ -87,10 +96,9 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       final authResponse = await _authRepository.login(request);
 
       if (authResponse.requiresOtp && authResponse.tempToken != null) {
-        state = AsyncData(AuthState(
-          requiresOtp: true,
-          tempToken: authResponse.tempToken,
-        ));
+        state = AsyncData(
+          AuthState(requiresOtp: true, tempToken: authResponse.tempToken),
+        );
         return;
       }
 
@@ -102,8 +110,12 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       }
       final user = await _authRepository.getMe();
       state = AsyncData(AuthState(user: user, isAuthenticated: true));
-      ref.read(analyticsServiceProvider).identify(user.id.toString(), {'email': user.email});
-      ref.read(analyticsServiceProvider).capture(AuthAnalyticsEvents.loggedIn, {'method': 'email'});
+      ref.read(analyticsServiceProvider).identify(user.id.toString(), {
+        'email': user.email,
+      });
+      ref.read(analyticsServiceProvider).capture(AuthAnalyticsEvents.loggedIn, {
+        'method': 'email',
+      });
     } on AppException catch (e) {
       state = AsyncData(AuthState(error: e.message));
     } catch (e) {
@@ -114,7 +126,10 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   Future<void> validateOtp(String otpCode, String tempToken) async {
     state = const AsyncLoading();
     try {
-      final authResponse = await _authRepository.validateOtp(otpCode, tempToken);
+      final authResponse = await _authRepository.validateOtp(
+        otpCode,
+        tempToken,
+      );
       if (authResponse.access != null) {
         await _secureStorage.saveAccessToken(authResponse.access!);
       }
@@ -134,7 +149,11 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     state = const AsyncLoading();
     try {
       final request = RegisterRequest(
-          username: username, email: email, password: password, confirmPassword: password);
+        username: username,
+        email: email,
+        password: password,
+        confirmPassword: password,
+      );
       final authResponse = await _authRepository.register(request);
       if (authResponse.access != null) {
         await _secureStorage.saveAccessToken(authResponse.access!);
@@ -144,8 +163,38 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       }
       final user = await _authRepository.getMe();
       state = AsyncData(AuthState(user: user, isAuthenticated: true));
-      ref.read(analyticsServiceProvider).identify(user.id.toString(), {'email': user.email});
+      ref.read(analyticsServiceProvider).identify(user.id.toString(), {
+        'email': user.email,
+      });
       ref.read(analyticsServiceProvider).capture(AuthAnalyticsEvents.signedUp);
+    } on AppException catch (e) {
+      state = AsyncData(AuthState(error: e.message));
+    } catch (e) {
+      state = AsyncData(AuthState(error: e.toString()));
+    }
+  }
+
+  Future<void> loginWithGoogleIdToken(String idToken) async {
+    state = const AsyncLoading();
+    try {
+      final authResponse = await _authRepository.loginWithNativeGoogle(idToken);
+      if (authResponse.access == null || authResponse.refresh == null) {
+        throw const AppException(
+          message: 'Google sign-in did not return application tokens.',
+        );
+      }
+
+      await _secureStorage.saveAccessToken(authResponse.access!);
+      await _secureStorage.saveRefreshToken(authResponse.refresh!);
+      final user = await _authRepository.getMe();
+      state = AsyncData(AuthState(user: user, isAuthenticated: true));
+      ref.read(analyticsServiceProvider).identify(user.id.toString(), {
+        'email': user.email,
+      });
+      ref.read(analyticsServiceProvider).capture(
+        AuthAnalyticsEvents.loggedInSocial,
+        {'provider': 'google'},
+      );
     } on AppException catch (e) {
       state = AsyncData(AuthState(error: e.message));
     } catch (e) {
@@ -183,11 +232,13 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     try {
       final user = await _authRepository.getMe();
       state = AsyncData(AuthState(user: user, isAuthenticated: true));
-      ref.read(analyticsServiceProvider).identify(user.id.toString(), {'email': user.email});
+      ref.read(analyticsServiceProvider).identify(user.id.toString(), {
+        'email': user.email,
+      });
       ref.read(analyticsServiceProvider).capture(
-        AuthAnalyticsEvents.loggedInSocial,
-        provider != null ? {'provider': provider} : null,
-      );
+            AuthAnalyticsEvents.loggedInSocial,
+            provider != null ? {'provider': provider} : null,
+          );
     } catch (e) {
       await _secureStorage.clearTokens();
       state = AsyncData(AuthState(error: e.toString()));

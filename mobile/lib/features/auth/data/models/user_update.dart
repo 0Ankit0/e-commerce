@@ -5,7 +5,13 @@ class UserUpdate {
   final String? phone;
   final String? password;
 
-  const UserUpdate({this.email, this.firstName, this.lastName, this.phone, this.password});
+  const UserUpdate({
+    this.email,
+    this.firstName,
+    this.lastName,
+    this.phone,
+    this.password,
+  });
 
   Map<String, dynamic> toJson() {
     final map = <String, dynamic>{};

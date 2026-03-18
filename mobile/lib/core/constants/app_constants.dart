@@ -11,11 +11,16 @@ class AppConstants {
   static const String otpVerifyRoute = '/otp-verify';
   static const String resetPasswordRoute = '/reset-password';
   static const String homeRoute = '/home';
+  static const String ordersRoute = '/home/orders';
   static const String notificationsRoute = '/home/notifications';
-  static const String settingsRoute = '/home/settings';
   static const String profileRoute = '/home/profile';
-  static const String tokensRoute = '/home/settings/tokens';
-  static const String paymentsRoute = '/home/payments';
+  static const String settingsRoute = '/home/profile/settings';
+  static const String tokensRoute = '/home/profile/settings/tokens';
+  static const String cartRoute = '/home/cart';
+  static const String checkoutRoute = '/home/checkout';
+
+  static String productRoute(String productId) => '/home/products/$productId';
+  static String orderDetailRoute(String orderId) => '/home/orders/$orderId';
 
   // Social auth — the backend redirects here after OAuth; the WebView intercepts it
   static const String socialAuthCallbackPrefix = '/auth-callback';

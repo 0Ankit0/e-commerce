@@ -6,10 +6,7 @@ import '../../data/services/push_registration_service.dart';
 import '../providers/notification_provider.dart';
 
 class NotificationBootstrapper extends ConsumerStatefulWidget {
-  const NotificationBootstrapper({
-    required this.child,
-    super.key,
-  });
+  const NotificationBootstrapper({required this.child, super.key});
 
   final Widget child;
 
@@ -30,7 +27,8 @@ class _NotificationBootstrapperState
     final authState = ref.read(authNotifierProvider).valueOrNull;
     final prefs = ref.read(notificationPrefsProvider).valueOrNull;
     final pushConfig = ref.read(pushConfigProvider).valueOrNull;
-    final devices = ref.read(notificationDevicesProvider).valueOrNull ?? const [];
+    final devices =
+        ref.read(notificationDevicesProvider).valueOrNull ?? const [];
 
     if (authState?.isAuthenticated != true ||
         authState?.user == null ||

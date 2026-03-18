@@ -8,8 +8,8 @@ final tokenRepositoryProvider = Provider<TokenRepository>((ref) {
   return TokenRepository(ref.watch(dioClientProvider));
 });
 
-final tokensProvider =
-    FutureProvider.family<PaginatedResponse<TokenTracking>, ({int skip, int limit})>(
+final tokensProvider = FutureProvider.family<PaginatedResponse<TokenTracking>,
+    ({int skip, int limit})>(
   (ref, params) => ref
       .watch(tokenRepositoryProvider)
       .getTokens(skip: params.skip, limit: params.limit),

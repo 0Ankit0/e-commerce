@@ -13,14 +13,14 @@ class _NotificationFilter {
 
 final _filterProvider = StateProvider<String>((ref) => _NotificationFilter.all);
 
-final _notificationsPageProvider =
-    FutureProvider.autoDispose<NotificationList>((ref) async {
-  final unreadOnly =
-      ref.watch(_filterProvider) == _NotificationFilter.unread;
-  return ref
-      .watch(notificationRepositoryProvider)
-      .getNotifications(unreadOnly: unreadOnly);
-});
+final _notificationsPageProvider = FutureProvider.autoDispose<NotificationList>(
+  (ref) async {
+    final unreadOnly = ref.watch(_filterProvider) == _NotificationFilter.unread;
+    return ref
+        .watch(notificationRepositoryProvider)
+        .getNotifications(unreadOnly: unreadOnly);
+  },
+);
 
 class NotificationsPage extends ConsumerWidget {
   const NotificationsPage({super.key});
@@ -53,9 +53,7 @@ class NotificationsPage extends ConsumerWidget {
             tooltip: 'Mark all read',
             onPressed: () async {
               try {
-                await ref
-                    .read(notificationRepositoryProvider)
-                    .markAllRead();
+                await ref.read(notificationRepositoryProvider).markAllRead();
                 ref.invalidate(_notificationsPageProvider);
                 ref.invalidate(unreadCountProvider);
               } catch (e) {
@@ -80,17 +78,15 @@ class NotificationsPage extends ConsumerWidget {
                 _FilterChip(
                   label: 'All',
                   selected: filter == _NotificationFilter.all,
-                  onSelected: () => ref
-                      .read(_filterProvider.notifier)
-                      .state = _NotificationFilter.all,
+                  onSelected: () => ref.read(_filterProvider.notifier).state =
+                      _NotificationFilter.all,
                 ),
                 const SizedBox(width: 8),
                 _FilterChip(
                   label: 'Unread',
                   selected: filter == _NotificationFilter.unread,
-                  onSelected: () => ref
-                      .read(_filterProvider.notifier)
-                      .state = _NotificationFilter.unread,
+                  onSelected: () => ref.read(_filterProvider.notifier).state =
+                      _NotificationFilter.unread,
                 ),
               ],
             ),
@@ -110,8 +106,10 @@ class NotificationsPage extends ConsumerWidget {
               children: [
                 const Icon(Icons.error_outline, size: 48, color: Colors.red),
                 const SizedBox(height: 12),
-                Text(ErrorHandler.handle(err).message,
-                    textAlign: TextAlign.center),
+                Text(
+                  ErrorHandler.handle(err).message,
+                  textAlign: TextAlign.center,
+                ),
                 const SizedBox(height: 12),
                 ElevatedButton(
                   onPressed: () => ref.invalidate(_notificationsPageProvider),
@@ -128,17 +126,19 @@ class NotificationsPage extends ConsumerWidget {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.notifications_none_outlined,
-                        size: 64,
-                        color: colorScheme.onSurface.withValues(alpha: 0.3)),
+                    Icon(
+                      Icons.notifications_none_outlined,
+                      size: 64,
+                      color: colorScheme.onSurface.withValues(alpha: 0.3),
+                    ),
                     const SizedBox(height: 16),
                     Text(
                       filter == _NotificationFilter.unread
                           ? 'No unread notifications'
                           : 'No notifications yet',
                       style: TextStyle(
-                          color:
-                              colorScheme.onSurface.withValues(alpha: 0.5)),
+                        color: colorScheme.onSurface.withValues(alpha: 0.5),
+                      ),
                     ),
                   ],
                 ),
@@ -192,8 +192,7 @@ class NotificationsPage extends ConsumerWidget {
                   },
                 )
                     .animate()
-                    .fadeIn(
-                        delay: Duration(milliseconds: index * 40))
+                    .fadeIn(delay: Duration(milliseconds: index * 40))
                     .slideY(begin: 0.05);
               },
             );
@@ -304,26 +303,35 @@ class _NotificationTile extends StatelessWidget {
               Text(
                 timeAgo,
                 style: TextStyle(
-                    fontSize: 11,
-                    color: colorScheme.onSurface.withValues(alpha: 0.5)),
+                  fontSize: 11,
+                  color: colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
               ),
             ],
           ),
           trailing: isUnread
               ? IconButton(
-                  icon: const Icon(Icons.check_circle_outline,
-                      color: Colors.green, size: 20),
+                  icon: const Icon(
+                    Icons.check_circle_outline,
+                    color: Colors.green,
+                    size: 20,
+                  ),
                   tooltip: 'Mark as read',
                   onPressed: onMarkRead,
                 )
               : IconButton(
-                  icon: Icon(Icons.delete_outline,
-                      color: Colors.red.withValues(alpha: 0.7), size: 20),
+                  icon: Icon(
+                    Icons.delete_outline,
+                    color: Colors.red.withValues(alpha: 0.7),
+                    size: 20,
+                  ),
                   tooltip: 'Delete',
                   onPressed: onDelete,
                 ),
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 4,
+          ),
         ),
       ),
     );

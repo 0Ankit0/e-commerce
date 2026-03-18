@@ -28,7 +28,10 @@ class MixpanelAnalyticsAdapter implements AnalyticsAdapter {
   }
 
   @override
-  Future<void> identify(String userId, [Map<String, Object>? properties]) async {
+  Future<void> identify(
+    String userId, [
+    Map<String, Object>? properties,
+  ]) async {
     _mixpanel.identify(userId);
     if (properties != null) {
       for (final entry in properties.entries) {
@@ -43,11 +46,14 @@ class MixpanelAnalyticsAdapter implements AnalyticsAdapter {
   }
 
   @override
-  Future<void> screen(String screenName, [Map<String, Object>? properties]) async {
-    _mixpanel.track('screen_view', properties: {
-      'screen': screenName,
-      ...?properties,
-    });
+  Future<void> screen(
+    String screenName, [
+    Map<String, Object>? properties,
+  ]) async {
+    _mixpanel.track(
+      'screen_view',
+      properties: {'screen': screenName, ...?properties},
+    );
   }
 
   @override
@@ -59,10 +65,9 @@ class MixpanelAnalyticsAdapter implements AnalyticsAdapter {
     _mixpanel.setGroup(groupType, groupKey);
     if (properties != null) {
       for (final entry in properties.entries) {
-        _mixpanel.getGroup(groupType, groupKey).set(
-              entry.key,
-              entry.value.toString(),
-            );
+        _mixpanel
+            .getGroup(groupType, groupKey)
+            .set(entry.key, entry.value.toString());
       }
     }
   }

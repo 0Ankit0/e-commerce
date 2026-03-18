@@ -4,9 +4,10 @@ import '../constants/app_constants.dart';
 class SecureStorage {
   final FlutterSecureStorage _storage;
 
-  SecureStorage() : _storage = const FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
-  );
+  SecureStorage()
+      : _storage = const FlutterSecureStorage(
+          aOptions: AndroidOptions(encryptedSharedPreferences: true),
+        );
 
   Future<void> saveAccessToken(String token) async {
     await _storage.write(key: AppConstants.accessTokenKey, value: token);

@@ -56,7 +56,10 @@ class AuthRepository {
 
   Future<User> updateMe(Map<String, dynamic> data) async {
     try {
-      final response = await _dioClient.dio.patch(ApiEndpoints.updateMe, data: data);
+      final response = await _dioClient.dio.patch(
+        ApiEndpoints.updateMe,
+        data: data,
+      );
       return User.fromJson(response.data as Map<String, dynamic>);
     } catch (e) {
       throw ErrorHandler.handle(e);
@@ -96,11 +99,14 @@ class AuthRepository {
     required String confirmPassword,
   }) async {
     try {
-      await _dioClient.dio.post(ApiEndpoints.changePassword, data: {
-        'current_password': currentPassword,
-        'new_password': newPassword,
-        'confirm_password': confirmPassword,
-      });
+      await _dioClient.dio.post(
+        ApiEndpoints.changePassword,
+        data: {
+          'current_password': currentPassword,
+          'new_password': newPassword,
+          'confirm_password': confirmPassword,
+        },
+      );
     } catch (e) {
       throw ErrorHandler.handle(e);
     }
@@ -108,7 +114,10 @@ class AuthRepository {
 
   Future<void> passwordResetRequest(String email) async {
     try {
-      await _dioClient.dio.post(ApiEndpoints.passwordResetRequest, data: {'email': email});
+      await _dioClient.dio.post(
+        ApiEndpoints.passwordResetRequest,
+        data: {'email': email},
+      );
     } catch (e) {
       throw ErrorHandler.handle(e);
     }
@@ -120,11 +129,14 @@ class AuthRepository {
     required String confirmPassword,
   }) async {
     try {
-      await _dioClient.dio.post(ApiEndpoints.passwordResetConfirm, data: {
-        'token': token,
-        'new_password': newPassword,
-        'confirm_password': confirmPassword,
-      });
+      await _dioClient.dio.post(
+        ApiEndpoints.passwordResetConfirm,
+        data: {
+          'token': token,
+          'new_password': newPassword,
+          'confirm_password': confirmPassword,
+        },
+      );
     } catch (e) {
       throw ErrorHandler.handle(e);
     }
@@ -141,10 +153,10 @@ class AuthRepository {
 
   Future<void> confirmOtpSetup(String otpCode, String tempToken) async {
     try {
-      await _dioClient.dio.post(ApiEndpoints.otpVerify, data: {
-        'otp_code': otpCode,
-        'temp_token': tempToken,
-      });
+      await _dioClient.dio.post(
+        ApiEndpoints.otpVerify,
+        data: {'otp_code': otpCode, 'temp_token': tempToken},
+      );
     } catch (e) {
       throw ErrorHandler.handle(e);
     }
@@ -164,7 +176,10 @@ class AuthRepository {
 
   Future<void> disableOtp(String password) async {
     try {
-      await _dioClient.dio.post(ApiEndpoints.otpDisable, data: {'password': password});
+      await _dioClient.dio.post(
+        ApiEndpoints.otpDisable,
+        data: {'password': password},
+      );
     } catch (e) {
       throw ErrorHandler.handle(e);
     }
@@ -177,6 +192,18 @@ class AuthRepository {
       return List<String>.from(data['providers'] as List? ?? []);
     } catch (e) {
       return [];
+    }
+  }
+
+  Future<AuthResponse> loginWithNativeGoogle(String idToken) async {
+    try {
+      final response = await _dioClient.dio.post(
+        ApiEndpoints.socialGoogleNativeLogin,
+        data: {'id_token': idToken},
+      );
+      return AuthResponse.fromJson(response.data as Map<String, dynamic>);
+    } catch (e) {
+      throw ErrorHandler.handle(e);
     }
   }
 }

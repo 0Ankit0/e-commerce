@@ -37,7 +37,9 @@ final notificationPrefsProvider = FutureProvider<NotificationPreference>((ref) {
   return ref.watch(notificationRepositoryProvider).getPreferences();
 });
 
-final notificationDevicesProvider = FutureProvider<List<NotificationDevice>>((ref) {
+final notificationDevicesProvider = FutureProvider<List<NotificationDevice>>((
+  ref,
+) {
   final authState = ref.watch(authNotifierProvider).valueOrNull;
   if (authState?.isAuthenticated != true) {
     return const <NotificationDevice>[];
@@ -46,7 +48,9 @@ final notificationDevicesProvider = FutureProvider<List<NotificationDevice>>((re
 });
 
 final pushConfigProvider = FutureProvider<PushConfig>((ref) {
-  return ref.watch(notificationRepositoryProvider).getPushConfig().catchError((_) {
+  return ref.watch(notificationRepositoryProvider).getPushConfig().catchError((
+    _,
+  ) {
     return const PushConfig(
       provider: null,
       webpush: PushProviderConfig(enabled: false),

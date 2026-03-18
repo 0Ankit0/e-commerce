@@ -27,23 +27,26 @@ class TokensPage extends ConsumerWidget {
                 builder: (ctx) => AlertDialog(
                   title: const Text('Revoke All Tokens'),
                   content: const Text(
-                      'This will log you out of all sessions. Continue?'),
+                    'This will log you out of all sessions. Continue?',
+                  ),
                   actions: [
                     TextButton(
-                        onPressed: () => Navigator.pop(ctx, false),
-                        child: const Text('Cancel')),
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
                     TextButton(
-                        onPressed: () => Navigator.pop(ctx, true),
-                        child: const Text('Revoke All',
-                            style: TextStyle(color: Colors.red))),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text(
+                        'Revoke All',
+                        style: TextStyle(color: Colors.red),
+                      ),
+                    ),
                   ],
                 ),
               );
               if (confirm == true && context.mounted) {
                 try {
-                  await ref
-                      .read(tokenRepositoryProvider)
-                      .revokeAllTokens();
+                  await ref.read(tokenRepositoryProvider).revokeAllTokens();
                   ref.read(analyticsServiceProvider).capture(
                     UserAnalyticsEvents.tokenRevoked,
                     {'scope': 'all'},
@@ -53,9 +56,9 @@ class TokensPage extends ConsumerWidget {
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                          content:
-                              Text(ErrorHandler.handle(e).message),
-                          backgroundColor: Colors.red),
+                        content: Text(ErrorHandler.handle(e).message),
+                        backgroundColor: Colors.red,
+                      ),
                     );
                   }
                 }
@@ -74,8 +77,10 @@ class TokensPage extends ConsumerWidget {
               children: [
                 const Icon(Icons.error_outline, size: 48, color: Colors.red),
                 const SizedBox(height: 12),
-                Text(ErrorHandler.handle(err).message,
-                    textAlign: TextAlign.center),
+                Text(
+                  ErrorHandler.handle(err).message,
+                  textAlign: TextAlign.center,
+                ),
                 const SizedBox(height: 12),
                 ElevatedButton(
                   onPressed: () => ref.invalidate(tokenListProvider),
@@ -86,8 +91,11 @@ class TokensPage extends ConsumerWidget {
           ),
           data: (tokens) => tokens.isEmpty
               ? const Center(
-                  child: Text('No active tokens found.',
-                      style: TextStyle(color: Colors.grey)))
+                  child: Text(
+                    'No active tokens found.',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                )
               : ListView.builder(
                   padding: const EdgeInsets.all(16),
                   itemCount: tokens.length,
@@ -109,13 +117,19 @@ class TokensPage extends ConsumerWidget {
                           if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
-                                  content: Text(ErrorHandler.handle(e).message),
-                                  backgroundColor: Colors.red),
+                                content: Text(
+                                  ErrorHandler.handle(e).message,
+                                ),
+                                backgroundColor: Colors.red,
+                              ),
                             );
                           }
                         }
                       },
-                    ).animate().fadeIn(delay: Duration(milliseconds: index * 50)).slideY(begin: 0.05);
+                    )
+                        .animate()
+                        .fadeIn(delay: Duration(milliseconds: index * 50))
+                        .slideY(begin: 0.05);
                   },
                 ),
         ),
@@ -142,8 +156,10 @@ class _TokenCard extends StatelessWidget {
             Row(
               children: [
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: token.isActive
                         ? Colors.green.withValues(alpha: 0.15)
@@ -174,15 +190,18 @@ class _TokenCard extends StatelessWidget {
               _Row(icon: Icons.location_on_outlined, text: token.ipAddress),
             if (token.userAgent.isNotEmpty)
               _Row(
-                  icon: Icons.devices_outlined,
-                  text: token.userAgent,
-                  maxLines: 2),
+                icon: Icons.devices_outlined,
+                text: token.userAgent,
+                maxLines: 2,
+              ),
             _Row(
-                icon: Icons.access_time,
-                text: 'Created: ${_formatDate(token.createdAt)}'),
+              icon: Icons.access_time,
+              text: 'Created: ${_formatDate(token.createdAt)}',
+            ),
             _Row(
-                icon: Icons.timer_off_outlined,
-                text: 'Expires: ${_formatDate(token.expiresAt)}'),
+              icon: Icons.timer_off_outlined,
+              text: 'Expires: ${_formatDate(token.expiresAt)}',
+            ),
           ],
         ),
       ),
@@ -217,10 +236,12 @@ class _Row extends StatelessWidget {
           Icon(icon, size: 16, color: Colors.grey),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(text,
-                style: const TextStyle(fontSize: 13),
-                maxLines: maxLines,
-                overflow: TextOverflow.ellipsis),
+            child: Text(
+              text,
+              style: const TextStyle(fontSize: 13),
+              maxLines: maxLines,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ],
       ),

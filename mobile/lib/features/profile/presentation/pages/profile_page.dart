@@ -3,6 +3,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import '../../../../core/constants/app_constants.dart';
 import '../../../../core/error/error_handler.dart';
 import '../../../../core/analytics/analytics_provider.dart';
 import '../../../../core/analytics/analytics_events.dart';
@@ -49,10 +51,8 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   void initState() {
     super.initState();
     final user = ref.read(authNotifierProvider).valueOrNull?.user;
-    _firstNameController =
-        TextEditingController(text: user?.firstName ?? '');
-    _lastNameController =
-        TextEditingController(text: user?.lastName ?? '');
+    _firstNameController = TextEditingController(text: user?.firstName ?? '');
+    _lastNameController = TextEditingController(text: user?.lastName ?? '');
     _phoneController = TextEditingController(text: user?.phone ?? '');
   }
 
@@ -90,7 +90,9 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
         'phone': _phoneController.text.trim(),
       });
       ref.read(authNotifierProvider.notifier).updateUser(updated);
-      ref.read(analyticsServiceProvider).capture(UserAnalyticsEvents.profileUpdated);
+      ref
+          .read(analyticsServiceProvider)
+          .capture(UserAnalyticsEvents.profileUpdated);
       _showSnack('Profile updated successfully');
     } catch (e) {
       _showSnack(ErrorHandler.handle(e).message, error: true);
@@ -113,7 +115,9 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
       _newPwController.clear();
       _confirmPwController.clear();
       _showSnack('Password changed successfully');
-      ref.read(analyticsServiceProvider).capture(AuthAnalyticsEvents.passwordChanged);
+      ref
+          .read(analyticsServiceProvider)
+          .capture(AuthAnalyticsEvents.passwordChanged);
     } catch (e) {
       _showSnack(ErrorHandler.handle(e).message, error: true);
     } finally {
@@ -143,13 +147,17 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     try {
       final repo = ref.read(authRepositoryProvider);
       await repo.confirmOtpSetup(
-          _otpConfirmController.text, _otpSetupResult!.otpBase32);
+        _otpConfirmController.text,
+        _otpSetupResult!.otpBase32,
+      );
       // Refresh user
       final updated = await repo.getMe();
       ref.read(authNotifierProvider.notifier).updateUser(updated);
       setState(() => _otpSetupResult = null);
       _otpConfirmController.clear();
-      ref.read(analyticsServiceProvider).capture(AuthAnalyticsEvents.otpEnabled);
+      ref
+          .read(analyticsServiceProvider)
+          .capture(AuthAnalyticsEvents.otpEnabled);
       _showSnack('Two-factor authentication enabled!');
     } catch (e) {
       _showSnack(ErrorHandler.handle(e).message, error: true);
@@ -167,7 +175,8 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text(
-                'Enter your password to confirm disabling two-factor authentication.'),
+              'Enter your password to confirm disabling two-factor authentication.',
+            ),
             const SizedBox(height: 16),
             TextField(
               controller: _disablePwController,
@@ -181,15 +190,16 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
         ),
         actions: [
           TextButton(
-              onPressed: () {
-                _disablePwController.clear();
-                Navigator.pop(ctx, false);
-              },
-              child: const Text('Cancel')),
+            onPressed: () {
+              _disablePwController.clear();
+              Navigator.pop(ctx, false);
+            },
+            child: const Text('Cancel'),
+          ),
           TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Disable',
-                  style: TextStyle(color: Colors.red))),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Disable', style: TextStyle(color: Colors.red)),
+          ),
         ],
       ),
     );
@@ -202,7 +212,9 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
       _disablePwController.clear();
       final updated = await repo.getMe();
       ref.read(authNotifierProvider.notifier).updateUser(updated);
-      ref.read(analyticsServiceProvider).capture(AuthAnalyticsEvents.otpDisabled);
+      ref
+          .read(analyticsServiceProvider)
+          .capture(AuthAnalyticsEvents.otpDisabled);
       _showSnack('Two-factor authentication disabled');
     } catch (e) {
       _showSnack(ErrorHandler.handle(e).message, error: true);
@@ -212,8 +224,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   }
 
   Future<void> _showAvatarUploadDialog(User user) async {
-    final urlController =
-        TextEditingController(text: user.imageUrl ?? '');
+    final urlController = TextEditingController(text: user.imageUrl ?? '');
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -239,21 +250,26 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Update')),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Update'),
+          ),
         ],
       ),
     );
     if (confirmed == true && urlController.text.trim().isNotEmpty) {
       try {
         final repo = ref.read(authRepositoryProvider);
-        final updated =
-            await repo.updateMe({'image_url': urlController.text.trim()});
+        final updated = await repo.updateMe({
+          'image_url': urlController.text.trim(),
+        });
         ref.read(authNotifierProvider.notifier).updateUser(updated);
-        ref.read(analyticsServiceProvider).capture(UserAnalyticsEvents.avatarUploaded);
+        ref
+            .read(analyticsServiceProvider)
+            .capture(UserAnalyticsEvents.avatarUploaded);
         _showSnack('Avatar updated');
       } catch (e) {
         _showSnack(ErrorHandler.handle(e).message, error: true);
@@ -275,6 +291,11 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
         title: const Text('Profile'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () => context.push(AppConstants.settingsRoute),
+            tooltip: 'Settings',
+          ),
+          IconButton(
             icon: const Icon(Icons.logout),
             onPressed: () async {
               await ref.read(authNotifierProvider.notifier).logout();
@@ -293,19 +314,29 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
             const SizedBox(height: 16),
 
             // ── Personal Info ──────────────────────────────────
-            _buildPersonalInfoSection(context).animate().fadeIn(delay: 150.ms).slideY(begin: 0.05),
+            _buildPersonalInfoSection(
+              context,
+            ).animate().fadeIn(delay: 150.ms).slideY(begin: 0.05),
             const SizedBox(height: 12),
 
             // ── Change Password ────────────────────────────────
-            _buildChangePasswordSection(context).animate().fadeIn(delay: 200.ms).slideY(begin: 0.05),
+            _buildChangePasswordSection(
+              context,
+            ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.05),
             const SizedBox(height: 12),
 
             // ── 2FA ───────────────────────────────────────────
-            _buildTwoFactorSection(context, user).animate().fadeIn(delay: 250.ms).slideY(begin: 0.05),
+            _buildTwoFactorSection(
+              context,
+              user,
+            ).animate().fadeIn(delay: 250.ms).slideY(begin: 0.05),
             const SizedBox(height: 12),
 
             // ── Account Info ───────────────────────────────────
-            _buildAccountInfoSection(context, user).animate().fadeIn(delay: 300.ms).slideY(begin: 0.05),
+            _buildAccountInfoSection(
+              context,
+              user,
+            ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.05),
             const SizedBox(height: 32),
           ],
         ),
@@ -321,8 +352,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
             children: [
               CircleAvatar(
                 radius: 52,
-                backgroundColor:
-                    Theme.of(context).colorScheme.primaryContainer,
+                backgroundColor: Theme.of(context).colorScheme.primaryContainer,
                 child: user.imageUrl != null && user.imageUrl!.isNotEmpty
                     ? ClipOval(
                         child: CachedNetworkImage(
@@ -338,23 +368,21 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                                 .textTheme
                                 .headlineLarge
                                 ?.copyWith(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onPrimaryContainer,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onPrimaryContainer,
                                 ),
                           ),
                         ),
                       )
                     : Text(
                         user.initials,
-                        style: Theme.of(context)
-                            .textTheme
-                            .headlineLarge
-                            ?.copyWith(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onPrimaryContainer,
-                            ),
+                        style:
+                            Theme.of(context).textTheme.headlineLarge?.copyWith(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onPrimaryContainer,
+                                ),
                       ),
               ),
               Positioned(
@@ -368,11 +396,15 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                       color: Theme.of(context).colorScheme.primary,
                       shape: BoxShape.circle,
                       border: Border.all(
-                          color: Theme.of(context).colorScheme.surface,
-                          width: 2),
+                        color: Theme.of(context).colorScheme.surface,
+                        width: 2,
+                      ),
                     ),
-                    child: const Icon(Icons.camera_alt_outlined,
-                        size: 16, color: Colors.white),
+                    child: const Icon(
+                      Icons.camera_alt_outlined,
+                      size: 16,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
               ),
@@ -381,17 +413,15 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
           const SizedBox(height: 8),
           Text(
             user.displayName,
-            style: Theme.of(context)
-                .textTheme
-                .titleLarge
-                ?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
           ),
           Text(
             '@${user.username}',
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: Colors.grey),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: Colors.grey),
           ),
         ],
       ),
@@ -454,9 +484,11 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               prefixIcon: Icons.lock_outline,
               obscureText: _obscureCurrent,
               suffixIcon: IconButton(
-                icon: Icon(_obscureCurrent
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined),
+                icon: Icon(
+                  _obscureCurrent
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                ),
                 onPressed: () =>
                     setState(() => _obscureCurrent = !_obscureCurrent),
               ),
@@ -470,9 +502,11 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               prefixIcon: Icons.lock_reset_outlined,
               obscureText: _obscureNew,
               suffixIcon: IconButton(
-                icon: Icon(_obscureNew
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined),
+                icon: Icon(
+                  _obscureNew
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                ),
                 onPressed: () => setState(() => _obscureNew = !_obscureNew),
               ),
               validator: (v) {
@@ -488,9 +522,11 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               prefixIcon: Icons.lock_reset_outlined,
               obscureText: _obscureConfirm,
               suffixIcon: IconButton(
-                icon: Icon(_obscureConfirm
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined),
+                icon: Icon(
+                  _obscureConfirm
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                ),
                 onPressed: () =>
                     setState(() => _obscureConfirm = !_obscureConfirm),
               ),
@@ -528,7 +564,9 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
           Row(
             children: [
               Icon(
-                isEnabled ? Icons.verified_user_outlined : Icons.security_outlined,
+                isEnabled
+                    ? Icons.verified_user_outlined
+                    : Icons.security_outlined,
                 color: isEnabled ? Colors.green : Colors.grey,
                 size: 20,
               ),
@@ -568,7 +606,8 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               child: Container(
                 decoration: BoxDecoration(
                   border: Border.all(
-                      color: Theme.of(context).colorScheme.outline),
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 padding: const EdgeInsets.all(8),
@@ -577,11 +616,17 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     // Strip data URI prefix if present
                     String qr = _otpSetupResult!.qrCode;
                     if (qr.contains(',')) qr = qr.split(',').last;
-                    return Image.memory(base64Decode(qr),
-                        width: 200, height: 200);
+                    return Image.memory(
+                      base64Decode(qr),
+                      width: 200,
+                      height: 200,
+                    );
                   } catch (_) {
-                    return const Icon(Icons.qr_code, size: 200,
-                        color: Colors.grey);
+                    return const Icon(
+                      Icons.qr_code,
+                      size: 200,
+                      color: Colors.grey,
+                    );
                   }
                 }(),
               ),
@@ -590,23 +635,24 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Theme.of(context)
-                    .colorScheme
-                    .surfaceContainerHighest,
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Manual entry key:',
-                      style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  const Text(
+                    'Manual entry key:',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
                   const SizedBox(height: 4),
                   SelectableText(
                     _otpSetupResult!.otpBase32,
                     style: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold),
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ],
               ),
@@ -652,11 +698,17 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
                     ? const SizedBox(
                         width: 16,
                         height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.shield_outlined,
-                        color: Colors.red, size: 18),
-                label: const Text('Disable 2FA',
-                    style: TextStyle(color: Colors.red)),
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(
+                        Icons.shield_outlined,
+                        color: Colors.red,
+                        size: 18,
+                      ),
+                label: const Text(
+                  'Disable 2FA',
+                  style: TextStyle(color: Colors.red),
+                ),
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: Colors.red),
                 ),
@@ -682,8 +734,10 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
             children: [
               const SizedBox(
                 width: 110,
-                child: Text('Status',
-                    style: TextStyle(color: Colors.grey, fontSize: 13)),
+                child: Text(
+                  'Status',
+                  style: TextStyle(color: Colors.grey, fontSize: 13),
+                ),
               ),
               _StatusBadge(
                 label: user.isActive ? 'Active' : 'Inactive',
@@ -692,8 +746,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               const SizedBox(width: 8),
               _StatusBadge(
                 label: user.isConfirmed ? 'Confirmed' : 'Unconfirmed',
-                color:
-                    user.isConfirmed ? Colors.blue : Colors.orange,
+                color: user.isConfirmed ? Colors.blue : Colors.orange,
               ),
             ],
           ),
@@ -703,8 +756,10 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               children: [
                 SizedBox(
                   width: 110,
-                  child: Text('Role',
-                      style: TextStyle(color: Colors.grey, fontSize: 13)),
+                  child: Text(
+                    'Role',
+                    style: TextStyle(color: Colors.grey, fontSize: 13),
+                  ),
                 ),
                 _StatusBadge(label: 'Superuser', color: Colors.purple),
               ],
@@ -739,9 +794,11 @@ class _SectionCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(icon,
-                    size: 18,
-                    color: Theme.of(context).colorScheme.primary),
+                Icon(
+                  icon,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
                 const SizedBox(width: 8),
                 Text(
                   title,
@@ -773,10 +830,17 @@ class _InfoRow extends StatelessWidget {
       children: [
         SizedBox(
           width: 110,
-          child: Text(label,
-              style: const TextStyle(color: Colors.grey, fontSize: 13)),
+          child: Text(
+            label,
+            style: const TextStyle(color: Colors.grey, fontSize: 13),
+          ),
         ),
-        Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.w500))),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.w500),
+          ),
+        ),
       ],
     );
   }
@@ -799,9 +863,11 @@ class _StatusBadge extends StatelessWidget {
       child: Text(
         label,
         style: TextStyle(
-            color: color, fontWeight: FontWeight.bold, fontSize: 12),
+          color: color,
+          fontWeight: FontWeight.bold,
+          fontSize: 12,
+        ),
       ),
     );
   }
 }
-

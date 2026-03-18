@@ -75,7 +75,9 @@ class TokenTracking {
       id: json['id'].toString(),
       userId: json['user_id']?.toString() ?? '',
       tokenJti: json['token_jti'] as String? ?? '',
-      tokenType: TokenType.fromString(json['token_type'] as String? ?? 'access'),
+      tokenType: TokenType.fromString(
+        json['token_type'] as String? ?? 'access',
+      ),
       ipAddress: json['ip_address'] as String? ?? '',
       userAgent: json['user_agent'] as String? ?? '',
       isActive: json['is_active'] as bool? ?? true,

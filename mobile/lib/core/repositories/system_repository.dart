@@ -11,8 +11,9 @@ class SystemRepository {
 
   Future<CapabilitySummary> getCapabilities() async {
     try {
-      final response =
-          await _dioClient.dio.get(ApiEndpoints.systemCapabilities);
+      final response = await _dioClient.dio.get(
+        ApiEndpoints.systemCapabilities,
+      );
       return CapabilitySummary.fromJson(response.data as Map<String, dynamic>);
     } catch (e) {
       throw ErrorHandler.handle(e);
@@ -21,8 +22,9 @@ class SystemRepository {
 
   Future<List<GeneralSetting>> getGeneralSettings() async {
     try {
-      final response =
-          await _dioClient.dio.get(ApiEndpoints.systemGeneralSettings);
+      final response = await _dioClient.dio.get(
+        ApiEndpoints.systemGeneralSettings,
+      );
       final data = response.data as List<dynamic>? ?? const [];
       return data
           .map((item) => GeneralSetting.fromJson(item as Map<String, dynamic>))

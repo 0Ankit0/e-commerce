@@ -2,7 +2,9 @@
 import 'package:web/web.dart' as web;
 
 Future<void> submitEsewaFormWeb(
-    String formAction, Map<String, dynamic> fields) async {
+  String formAction,
+  Map<String, dynamic> fields,
+) async {
   final form = web.HTMLFormElement();
   form.method = 'POST';
   form.action = formAction;
