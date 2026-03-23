@@ -220,4 +220,5 @@ flowchart TB
 | Notifications | Generated automatically from domain mutations rather than manually triggered notification APIs |
 | Shipping labels | Saved as backend-generated artifacts with stable URLs |
 | Live operations feed | Aggregates persisted domain and audit events |
-| Future-only | External route optimization engines and live courier GPS ingestion remain outside current DFD scope |
+| Routing and GPS | Built-in route optimization and persisted courier GPS ingestion are part of the current backend scope |
+| Future-only | External route optimization vendors remain outside current DFD scope |

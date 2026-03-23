@@ -198,4 +198,6 @@ graph TB
 | Search | Database-backed filtering and fuzzy application-side ranking |
 | Notifications | Persisted notifications plus websocket fanout |
 | Payments | Khalti, eSewa, Stripe, PayPal, wallet, COD |
-| Future-only | Razorpay, external route optimization engines, real-time courier GPS ingestion, ML recommendation ranking |
+| Routing | Built-in nearest-neighbor + 2-opt optimization plus persisted courier GPS ingestion |
+| Recommendations | Weighted feature ranker with diversity re-ranking |
+| Future-only | Razorpay and external route optimization engines |

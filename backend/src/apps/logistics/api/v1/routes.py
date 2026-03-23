@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select, func
+from sqlmodel import select
 
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
@@ -20,6 +20,7 @@ from src.apps.iam.utils.hashid import decode_id_or_404, encode_id
 from src.apps.logistics.models import (
     Branch,
     BranchInventoryMovement,
+    CourierLocationPing,
     DeliveryAgent,
     DeliveryAgentStatus,
     DeliveryException,
@@ -29,6 +30,7 @@ from src.apps.logistics.models import (
     LineHaulTrip,
     PickupJob,
     ReversePickupJob,
+    RouteOptimizationPlan,
     ShipmentProof,
     ShipmentManifest,
     ShippingOption,
@@ -44,8 +46,11 @@ from src.apps.logistics.services import (
     create_pickup_job_for_vendor_order,
     create_reverse_pickup,
     get_manifest_or_404,
+    get_route_plan,
     get_pickup_job_or_404,
     get_trip_or_404,
+    ingest_courier_location_ping,
+    optimize_manifest_route,
     initiate_rto_for_exception,
     quote_shipping,
     record_branch_inventory_movement,
@@ -53,7 +58,7 @@ from src.apps.logistics.services import (
     start_line_haul_trip,
     update_shipment_tracking,
 )
-from src.apps.orders.models import Order, OrderStatus, ReturnRequest, ReturnStatus, Shipment, ShipmentTracking, VendorOrder, VendorOrderStatus
+from src.apps.orders.models import Order, OrderStatus, ReturnRequest, ReturnStatus, Shipment, ShipmentTracking, VendorOrder
 from src.apps.notification.services.commerce_events import notify_delivery_exception, notify_order_event, notify_return_event
 from src.apps.orders.services import update_return_request_status
 from src.apps.vendors.services import get_vendor_for_user
@@ -160,6 +165,41 @@ class BranchInventoryMovementCreateRequest(BaseModel):
     movement_type: str = Field(min_length=3, max_length=40)
     quantity: int
     notes: str = ""
+
+
+class RouteOptimizationRequest(BaseModel):
+    average_speed_kph: float = Field(default=28, gt=0)
+    service_minutes_per_stop: int = Field(default=8, ge=1)
+
+
+class CourierGpsIngestionRequest(BaseModel):
+    shipment_id: str | None = None
+    agent_id: str | None = None
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    speed_kph: float | None = Field(default=None, ge=0)
+    heading: float | None = Field(default=None, ge=0, le=360)
+    accuracy_meters: float | None = Field(default=None, ge=0)
+    source: str = Field(default="device", min_length=2, max_length=40)
+    label: str = Field(default="", max_length=120)
+    recorded_at: datetime | None = None
+
+
+def _serialize_route_plan(plan: RouteOptimizationPlan) -> dict[str, object]:
+    return {
+        "plan_id": encode_id(plan.id or 0),
+        "manifest_id": encode_id(plan.manifest_id) if plan.manifest_id else None,
+        "trip_id": encode_id(plan.trip_id) if plan.trip_id else None,
+        "strategy": plan.strategy,
+        "total_distance_km": plan.total_distance_km,
+        "estimated_duration_minutes": plan.estimated_duration_minutes,
+        "routed_stop_count": plan.routed_stop_count,
+        "unroutable_stop_count": plan.unroutable_stop_count,
+        "score": plan.score,
+        "stops": json.loads(plan.stops_json or "[]"),
+        "metrics": json.loads(plan.metrics_json or "{}"),
+        "updated_at": plan.updated_at.isoformat(),
+    }
 
 
 def _build_label_payload(
@@ -524,6 +564,136 @@ async def arrive_trip(
     await arrive_line_haul_trip(trip, db)
     await db.commit()
     return {"success": True}
+
+
+@router.post("/logistics/manifests/{manifest_id}/optimize-route")
+async def optimize_manifest(
+    manifest_id: str,
+    payload: RouteOptimizationRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    manifest = await get_manifest_or_404(decode_id_or_404(manifest_id), db)
+    plan = await optimize_manifest_route(
+        manifest=manifest,
+        db=db,
+        average_speed_kph=payload.average_speed_kph,
+        service_minutes_per_stop=payload.service_minutes_per_stop,
+    )
+    await db.commit()
+    return _serialize_route_plan(plan)
+
+
+@router.get("/logistics/manifests/{manifest_id}/route-plan")
+async def get_manifest_route_plan(
+    manifest_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    plan = await get_route_plan(manifest_id=decode_id_or_404(manifest_id), db=db)
+    if plan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route plan not found")
+    return _serialize_route_plan(plan)
+
+
+@router.post("/logistics/trips/{trip_id}/optimize-route")
+async def optimize_trip_route(
+    trip_id: str,
+    payload: RouteOptimizationRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    trip = await get_trip_or_404(decode_id_or_404(trip_id), db)
+    manifest = await get_manifest_or_404(trip.manifest_id, db)
+    plan = await optimize_manifest_route(
+        manifest=manifest,
+        trip=trip,
+        db=db,
+        average_speed_kph=payload.average_speed_kph,
+        service_minutes_per_stop=payload.service_minutes_per_stop,
+    )
+    await db.commit()
+    return _serialize_route_plan(plan)
+
+
+@router.get("/logistics/trips/{trip_id}/route-plan")
+async def get_trip_route_plan(
+    trip_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    plan = await get_route_plan(trip_id=decode_id_or_404(trip_id), db=db)
+    if plan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route plan not found")
+    return _serialize_route_plan(plan)
+
+
+@router.post("/logistics/trips/{trip_id}/gps", status_code=status.HTTP_201_CREATED)
+async def ingest_trip_gps(
+    trip_id: str,
+    payload: CourierGpsIngestionRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    trip = await get_trip_or_404(decode_id_or_404(trip_id), db)
+    ping = await ingest_courier_location_ping(
+        trip=trip,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        shipment_id=decode_id_or_404(payload.shipment_id) if payload.shipment_id else None,
+        agent_id=decode_id_or_404(payload.agent_id) if payload.agent_id else None,
+        speed_kph=payload.speed_kph,
+        heading=payload.heading,
+        accuracy_meters=payload.accuracy_meters,
+        source=payload.source,
+        label=payload.label,
+        recorded_at=payload.recorded_at,
+        db=db,
+    )
+    await db.commit()
+    return {
+        "ping_id": encode_id(ping.id or 0),
+        "trip_id": trip_id,
+        "recorded_at": ping.recorded_at.isoformat(),
+    }
+
+
+@router.get("/logistics/trips/{trip_id}/gps")
+async def list_trip_gps(
+    trip_id: str,
+    limit: int = Query(default=50, ge=1, le=500),
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    decoded_trip_id = decode_id_or_404(trip_id)
+    pings = (
+        await db.execute(
+            select(CourierLocationPing)
+            .where(CourierLocationPing.trip_id == decoded_trip_id)
+            .order_by(CourierLocationPing.recorded_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return {
+        "trip_id": trip_id,
+        "items": [
+            {
+                "id": encode_id(ping.id or 0),
+                "shipment_id": encode_id(ping.shipment_id) if ping.shipment_id else None,
+                "agent_id": encode_id(ping.agent_id) if ping.agent_id else None,
+                "latitude": ping.latitude,
+                "longitude": ping.longitude,
+                "speed_kph": ping.speed_kph,
+                "heading": ping.heading,
+                "accuracy_meters": ping.accuracy_meters,
+                "source": ping.source,
+                "label": ping.label,
+                "recorded_at": ping.recorded_at.isoformat(),
+            }
+            for ping in pings
+        ],
+        "total": len(pings),
+    }
 
 
 @router.post("/vendor/orders/{vendor_order_id}/pickup-jobs", status_code=status.HTTP_201_CREATED)

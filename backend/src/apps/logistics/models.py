@@ -159,6 +159,9 @@ class LineHaulTrip(SQLModel, table=True):
     status: LineHaulTripStatus = Field(default=LineHaulTripStatus.PLANNED)
     departed_at: Optional[datetime] = Field(default=None)
     arrived_at: Optional[datetime] = Field(default=None)
+    last_latitude: Optional[float] = Field(default=None)
+    last_longitude: Optional[float] = Field(default=None)
+    last_gps_at: Optional[datetime] = Field(default=None)
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -243,4 +246,40 @@ class BranchInventoryMovement(SQLModel, table=True):
     movement_type: str = Field(max_length=40, index=True)
     quantity: int = Field(default=0)
     notes: str = Field(default="", max_length=255)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class RouteOptimizationPlan(SQLModel, table=True):
+    __tablename__ = "route_optimization_plans"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    manifest_id: Optional[int] = Field(default=None, foreign_key="shipment_manifests.id", index=True)
+    trip_id: Optional[int] = Field(default=None, foreign_key="line_haul_trips.id", index=True)
+    strategy: str = Field(default="nearest_neighbor_2opt_v1", max_length=80)
+    total_distance_km: float = Field(default=0, ge=0)
+    estimated_duration_minutes: int = Field(default=0, ge=0)
+    routed_stop_count: int = Field(default=0, ge=0)
+    unroutable_stop_count: int = Field(default=0, ge=0)
+    score: float = Field(default=0, ge=0)
+    stops_json: str = Field(default="[]")
+    metrics_json: str = Field(default="{}")
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class CourierLocationPing(SQLModel, table=True):
+    __tablename__ = "courier_location_pings"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    trip_id: Optional[int] = Field(default=None, foreign_key="line_haul_trips.id", index=True)
+    shipment_id: Optional[int] = Field(default=None, foreign_key="shipments.id", index=True)
+    agent_id: Optional[int] = Field(default=None, foreign_key="delivery_agents.id", index=True)
+    latitude: float
+    longitude: float
+    speed_kph: Optional[float] = Field(default=None)
+    heading: Optional[float] = Field(default=None)
+    accuracy_meters: Optional[float] = Field(default=None)
+    source: str = Field(default="device", max_length=40)
+    label: str = Field(default="", max_length=120)
+    recorded_at: datetime = Field(default_factory=utc_now, index=True)
     created_at: datetime = Field(default_factory=utc_now)

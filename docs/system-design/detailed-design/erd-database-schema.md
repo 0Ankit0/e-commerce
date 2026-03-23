@@ -367,4 +367,5 @@ Shipping label artifacts are stored through the storage abstraction and referenc
 | Payments | Active providers are Khalti, eSewa, Stripe, PayPal, wallet, and COD |
 | Shipping labels | Stored as generated artifacts with stable URLs |
 | Live operations feed | Aggregated from persisted order, shipment, return, payout, and audit events |
-| Future-only | Razorpay, external route optimization, real-time courier GPS ingestion, and ML ranking remain outside the implemented schema |
+| Logistics telemetry | Route plans and courier GPS pings are now persisted in the implemented schema |
+| Future-only | Razorpay and external routing-vendor integrations remain outside the implemented schema |

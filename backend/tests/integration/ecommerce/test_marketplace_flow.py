@@ -11,12 +11,13 @@ from src.apps.core.config import settings
 from src.apps.core.security import TokenType, create_access_token, get_password_hash, verify_token
 from src.apps.notification.models.notification import Notification
 from src.apps.finance.models.payment import PaymentProvider, PaymentStatus, PaymentTransaction
-from src.apps.commerce.models import WishlistShareLink
+from src.apps.commerce.models import Address, WishlistShareLink
 from src.apps.iam.models.token_tracking import TokenTracking
 from src.apps.iam.models.user import User, UserProfile
+from src.apps.logistics.models import CourierLocationPing, RouteOptimizationPlan
 from src.apps.messaging.models import ChatMessageEnvelope
 from src.apps.multitenancy.models.tenant import Tenant, TenantMember, TenantRole
-from src.apps.orders.models import Order, ReturnRequest, VendorOrder
+from src.apps.orders.models import Order, ReturnRequest, Shipment
 
 
 async def _create_user_headers(
@@ -255,7 +256,235 @@ async def test_marketplace_checkout_and_recommendations(client: AsyncClient, db_
         params={"type": "home", "limit": 5},
     )
     assert recommendations_resp.status_code == 200, recommendations_resp.text
-    assert recommendations_resp.json()["items"]
+    recommendations_payload = recommendations_resp.json()
+    assert recommendations_payload["strategy"] == "ml_ranker_v2"
+    assert recommendations_payload["items"]
+    assert "ranking_features" in recommendations_payload["items"][0]
+
+
+@pytest.mark.asyncio
+async def test_route_optimization_and_courier_gps_ingestion(client: AsyncClient, db_session: AsyncSession):
+    admin, admin_headers = await _create_user_headers(
+        db_session,
+        username="route_admin",
+        email="route-admin@example.com",
+        is_superuser=True,
+    )
+    vendor_user, vendor_headers = await _create_user_headers(
+        db_session,
+        username="route_vendor",
+        email="route-vendor@example.com",
+    )
+    customer_user, customer_headers = await _create_user_headers(
+        db_session,
+        username="route_customer",
+        email="route-customer@example.com",
+    )
+    tenant = await _create_tenant_for_owner(db_session, vendor_user, "route-vendor-tenant")
+
+    vendor_create = await client.post(
+        "/api/v1/vendor/profile",
+        headers=vendor_headers,
+        json={
+            "tenant_id": tenant.id and __import__("src.apps.iam.utils.hashid", fromlist=["encode_id"]).encode_id(tenant.id),
+            "business_name": "Route Vendor Pvt Ltd",
+            "display_name": "Route Vendor",
+            "slug": "route-vendor-store",
+            "description": "Optimized delivery seller",
+        },
+    )
+    assert vendor_create.status_code == 201, vendor_create.text
+    vendor_id = vendor_create.json()["vendor"]["id"]
+
+    approve_vendor = await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    assert approve_vendor.status_code == 200, approve_vendor.text
+    await _create_delivery_zone(client, admin_headers, code="route-zone")
+
+    category_resp = await client.post(
+        "/api/v1/admin/categories",
+        headers=admin_headers,
+        json={"name": "Wearables", "slug": "wearables", "level": 1, "attributes": []},
+    )
+    assert category_resp.status_code == 201, category_resp.text
+    category_id = category_resp.json()["category"]["id"]
+
+    brand_resp = await client.post(
+        "/api/v1/admin/catalog/brands",
+        headers=admin_headers,
+        json={"name": "Trail Tech", "slug": "trail-tech"},
+    )
+    assert brand_resp.status_code == 201, brand_resp.text
+    brand_id = brand_resp.json()["brand"]["id"]
+
+    warehouse_resp = await client.post(
+        "/api/v1/vendor/warehouses",
+        headers=vendor_headers,
+        json={"name": "Route Warehouse", "city": "Kathmandu", "is_default": True},
+    )
+    assert warehouse_resp.status_code == 201, warehouse_resp.text
+
+    product_resp = await client.post(
+        "/api/v1/vendor/products",
+        headers=vendor_headers,
+        json={
+            "category_id": category_id,
+            "brand_id": brand_id,
+            "name": "GPS Messenger",
+            "slug": "gps-messenger",
+            "short_description": "Field-ready courier tracker",
+            "description": "Compact device for route-tracked delivery workflows",
+            "status": "pending",
+            "variants": [
+                {
+                    "sku": "GPS-001",
+                    "name": "Standard",
+                    "mrp": 90,
+                    "selling_price": 75,
+                    "quantity": 10,
+                    "is_default": True,
+                }
+            ],
+            "images": [{"url": "https://example.com/gps.jpg", "is_primary": True}],
+        },
+    )
+    assert product_resp.status_code == 201, product_resp.text
+    product_id = product_resp.json()["product"]["id"]
+
+    approve_product = await client.post(
+        f"/api/v1/admin/catalog/products/{product_id}/approve",
+        headers=admin_headers,
+    )
+    assert approve_product.status_code == 200, approve_product.text
+    variant_id = approve_product.json()["product"]["variants"][0]["id"]
+
+    address_1_resp = await client.post(
+        "/api/v1/addresses",
+        headers=customer_headers,
+        json={
+            "name": "First stop",
+            "phone": "+9779800000001",
+            "line1": "Kalanki",
+            "city": "Kathmandu",
+            "state": "Bagmati",
+            "pincode": "44600",
+            "is_default": True,
+        },
+    )
+    assert address_1_resp.status_code == 201, address_1_resp.text
+    address_1_id = address_1_resp.json()["address"]["id"]
+
+    address_2_resp = await client.post(
+        "/api/v1/addresses",
+        headers=customer_headers,
+        json={
+            "name": "Second stop",
+            "phone": "+9779800000002",
+            "line1": "Bhaktapur",
+            "city": "Bhaktapur",
+            "state": "Bagmati",
+            "pincode": "44700",
+            "is_default": False,
+        },
+    )
+    assert address_2_resp.status_code == 201, address_2_resp.text
+    address_2_id = address_2_resp.json()["address"]["id"]
+
+    decode_id = __import__("src.apps.iam.utils.hashid", fromlist=["decode_id_or_404"]).decode_id_or_404
+    first_address = await db_session.get(Address, decode_id(address_1_id))
+    second_address = await db_session.get(Address, decode_id(address_2_id))
+    assert first_address is not None and second_address is not None
+    first_address.latitude = 27.6935
+    first_address.longitude = 85.2812
+    second_address.latitude = 27.6710
+    second_address.longitude = 85.4298
+    await db_session.commit()
+
+    shipment_ids: list[str] = []
+    for address_id in [address_1_id, address_2_id]:
+        add_cart = await client.post(
+            "/api/v1/cart/items",
+            headers=customer_headers,
+            json={"variant_id": variant_id, "quantity": 1},
+        )
+        assert add_cart.status_code == 201, add_cart.text
+
+        checkout_resp = await client.post(
+            "/api/v1/checkout",
+            headers=customer_headers,
+            json={"address_id": address_id, "payment_method": "cod"},
+        )
+        assert checkout_resp.status_code == 201, checkout_resp.text
+        shipment_ids.append(checkout_resp.json()["order"]["shipments"][0]["id"])
+
+    manifest_resp = await client.post(
+        "/api/v1/logistics/manifests",
+        headers=admin_headers,
+        json={"code": "MNF-ROUTE-001", "shipment_ids": shipment_ids},
+    )
+    assert manifest_resp.status_code == 201, manifest_resp.text
+    manifest_id = manifest_resp.json()["manifest_id"]
+
+    trip_resp = await client.post(
+        "/api/v1/logistics/trips",
+        headers=admin_headers,
+        json={
+            "manifest_id": manifest_id,
+            "vehicle_number": "BA-1-PA-1000",
+            "driver_name": "Route Driver",
+            "driver_phone": "9800001234",
+        },
+    )
+    assert trip_resp.status_code == 201, trip_resp.text
+    trip_id = trip_resp.json()["trip_id"]
+
+    optimize_resp = await client.post(
+        f"/api/v1/logistics/trips/{trip_id}/optimize-route",
+        headers=admin_headers,
+        json={"average_speed_kph": 24, "service_minutes_per_stop": 6},
+    )
+    assert optimize_resp.status_code == 200, optimize_resp.text
+    plan = optimize_resp.json()
+    assert plan["strategy"] == "nearest_neighbor_2opt_v1"
+    assert plan["routed_stop_count"] == 2
+    assert plan["unroutable_stop_count"] == 0
+    assert plan["total_distance_km"] > 0
+    assert {stop["shipment_id"] for stop in plan["stops"]} == set(shipment_ids)
+
+    stored_plan = (
+        await db_session.execute(select(RouteOptimizationPlan).where(RouteOptimizationPlan.trip_id == decode_id(trip_id)))
+    ).scalars().first()
+    assert stored_plan is not None
+
+    gps_resp = await client.post(
+        f"/api/v1/logistics/trips/{trip_id}/gps",
+        headers=admin_headers,
+        json={
+            "shipment_id": shipment_ids[0],
+            "latitude": 27.7019,
+            "longitude": 85.3206,
+            "speed_kph": 32.5,
+            "heading": 45,
+            "accuracy_meters": 6,
+            "source": "device",
+            "label": "Ring Road corridor",
+        },
+    )
+    assert gps_resp.status_code == 201, gps_resp.text
+
+    gps_list_resp = await client.get(f"/api/v1/logistics/trips/{trip_id}/gps", headers=admin_headers)
+    assert gps_list_resp.status_code == 200, gps_list_resp.text
+    gps_items = gps_list_resp.json()["items"]
+    assert gps_items
+    assert gps_items[0]["label"] == "Ring Road corridor"
+    assert gps_items[0]["shipment_id"] == shipment_ids[0]
+
+    stored_ping = (
+        await db_session.execute(select(CourierLocationPing).where(CourierLocationPing.trip_id == decode_id(trip_id)))
+    ).scalars().first()
+    assert stored_ping is not None
+    first_shipment = await db_session.get(Shipment, decode_id(shipment_ids[0]))
+    assert first_shipment is not None
+    assert first_shipment.current_location == "Ring Road corridor"
 
 
 @pytest.mark.asyncio
@@ -449,7 +678,7 @@ async def test_wishlist_sharing_and_price_drop_notifications(client: AsyncClient
         },
     )
     product_id = product_resp.json()["product"]["id"]
-    approve_resp = await client.post(f"/api/v1/admin/catalog/products/{product_id}/approve", headers=admin_headers)
+    await client.post(f"/api/v1/admin/catalog/products/{product_id}/approve", headers=admin_headers)
 
     wishlist_add_resp = await client.post(f"/api/v1/wishlist/{product_id}", headers=customer_headers)
     assert wishlist_add_resp.status_code == 201, wishlist_add_resp.text

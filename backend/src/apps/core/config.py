@@ -51,6 +51,9 @@ NON_RUNTIME_EDITABLE_SETTING_KEYS = frozenset(
         "GOOGLE_CLIENT_SECRET",
         "GITHUB_CLIENT_SECRET",
         "FACEBOOK_CLIENT_SECRET",
+        "APPLE_TEAM_ID",
+        "APPLE_KEY_ID",
+        "APPLE_PRIVATE_KEY",
     }
 )
 PUBLIC_GENERAL_SETTING_KEYS = frozenset(
@@ -78,6 +81,7 @@ PUBLIC_GENERAL_SETTING_KEYS = frozenset(
         "ESEWA_ENABLED",
         "STRIPE_ENABLED",
         "PAYPAL_ENABLED",
+        "APPLE_ENABLED",
     }
 )
 
@@ -306,6 +310,11 @@ class Settings(BaseSettings):
     FACEBOOK_ENABLED: bool = False
     FACEBOOK_CLIENT_ID: str = "your-facebook-client-id"
     FACEBOOK_CLIENT_SECRET: str = "your-facebook-client-secret"
+    APPLE_ENABLED: bool = False
+    APPLE_CLIENT_ID: str = "your-apple-services-id"
+    APPLE_TEAM_ID: str = ""
+    APPLE_KEY_ID: str = ""
+    APPLE_PRIVATE_KEY: SecretStr = SecretStr("")
     SOCIAL_AUTH_REDIRECT_URL: str = "http://localhost:3000/auth/callback"
 
     ANALYTICS_ENABLED: bool = False
@@ -339,6 +348,7 @@ class Settings(BaseSettings):
         "GOOGLE_ENABLED",
         "GITHUB_ENABLED",
         "FACEBOOK_ENABLED",
+        "APPLE_ENABLED",
         "OSM_MAPS_ENABLED",
         "GOOGLE_MAPS_ENABLED",
         "LOG_SQL_QUERIES",
@@ -640,5 +650,11 @@ OAUTH_PROVIDERS: dict[str, dict[str, Any]] = {
         "userinfo_url": "https://graph.facebook.com/me?fields=id,name,email,picture",
         "scope": "email,public_profile",
         "extra_params": {"response_type": "code"},
+    },
+    "apple": {
+        "authorize_url": "https://appleid.apple.com/auth/authorize",
+        "token_url": "https://appleid.apple.com/auth/token",
+        "scope": "name email",
+        "extra_params": {"response_type": "code", "response_mode": "query"},
     },
 }

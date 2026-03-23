@@ -5,8 +5,8 @@ The Recommendation Engine is a core component designed to personalize the user e
 
 Current implementation note:
 
-- ML-grade recommendation ranking is still future work in this repository.
-- The architecture in this document remains a target-state design and is not part of the currently implemented backend feature set.
+- The backend now exposes an implemented hybrid ranker under `GET /api/v1/recommendations` and event ingestion under `POST /api/v1/recommendations/events`.
+- The full streaming feature-store architecture in this document is still a target-state evolution, not a hard dependency of the current repository.
 
 ## Architecture
 
@@ -83,6 +83,20 @@ The recommendation score is calculated based on a weighted sum of the following 
 | **Similar Users** | Low | Trends from users with similar behavior profiles. |
 | **Trending/Popular** | Low | Fallback for cold-start or discovery. |
 
+## Current Repository Implementation
+
+The running backend uses a weighted ranker with persisted recommendation events and re-ranking logic:
+
+- Popularity features from views, cart adds, wishlist adds, purchases, and aggregate popularity score
+- Bayesian rating smoothing from `avg_rating` and `review_count`
+- Recency decay from product creation time
+- Stock-aware scoring so unavailable items are filtered and low-stock items are downweighted
+- User category and brand affinities learned from prior events and completed orders
+- Context-product similarity and category/brand match for product-detail placements
+- Price-fit scoring from the shopper's observed order price profile
+- Diversity re-ranking to reduce repeated categories and brands in the final list
+- Human-readable recommendation reasons derived from the strongest feature contribution
+
 ## API Design
 
 ### Endpoints
@@ -98,19 +112,22 @@ The recommendation score is calculated based on a weighted sum of the following 
 **Response:**
 ```json
 {
-  "success": true,
-  "data": {
-    "strategy": "hybrid_personalization",
-    "recommendations": [
-      {
-        "id": "prod_123",
-        "name": "Wireless Headphones",
-        "score": 0.95,
-        "reason": "Based on your recent search for 'audio'"
-      },
-      ...
-    ]
-  }
+  "strategy": "ml_ranker_v2",
+  "items": [
+    {
+      "id": "Aa7r1Gxm",
+      "name": "Wireless Headphones",
+      "score": 7.12,
+      "reason": "Based on your recent shopping signals",
+      "ranking_features": {
+        "popularity": 0.81,
+        "rating": 0.78,
+        "recency": 0.93,
+        "stock": 1.0,
+        "category_affinity": 0.88
+      }
+    }
+  ]
 }
 ```
 
@@ -120,8 +137,8 @@ The recommendation score is calculated based on a weighted sum of the following 
 **Payload:**
 ```json
 {
-  "eventType": "view",
-  "productId": "prod_123",
+  "event_type": "view",
+  "product_id": "Aa7r1Gxm",
   "metadata": {
     "duration": 5,
     "source": "search_results"

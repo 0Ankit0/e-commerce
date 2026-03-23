@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from math import asin, cos, radians, sin, sqrt
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from src.apps.commerce.models import Address
 from src.apps.core.time import utc_now
+from src.apps.iam.utils.hashid import encode_id
 from src.apps.logistics.models import (
-    Branch,
     BranchInventoryMovement,
+    CourierLocationPing,
     DeliveryAgent,
     DeliveryAgentStatus,
     DeliveryException,
@@ -23,12 +26,13 @@ from src.apps.logistics.models import (
     PickupJobStatus,
     ReversePickupJob,
     ReversePickupStatus,
+    RouteOptimizationPlan,
     ShipmentProof,
     ShipmentManifest,
     ShipmentManifestStatus,
     ShippingOption,
 )
-from src.apps.orders.models import OrderStatus, ReturnRequest, Shipment, ShipmentTracking, VendorOrder, VendorOrderStatus
+from src.apps.orders.models import Order, OrderStatus, ReturnRequest, Shipment, ShipmentTracking, VendorOrder, VendorOrderStatus
 
 
 async def get_zone_by_pincode(pincode: str, db: AsyncSession) -> DeliveryZone | None:
@@ -353,3 +357,227 @@ async def create_shipment_proof(
     db.add(proof)
     await db.flush()
     return proof
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    radius_km = 6371.0
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = (
+        sin(dlat / 2) ** 2
+        + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+    )
+    return 2 * radius_km * asin(sqrt(a))
+
+
+def _route_distance_km(stops: list[dict[str, object]]) -> float:
+    if len(stops) < 2:
+        return 0.0
+    total = 0.0
+    for index in range(1, len(stops)):
+        previous = stops[index - 1]
+        current = stops[index]
+        total += _haversine_km(
+            float(previous["latitude"]),
+            float(previous["longitude"]),
+            float(current["latitude"]),
+            float(current["longitude"]),
+        )
+    return total
+
+
+def _nearest_neighbor_route(stops: list[dict[str, object]]) -> list[dict[str, object]]:
+    if len(stops) <= 2:
+        return stops[:]
+
+    unvisited = stops[1:]
+    route = [stops[0]]
+    while unvisited:
+        last = route[-1]
+        next_stop = min(
+            unvisited,
+            key=lambda candidate: _haversine_km(
+                float(last["latitude"]),
+                float(last["longitude"]),
+                float(candidate["latitude"]),
+                float(candidate["longitude"]),
+            ),
+        )
+        route.append(next_stop)
+        unvisited.remove(next_stop)
+    return route
+
+
+def _two_opt_route(stops: list[dict[str, object]]) -> list[dict[str, object]]:
+    best = stops[:]
+    improved = True
+    while improved and len(best) > 3:
+        improved = False
+        best_distance = _route_distance_km(best)
+        for start in range(1, len(best) - 2):
+            for end in range(start + 1, len(best) - 1):
+                candidate = best[:start] + list(reversed(best[start : end + 1])) + best[end + 1 :]
+                candidate_distance = _route_distance_km(candidate)
+                if candidate_distance + 0.001 < best_distance:
+                    best = candidate
+                    best_distance = candidate_distance
+                    improved = True
+    return best
+
+
+async def _shipment_route_stop(shipment_id: int, db: AsyncSession) -> dict[str, object] | None:
+    shipment = await db.get(Shipment, shipment_id)
+    if shipment is None:
+        return None
+    order = await db.get(Order, shipment.order_id)
+    address = await db.get(Address, order.address_id) if order else None
+    if address is None or address.latitude is None or address.longitude is None:
+        return {
+            "shipment_id": encode_id(shipment.id or 0),
+            "awb": shipment.awb,
+            "routable": False,
+            "reason": "destination_coordinates_missing",
+        }
+    return {
+        "shipment_db_id": shipment.id,
+        "shipment_id": encode_id(shipment.id or 0),
+        "order_id": encode_id(order.id or 0) if order else None,
+        "awb": shipment.awb,
+        "name": address.name,
+        "line1": address.line1,
+        "city": address.city,
+        "pincode": address.pincode,
+        "latitude": float(address.latitude),
+        "longitude": float(address.longitude),
+        "routable": True,
+    }
+
+
+async def optimize_manifest_route(
+    *,
+    manifest: ShipmentManifest,
+    db: AsyncSession,
+    trip: LineHaulTrip | None = None,
+    average_speed_kph: float = 28.0,
+    service_minutes_per_stop: int = 8,
+) -> RouteOptimizationPlan:
+    shipment_ids = [int(shipment_id) for shipment_id in json.loads(manifest.shipment_ids_json or "[]")]
+    raw_stops = [await _shipment_route_stop(shipment_id, db) for shipment_id in shipment_ids]
+    routable = [stop for stop in raw_stops if stop and stop.get("routable")]
+    unroutable = [stop for stop in raw_stops if stop and not stop.get("routable")]
+
+    ordered = _two_opt_route(_nearest_neighbor_route(routable))
+    total_distance_km = _route_distance_km(ordered)
+    speed = max(average_speed_kph, 5.0)
+    estimated_duration = int(round((total_distance_km / speed) * 60 + len(ordered) * max(service_minutes_per_stop, 1)))
+
+    traveled = 0.0
+    enriched_stops: list[dict[str, object]] = []
+    for index, stop in enumerate(ordered):
+        leg_distance = 0.0
+        if index > 0:
+            previous = ordered[index - 1]
+            leg_distance = _haversine_km(
+                float(previous["latitude"]),
+                float(previous["longitude"]),
+                float(stop["latitude"]),
+                float(stop["longitude"]),
+            )
+            traveled += leg_distance
+        eta_minutes = int(round((traveled / speed) * 60 + (index + 1) * max(service_minutes_per_stop, 1)))
+        enriched_stops.append(
+            {
+                **stop,
+                "sequence": index + 1,
+                "distance_from_previous_km": round(leg_distance, 2),
+                "eta_minutes": eta_minutes,
+            }
+        )
+
+    plan = (
+        await db.execute(
+            select(RouteOptimizationPlan).where(
+                RouteOptimizationPlan.manifest_id == manifest.id,
+                RouteOptimizationPlan.trip_id == (trip.id if trip else None),
+            )
+        )
+    ).scalars().first()
+    if plan is None:
+        plan = RouteOptimizationPlan(manifest_id=manifest.id, trip_id=trip.id if trip else None)
+        db.add(plan)
+
+    routed_stop_count = len(enriched_stops)
+    total_stop_count = routed_stop_count + len(unroutable)
+    plan.strategy = "nearest_neighbor_2opt_v1"
+    plan.total_distance_km = round(total_distance_km, 2)
+    plan.estimated_duration_minutes = estimated_duration
+    plan.routed_stop_count = routed_stop_count
+    plan.unroutable_stop_count = len(unroutable)
+    plan.score = round((routed_stop_count / total_stop_count) * 100, 2) if total_stop_count else 0.0
+    plan.stops_json = json.dumps(enriched_stops)
+    plan.metrics_json = json.dumps(
+        {
+            "average_speed_kph": speed,
+            "service_minutes_per_stop": max(service_minutes_per_stop, 1),
+            "unroutable_stops": unroutable,
+        }
+    )
+    plan.updated_at = utc_now()
+    await db.flush()
+    return plan
+
+
+async def get_route_plan(
+    *,
+    manifest_id: int | None = None,
+    trip_id: int | None = None,
+    db: AsyncSession,
+) -> RouteOptimizationPlan | None:
+    query = select(RouteOptimizationPlan)
+    if trip_id is not None:
+        query = query.where(RouteOptimizationPlan.trip_id == trip_id)
+    if manifest_id is not None:
+        query = query.where(RouteOptimizationPlan.manifest_id == manifest_id)
+    query = query.order_by(RouteOptimizationPlan.updated_at.desc())
+    return (await db.execute(query)).scalars().first()
+
+
+async def ingest_courier_location_ping(
+    *,
+    trip: LineHaulTrip,
+    latitude: float,
+    longitude: float,
+    shipment_id: int | None,
+    agent_id: int | None,
+    speed_kph: float | None,
+    heading: float | None,
+    accuracy_meters: float | None,
+    source: str,
+    label: str,
+    recorded_at: datetime | None,
+    db: AsyncSession,
+) -> CourierLocationPing:
+    ping = CourierLocationPing(
+        trip_id=trip.id,
+        shipment_id=shipment_id,
+        agent_id=agent_id,
+        latitude=latitude,
+        longitude=longitude,
+        speed_kph=speed_kph,
+        heading=heading,
+        accuracy_meters=accuracy_meters,
+        source=source,
+        label=label,
+        recorded_at=recorded_at or utc_now(),
+    )
+    trip.last_latitude = latitude
+    trip.last_longitude = longitude
+    trip.last_gps_at = ping.recorded_at
+    db.add(ping)
+    if shipment_id:
+        shipment = await db.get(Shipment, shipment_id)
+        if shipment:
+            shipment.current_location = label or f"{latitude:.5f}, {longitude:.5f}"
+            shipment.updated_at = utc_now()
+    await db.flush()
+    return ping

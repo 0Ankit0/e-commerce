@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
-from src.apps.iam.api.deps import get_current_user, get_db
+from src.apps.iam.api.deps import get_db
 from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import decode_id_or_404
 from src.apps.recommendations.models import RecommendationEventType, RecommendationPlacement
@@ -50,7 +50,7 @@ async def fetch_recommendations(
         user_id=current_user.id if current_user else None,
         product_id=decode_id_or_404(product_id) if product_id else None,
     )
-    return {"strategy": "hybrid_monolith_v1", "items": recommendations}
+    return {"strategy": "ml_ranker_v2", "items": recommendations}
 
 
 @router.post("/recommendations/events", status_code=201)

@@ -42,14 +42,17 @@ Status labels:
 | Notifications | Async notification infrastructure, device registry, preferences | `implemented now` |
 | Notifications | Low-stock, payout, return-event, price-drop, delivery-exception, and richer order-state fanout | `implemented in this completion pass` |
 | Catalog | Variant price-history snapshots for vendor price changes | `implemented in this completion pass` |
-| Logistics | External route optimization engine | `future` |
-| Logistics | Real-time courier GPS ingestion | `future` |
-| Recommendations | ML-grade ranking and re-ranking | `future` |
+| Logistics | Built-in nearest-neighbor + 2-opt route optimization for manifests and trips | `implemented in this completion pass` |
+| Logistics | Real-time courier GPS ingestion, trip last-known position, and shipment location updates | `implemented in this completion pass` |
+| Recommendations | ML-grade feature scoring, reason generation, and diversity re-ranking | `implemented in this completion pass` |
 | Payments | Razorpay integration | `future` |
 
 ## Requirement Coverage Notes
 
 - The requirements docs list Razorpay under payment gateways. The running backend intentionally keeps the active provider set to `khalti`, `esewa`, `stripe`, `paypal`, `wallet`, and `cod`; Razorpay remains future work.
+- Route optimization is implemented in-process for manifests and trips. External routing vendors and solver fleets remain optional future enhancements rather than current dependencies.
+- Courier GPS ingestion is implemented through persisted trip pings and shipment location updates.
+- Recommendation ranking now uses a weighted multi-signal ranker with diversity re-ranking in the running backend.
 - The implementation stays in the current FastAPI monolith rather than splitting into separate services.
 - Hashids remain the outward-facing identifier format.
 - The maps abstraction defaults to OSM and upgrades to Google when configured.

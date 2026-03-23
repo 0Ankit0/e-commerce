@@ -137,4 +137,4 @@ graph LR
 
 - The repository is documented as a monolith even where older design drafts discussed microservices.
 - Search is implemented without a separate search engine dependency requirement.
-- Route optimization, courier GPS ingestion, and ML-grade recommendations remain future-only architecture.
+- Route optimization, courier GPS ingestion, and recommendation ranking are implemented inside the FastAPI monolith. External routing engines and larger ML serving stacks remain optional future upgrades.

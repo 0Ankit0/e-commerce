@@ -17,6 +17,7 @@ def get_provider_credentials(provider: str) -> tuple[str, str]:
         "google": (settings.GOOGLE_CLIENT_ID, settings.GOOGLE_CLIENT_SECRET),
         "github": (settings.GITHUB_CLIENT_ID, settings.GITHUB_CLIENT_SECRET),
         "facebook": (settings.FACEBOOK_CLIENT_ID, settings.FACEBOOK_CLIENT_SECRET),
+        "apple": (settings.APPLE_CLIENT_ID, ""),
     }
     if provider not in mapping:
         raise HTTPException(
@@ -39,6 +40,8 @@ def extract_user_info(provider: str, data: dict[str, Any]) -> tuple[str, Optiona
         return str(data.get("id", "")), data.get("email"), data.get("name") or data.get("login")
     if provider == "facebook":
         return str(data.get("id", "")), data.get("email"), data.get("name")
+    if provider == "apple":
+        return str(data.get("sub") or data.get("id", "")), data.get("email"), data.get("name")
     # Generic fallback for future providers
     return str(data.get("id") or data.get("sub", "")), data.get("email"), data.get("name")
 

@@ -373,4 +373,15 @@ User-facing routes should use encoded public IDs consistently. Documentation exa
 
 ### Future-Only Areas
 
-The API surface intentionally does not expose Razorpay-specific routes, external route-optimization engines, real-time courier GPS ingestion, or ML recommendation endpoints as implemented features. Those remain future work.
+The API surface intentionally keeps Razorpay-specific routes and external routing-vendor integrations out of the implemented feature set. The current repository does implement recommendation ranking plus logistics route planning and courier GPS ingestion through the monolith API.
+
+Implemented examples:
+
+- `GET /api/v1/recommendations`
+- `POST /api/v1/recommendations/events`
+- `POST /api/v1/logistics/manifests/{manifest_id}/optimize-route`
+- `GET /api/v1/logistics/manifests/{manifest_id}/route-plan`
+- `POST /api/v1/logistics/trips/{trip_id}/optimize-route`
+- `GET /api/v1/logistics/trips/{trip_id}/route-plan`
+- `POST /api/v1/logistics/trips/{trip_id}/gps`
+- `GET /api/v1/logistics/trips/{trip_id}/gps`

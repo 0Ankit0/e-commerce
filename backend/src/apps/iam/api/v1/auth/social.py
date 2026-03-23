@@ -1,6 +1,7 @@
 """Social OAuth2 login endpoints — browser OAuth plus native Google token exchange."""
 import asyncio
 from datetime import datetime, timedelta, timezone
+import json
 from typing import Any, Optional
 
 import httpx
@@ -34,17 +35,96 @@ from src.apps.iam.utils.social import (
 )
 
 router = APIRouter()
+APPLE_AUDIENCE = "https://appleid.apple.com"
+APPLE_CLIENT_SECRET_LIFETIME_SECONDS = 60 * 60 * 24 * 180
 
 def _provider_enabled_map() -> dict[str, bool]:
     return {
         "google": settings.GOOGLE_ENABLED,
         "github": settings.GITHUB_ENABLED,
         "facebook": settings.FACEBOOK_ENABLED,
+        "apple": settings.APPLE_ENABLED,
     }
 
 
 class NativeGoogleLoginRequest(BaseModel):
     id_token: str
+
+
+def _normalize_apple_private_key() -> str:
+    raw_key = settings.APPLE_PRIVATE_KEY.get_secret_value()
+    normalized = raw_key.replace("\\n", "\n").strip()
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Apple Sign In is enabled but the private key is not configured.",
+        )
+    return normalized
+
+
+def _build_apple_client_secret() -> str:
+    if not settings.APPLE_CLIENT_ID or not settings.APPLE_TEAM_ID or not settings.APPLE_KEY_ID:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Apple Sign In is enabled but required configuration is missing.",
+        )
+
+    now = int(datetime.now(timezone.utc).timestamp())
+    payload = {
+        "iss": settings.APPLE_TEAM_ID,
+        "iat": now,
+        "exp": now + APPLE_CLIENT_SECRET_LIFETIME_SECONDS,
+        "aud": APPLE_AUDIENCE,
+        "sub": settings.APPLE_CLIENT_ID,
+    }
+    return jwt.encode(
+        payload,
+        _normalize_apple_private_key(),
+        algorithm="ES256",
+        headers={"kid": settings.APPLE_KEY_ID},
+    )
+
+
+def _resolve_provider_credentials(provider: str) -> tuple[str, str]:
+    client_id, client_secret = get_provider_credentials(provider)
+    if provider == "apple":
+        return client_id, _build_apple_client_secret()
+    return client_id, client_secret
+
+
+def _extract_apple_user_info(id_token: str, client_id: str) -> dict[str, Any]:
+    try:
+        claims = jwt.get_unverified_claims(id_token)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Apple Sign In did not return a valid ID token.",
+        ) from exc
+
+    if claims.get("iss") != APPLE_AUDIENCE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Apple Sign In issuer could not be verified.",
+        )
+
+    audience = claims.get("aud")
+    if audience != client_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Apple Sign In audience could not be verified.",
+        )
+
+    if str(claims.get("email_verified", "true")).lower() == "false":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Apple Sign In did not return a verified email address.",
+        )
+
+    return {
+        "sub": claims.get("sub"),
+        "email": claims.get("email"),
+        "name": claims.get("name"),
+    }
 
 
 async def _issue_app_tokens_for_social_user(
@@ -141,12 +221,12 @@ async def list_social_providers() -> dict:
 @router.get(
     "/social/{provider}/",
     summary="Initiate social login",
-    description="Redirects the browser to the OAuth2 provider's login page. Supported: google, github, facebook.",
+    description="Redirects the browser to the OAuth2 provider's login page. Supported: google, github, facebook, apple.",
 )
 async def social_login(provider: str) -> RedirectResponse:
     _assert_provider_enabled(provider)
     config = OAUTH_PROVIDERS[provider]
-    client_id, _ = get_provider_credentials(provider)
+    client_id, _ = _resolve_provider_credentials(provider)
     params: dict[str, Any] = {
         "client_id": client_id,
         "redirect_uri": get_callback_url(provider),
@@ -184,7 +264,7 @@ async def social_callback(
         )
 
     config = OAUTH_PROVIDERS[provider]
-    client_id, client_secret = get_provider_credentials(provider)
+    client_id, client_secret = _resolve_provider_credentials(provider)
     callback_url = get_callback_url(provider)
 
     async with httpx.AsyncClient() as http:
@@ -211,33 +291,43 @@ async def social_callback(
                 detail=f"Failed to obtain access token from {provider}",
             )
 
-        provider_token: Optional[str] = token_resp.json().get("access_token")
-        if not provider_token:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"No access token returned by {provider}",
-            )
-
-        # Fetch user profile from provider
-        try:
-            info_resp = await retry_async(
-                lambda: http.get(
-                    config["userinfo_url"],
-                    headers={
-                        "Authorization": f"Bearer {provider_token}",
-                        "Accept": "application/json",
-                        "User-Agent": "FastAPI-Template/1.0",
-                    },
-                    timeout=default_timeout(),
+        token_payload = token_resp.json()
+        if provider == "apple":
+            id_token = token_payload.get("id_token")
+            if not id_token:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Apple Sign In did not return an ID token.",
                 )
-            )
-            info_resp.raise_for_status()
-            user_info: dict[str, Any] = info_resp.json()
-        except httpx.HTTPError:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch user info from {provider}",
-            )
+            user_info = _extract_apple_user_info(id_token, client_id)
+        else:
+            provider_token: Optional[str] = token_payload.get("access_token")
+            if not provider_token:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"No access token returned by {provider}",
+                )
+
+            # Fetch user profile from provider
+            try:
+                info_resp = await retry_async(
+                    lambda: http.get(
+                        config["userinfo_url"],
+                        headers={
+                            "Authorization": f"Bearer {provider_token}",
+                            "Accept": "application/json",
+                            "User-Agent": "FastAPI-Template/1.0",
+                        },
+                        timeout=default_timeout(),
+                    )
+                )
+                info_resp.raise_for_status()
+                user_info = info_resp.json()
+            except httpx.HTTPError:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Failed to fetch user info from {provider}",
+                )
 
         # GitHub may keep email private — fetch it from the dedicated emails endpoint
         if provider == "github" and not user_info.get("email"):
@@ -262,6 +352,24 @@ async def social_callback(
                     user_info["email"] = primary
             except Exception:
                 pass
+
+        if provider == "apple" and not user_info.get("name"):
+            raw_user = request.query_params.get("user")
+            if raw_user:
+                try:
+                    user_payload = json.loads(raw_user)
+                    full_name = " ".join(
+                        part
+                        for part in [
+                            user_payload.get("name", {}).get("firstName"),
+                            user_payload.get("name", {}).get("lastName"),
+                        ]
+                        if part
+                    ).strip()
+                    if full_name:
+                        user_info["name"] = full_name
+                except json.JSONDecodeError:
+                    pass
 
     social_id, email, display_name = extract_user_info(provider, user_info)
 
