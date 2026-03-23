@@ -8,9 +8,9 @@ import { useNotifications } from '@/hooks/use-notifications';
 import { useFeaturedProducts } from '@/hooks/use-catalog';
 import { useOrders } from '@/hooks/use-orders';
 import { formatCurrency, formatDateLabel, titleCaseStatus } from '@/lib/commerce-format';
+import { StorefrontState } from '@/components/storefront/storefront-state';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PORTAL_DEFINITIONS, getUserPortals } from '@/lib/portal';
-import { mockProducts } from '@/lib/mock-commerce';
 
 export default function DashboardPage() {
   const { user } = useAuthStore();
@@ -18,7 +18,12 @@ export default function DashboardPage() {
   const { data: ordersData } = useOrders();
   const { data: wishlistData } = useWishlist();
   const { data: notifData, isLoading: loadingNotifs } = useNotifications({ limit: 5 });
-  const { data: featuredProductsData } = useFeaturedProducts(4);
+  const {
+    data: featuredProductsData,
+    isLoading: featuredProductsLoading,
+    isError: featuredProductsError,
+    refetch: refetchFeaturedProducts,
+  } = useFeaturedProducts(4);
 
   const recentNotifs = notifData?.items ?? [];
   const unreadCount = notifData?.unread_count ?? 0;
@@ -27,7 +32,7 @@ export default function DashboardPage() {
   const activeOrders = orders.filter((order) => !['delivered', 'cancelled'].includes(order.status)).length;
   const cartUnits = cart?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0;
   const latestOrder = orders[0];
-  const featuredProducts = featuredProductsData?.items?.length ? featuredProductsData.items : mockProducts.slice(0, 4);
+  const featuredProducts = featuredProductsData?.items ?? [];
   const accessiblePortals = getUserPortals(user).filter((portal) => portal !== 'customer');
 
   const stats = [
@@ -168,7 +173,23 @@ export default function DashboardPage() {
                   Open order detail
                 </Link>
               </div>
-            ) : (
+            ) : featuredProductsLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((item) => (
+                  <div key={item} className="h-20 animate-pulse rounded-2xl bg-[#fcf7f0]" />
+                ))}
+              </div>
+            ) : featuredProductsError ? (
+              <StorefrontState
+                eyebrow="Featured for you"
+                title="Featured products unavailable"
+                description="The dashboard could not load live featured products right now."
+                actionLabel="Retry"
+                onAction={() => {
+                  void refetchFeaturedProducts();
+                }}
+              />
+            ) : featuredProducts.length > 0 ? (
               <div className="space-y-3">
                 {featuredProducts.map((product) => (
                   <Link
@@ -189,6 +210,12 @@ export default function DashboardPage() {
                   </Link>
                 ))}
               </div>
+            ) : (
+              <StorefrontState
+                eyebrow="Featured for you"
+                title="No featured products yet"
+                description="Featured catalog recommendations will appear here after vendors publish inventory."
+              />
             )}
           </CardContent>
         </Card>
@@ -226,7 +253,7 @@ export default function DashboardPage() {
             <Link href="/wishlist" className="rounded-[24px] border border-[rgba(25,30,45,0.08)] p-5 transition-colors hover:bg-[#fcf7f0]">
               <p className="text-xs uppercase tracking-[0.2em] text-[#8b6e57]">Wishlist</p>
               <p className="mt-2 text-lg font-medium text-[#1d1b18]">Share saved picks</p>
-              <p className="mt-2 text-sm text-[#6f6257]">Create public share links and keep an eye on future price-drop alerts.</p>
+              <p className="mt-2 text-sm text-[#6f6257]">Create public share links and keep an eye on live price-drop alerts.</p>
             </Link>
           </CardContent>
         </Card>

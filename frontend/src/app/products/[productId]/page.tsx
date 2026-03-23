@@ -1,5 +1,6 @@
 'use client';
 
+import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -14,8 +15,8 @@ import {
 } from '@/hooks/use-commerce';
 import { SiteHeader } from '@/components/storefront/site-header';
 import { SiteFooter } from '@/components/storefront/site-footer';
+import { StorefrontState } from '@/components/storefront/storefront-state';
 import { formatCurrency } from '@/lib/commerce-format';
-import { mockProducts } from '@/lib/mock-commerce';
 import { useAuthStore } from '@/store/auth-store';
 
 export default function ProductDetailPage() {
@@ -23,49 +24,97 @@ export default function ProductDetailPage() {
   const productId = Array.isArray(params.productId) ? params.productId[0] : params.productId;
   const { isAuthenticated } = useAuthStore();
   const { getErrorMessage } = useApiErrorMessage();
-  const { data: product } = useCatalogProduct(productId);
+  const { data: product, isLoading, isError, error, refetch } = useCatalogProduct(productId);
   const { data: wishlistData } = useWishlist(isAuthenticated);
   const addToCart = useAddToCart();
   const addToWishlist = useAddToWishlist();
   const removeFromWishlist = useRemoveFromWishlist();
-  const fallback = mockProducts.find((item) => item.id === productId) ?? mockProducts[0];
-  const activeProduct = product ?? fallback;
-  const [selectedVariantId, setSelectedVariantId] = useState(
-    activeProduct.variants.find((variant) => variant.is_default)?.id ?? activeProduct.variants[0]?.id ?? ''
-  );
+  const [selectedVariantId, setSelectedVariantId] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [feedback, setFeedback] = useState<string | null>(null);
-  const heroImage = activeProduct.images.find((image) => image.is_primary)?.url ?? activeProduct.images[0]?.url;
-  const variants = useMemo(
-    () =>
-      activeProduct.variants.length
-        ? activeProduct.variants
-        : [
-            {
-              id: 'mock-default',
-              sku: 'fallback',
-              name: 'Standard',
-              mrp: activeProduct.min_selling_price ?? 0,
-              selling_price: activeProduct.min_selling_price ?? 0,
-              attributes: {},
-              available_qty: activeProduct.in_stock ? 12 : 0,
-              is_default: true,
-              is_active: activeProduct.in_stock,
-            },
-          ],
-    [activeProduct]
-  );
+  const heroImage = product?.images.find((image) => image.is_primary)?.url ?? product?.images[0]?.url;
+  const variants = useMemo(() => product?.variants ?? [], [product]);
   const selectedVariant = useMemo(
-    () => variants.find((variant) => variant.id === selectedVariantId) ?? variants[0],
+    () => variants.find((variant) => variant.id === selectedVariantId) ?? variants[0] ?? null,
     [selectedVariantId, variants]
   );
-  const isWishlisted = wishlistData?.items.some((item) => item.product_id === activeProduct.id) ?? false;
+  const isWishlisted = product ? (wishlistData?.items.some((item) => item.product_id === product.id) ?? false) : false;
+  const canPurchase = Boolean(product && selectedVariant && variants.length > 0);
 
   useEffect(() => {
     setSelectedVariantId(variants.find((variant) => variant.is_default)?.id ?? variants[0]?.id ?? '');
-  }, [activeProduct.id, variants]);
+  }, [product?.id, variants]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#fcf7f0]">
+        <SiteHeader />
+        <main className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+          <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr]" role="status" aria-label="Loading product detail">
+            <div className="aspect-[4/3] animate-pulse rounded-[38px] bg-white" />
+            <div className="h-[560px] animate-pulse rounded-[38px] bg-white" />
+          </div>
+        </main>
+        <SiteFooter />
+      </div>
+    );
+  }
+
+  if (isError) {
+    const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+    return (
+      <div className="min-h-screen bg-[#fcf7f0]">
+        <SiteHeader />
+        <main className="mx-auto max-w-4xl px-4 py-12 sm:px-6 lg:px-8">
+          <StorefrontState
+            eyebrow={status === 404 ? 'Product not found' : 'Product unavailable'}
+            title={status === 404 ? 'This product does not exist' : 'We could not load this product'}
+            description={
+              status === 404
+                ? 'The requested product ID did not resolve to a live catalog item.'
+                : 'The product detail request failed, so cart and wishlist actions stay disabled until a real product is available.'
+            }
+            actionLabel={status === 404 ? 'Back to shop' : 'Retry'}
+            onAction={() => {
+              if (status === 404) {
+                window.location.assign('/shop');
+                return;
+              }
+              void refetch();
+            }}
+          />
+        </main>
+        <SiteFooter />
+      </div>
+    );
+  }
+
+  if (!product) {
+    return (
+      <div className="min-h-screen bg-[#fcf7f0]">
+        <SiteHeader />
+        <main className="mx-auto max-w-4xl px-4 py-12 sm:px-6 lg:px-8">
+          <StorefrontState
+            eyebrow="Product not found"
+            title="This product is unavailable"
+            description="No live product data is available for this route."
+            actionLabel="Back to shop"
+            onAction={() => {
+              window.location.assign('/shop');
+            }}
+          />
+        </main>
+        <SiteFooter />
+      </div>
+    );
+  }
+
+  const activeProduct = product;
 
   async function handleAddToCart() {
+    if (!selectedVariant) {
+      return;
+    }
     if (!isAuthenticated) {
       window.location.href = '/login';
       return;
@@ -77,12 +126,15 @@ export default function ProductDetailPage() {
         quantity,
       });
       setFeedback('Added to cart. You can review everything before checkout.');
-    } catch (error) {
-      setFeedback(getErrorMessage(error));
+    } catch (err) {
+      setFeedback(getErrorMessage(err));
     }
   }
 
   async function handleToggleWishlist() {
+    if (!canPurchase) {
+      return;
+    }
     if (!isAuthenticated) {
       window.location.href = '/login';
       return;
@@ -96,8 +148,8 @@ export default function ProductDetailPage() {
       }
       await addToWishlist.mutateAsync(activeProduct.id);
       setFeedback('Saved to your wishlist.');
-    } catch (error) {
-      setFeedback(getErrorMessage(error));
+    } catch (err) {
+      setFeedback(getErrorMessage(err));
     }
   }
 
@@ -159,15 +211,20 @@ export default function ProductDetailPage() {
                 <label className="rounded-[24px] border border-[rgba(25,30,45,0.08)] bg-[#fcf7f0] px-4 py-3 text-sm text-[#55483d]">
                   <span className="mb-2 block text-[11px] uppercase tracking-[0.22em] text-[#8b6e57]">Variant</span>
                   <select
-                    value={selectedVariant?.id}
+                    value={selectedVariant?.id ?? ''}
                     onChange={(event) => setSelectedVariantId(event.target.value)}
                     className="w-full bg-transparent outline-none"
+                    disabled={!canPurchase}
                   >
-                    {variants.map((variant) => (
-                      <option key={variant.id} value={variant.id}>
-                        {variant.name} · {formatCurrency(variant.selling_price)}
-                      </option>
-                    ))}
+                    {variants.length > 0 ? (
+                      variants.map((variant) => (
+                        <option key={variant.id} value={variant.id}>
+                          {variant.name} · {formatCurrency(variant.selling_price)}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">No variants available</option>
+                    )}
                   </select>
                 </label>
                 <div className="rounded-[24px] border border-[rgba(25,30,45,0.08)] bg-[#fcf7f0] px-4 py-3 text-sm text-[#55483d]">
@@ -176,7 +233,8 @@ export default function ProductDetailPage() {
                     <button
                       type="button"
                       onClick={() => setQuantity((value) => Math.max(1, value - 1))}
-                      className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#1d1b18]"
+                      className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#1d1b18] disabled:opacity-60"
+                      disabled={!canPurchase}
                     >
                       <Minus className="h-4 w-4" />
                     </button>
@@ -184,7 +242,8 @@ export default function ProductDetailPage() {
                     <button
                       type="button"
                       onClick={() => setQuantity((value) => Math.min(selectedVariant?.available_qty || 1, value + 1))}
-                      className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#1d1b18]"
+                      className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#1d1b18] disabled:opacity-60"
+                      disabled={!canPurchase}
                     >
                       <Plus className="h-4 w-4" />
                     </button>
@@ -196,13 +255,18 @@ export default function ProductDetailPage() {
                   {feedback}
                 </div>
               ) : null}
+              {!canPurchase ? (
+                <div className="rounded-[22px] border border-[rgba(25,30,45,0.08)] bg-white px-4 py-3 text-sm text-[#7a573f]">
+                  Real variant inventory is not available for this product yet, so cart and wishlist actions stay disabled.
+                </div>
+              ) : null}
             </div>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <button
                 type="button"
                 onClick={handleAddToCart}
-                disabled={addToCart.isPending || !selectedVariant?.available_qty}
+                disabled={addToCart.isPending || !selectedVariant?.available_qty || !canPurchase}
                 className="inline-flex items-center justify-center rounded-full bg-[#1d1b18] px-6 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isAuthenticated ? 'Add to cart' : 'Sign in to buy'}
@@ -210,7 +274,8 @@ export default function ProductDetailPage() {
               <button
                 type="button"
                 onClick={handleToggleWishlist}
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-[rgba(25,30,45,0.08)] px-6 py-3 text-sm font-semibold text-[#3e352d]"
+                disabled={!canPurchase}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-[rgba(25,30,45,0.08)] px-6 py-3 text-sm font-semibold text-[#3e352d] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Heart className={`h-4 w-4 ${isWishlisted ? 'fill-current text-[#c96d44]' : ''}`} />
                 {isWishlisted ? 'Saved to wishlist' : 'Save for later'}

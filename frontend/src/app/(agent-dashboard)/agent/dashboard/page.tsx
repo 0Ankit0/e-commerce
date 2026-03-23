@@ -16,7 +16,7 @@ export default function AgentDashboardPage() {
           <CardTitle>Today&apos;s route</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-[#54483f]">
-          <p>The backend supports event-based tracking and delivery exceptions. Advanced live GPS route streaming remains future work.</p>
+          <p>The backend supports route planning, courier GPS ingestion, delivery events, and delivery exception handling in the current deployable core.</p>
         </CardContent>
       </Card>
     </div>

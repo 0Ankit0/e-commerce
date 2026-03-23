@@ -7,16 +7,26 @@ import { useAuthStore } from '@/store/auth-store';
 import { SiteFooter } from '@/components/storefront/site-footer';
 import { SiteHeader } from '@/components/storefront/site-header';
 import { ProductCard } from '@/components/storefront/product-card';
-import { mockCategories, mockProducts } from '@/lib/mock-commerce';
+import { StorefrontState } from '@/components/storefront/storefront-state';
 import { getDefaultPortalPath } from '@/lib/portal';
 
 export default function Home() {
   const { isAuthenticated, user } = useAuthStore();
-  const { data: featuredProductsData } = useFeaturedProducts(6);
-  const { data: categoriesData } = useCatalogCategories();
+  const {
+    data: featuredProductsData,
+    isLoading: isFeaturedLoading,
+    isError: isFeaturedError,
+    refetch: refetchFeaturedProducts,
+  } = useFeaturedProducts(6);
+  const {
+    data: categoriesData,
+    isLoading: areCategoriesLoading,
+    isError: areCategoriesError,
+    refetch: refetchCategories,
+  } = useCatalogCategories();
 
-  const featuredProducts = featuredProductsData?.items?.length ? featuredProductsData.items : mockProducts;
-  const categories = categoriesData?.items?.length ? categoriesData.items.slice(0, 4) : mockCategories;
+  const featuredProducts = featuredProductsData?.items ?? [];
+  const categories = categoriesData?.items?.slice(0, 4) ?? [];
   const portalHref = getDefaultPortalPath(user);
 
   return (
@@ -69,25 +79,49 @@ export default function Home() {
             <div className="relative">
               <div className="absolute inset-0 translate-x-6 translate-y-8 rounded-[40px] bg-[#1d1b18]" />
               <div className="relative overflow-hidden rounded-[40px] border border-[rgba(25,30,45,0.08)] bg-white p-6 shadow-[0_24px_70px_rgba(25,30,45,0.12)]">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  {featuredProducts.slice(0, 2).map((product) => (
-                    <div key={product.id} className="rounded-[28px] border border-[rgba(25,30,45,0.08)] bg-[#fcf7f0] p-5">
-                      <p className="text-xs uppercase tracking-[0.24em] text-[#8b6e57]">
-                        {product.category?.name ?? 'Curated'}
-                      </p>
-                      <h3 className="mt-3 font-[family:var(--font-display)] text-3xl">{product.name}</h3>
-                      <p className="mt-2 text-sm text-[#66584c]">{product.short_description}</p>
-                      <div className="mt-5 flex items-center justify-between">
-                        <span className="text-lg font-semibold">
-                          {product.min_selling_price ? `$${product.min_selling_price.toFixed(0)}` : 'Quote'}
-                        </span>
-                        <span className="rounded-full bg-white px-3 py-1 text-xs text-[#6b5648] shadow-[0_10px_24px_rgba(25,30,45,0.06)]">
-                          {product.in_stock ? 'In stock' : 'Back soon'}
-                        </span>
+                {isFeaturedLoading ? (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {[1, 2].map((item) => (
+                      <div key={item} className="h-48 animate-pulse rounded-[28px] bg-[#fcf7f0]" />
+                    ))}
+                  </div>
+                ) : isFeaturedError ? (
+                  <StorefrontState
+                    eyebrow="Storefront"
+                    title="Featured products unavailable"
+                    description="The home page could not load the live featured catalog feed."
+                    actionLabel="Retry"
+                    onAction={() => {
+                      void refetchFeaturedProducts();
+                    }}
+                  />
+                ) : featuredProducts.length === 0 ? (
+                  <StorefrontState
+                    eyebrow="Storefront"
+                    title="No featured products yet"
+                    description="Featured inventory has not been published yet, so the home page is waiting for live catalog data."
+                  />
+                ) : (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {featuredProducts.slice(0, 2).map((product) => (
+                      <div key={product.id} className="rounded-[28px] border border-[rgba(25,30,45,0.08)] bg-[#fcf7f0] p-5">
+                        <p className="text-xs uppercase tracking-[0.24em] text-[#8b6e57]">
+                          {product.category?.name ?? 'Curated'}
+                        </p>
+                        <h3 className="mt-3 font-[family:var(--font-display)] text-3xl">{product.name}</h3>
+                        <p className="mt-2 text-sm text-[#66584c]">{product.short_description}</p>
+                        <div className="mt-5 flex items-center justify-between">
+                          <span className="text-lg font-semibold">
+                            {product.min_selling_price ? `$${product.min_selling_price.toFixed(0)}` : 'Quote'}
+                          </span>
+                          <span className="rounded-full bg-white px-3 py-1 text-xs text-[#6b5648] shadow-[0_10px_24px_rgba(25,30,45,0.06)]">
+                            {product.in_stock ? 'In stock' : 'Back soon'}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
                 <div className="mt-4 rounded-[30px] bg-[#1d1b18] p-5 text-white">
                   <p className="text-xs uppercase tracking-[0.24em] text-[rgba(255,255,255,0.58)]">Portal controls</p>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -120,25 +154,49 @@ export default function Home() {
               View full catalog
             </Link>
           </div>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {categories.map((category, index) => (
-              <Link
-                key={category.id}
-                href={`/shop?category=${category.id}`}
-                className="rounded-[30px] border border-[rgba(25,30,45,0.08)] bg-white p-6 shadow-[0_16px_45px_rgba(25,30,45,0.05)] transition-transform hover:-translate-y-1"
-                style={{
-                  backgroundImage:
-                    index % 2 === 0
-                      ? 'linear-gradient(135deg, rgba(244,210,168,0.28), rgba(255,255,255,1))'
-                      : 'linear-gradient(135deg, rgba(217,243,235,0.55), rgba(255,255,255,1))',
-                }}
-              >
-                <p className="text-xs uppercase tracking-[0.24em] text-[#8b6e57]">Collection</p>
-                <h3 className="mt-6 font-[family:var(--font-display)] text-3xl">{category.name}</h3>
-                <p className="mt-3 text-sm text-[#66584c]">{category.description || 'Curated category for focused browsing.'}</p>
-              </Link>
-            ))}
-          </div>
+          {areCategoriesLoading ? (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {[1, 2, 3, 4].map((item) => (
+                <div key={item} className="h-56 animate-pulse rounded-[30px] bg-white" />
+              ))}
+            </div>
+          ) : areCategoriesError ? (
+            <StorefrontState
+              eyebrow="Collections"
+              title="Collections unavailable"
+              description="The storefront could not load the live category list."
+              actionLabel="Retry"
+              onAction={() => {
+                void refetchCategories();
+              }}
+            />
+          ) : categories.length === 0 ? (
+            <StorefrontState
+              eyebrow="Collections"
+              title="No collections published yet"
+              description="Category navigation will appear here as soon as catalog collections are available from the backend."
+            />
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {categories.map((category, index) => (
+                <Link
+                  key={category.id}
+                  href={`/shop?category=${category.id}`}
+                  className="rounded-[30px] border border-[rgba(25,30,45,0.08)] bg-white p-6 shadow-[0_16px_45px_rgba(25,30,45,0.05)] transition-transform hover:-translate-y-1"
+                  style={{
+                    backgroundImage:
+                      index % 2 === 0
+                        ? 'linear-gradient(135deg, rgba(244,210,168,0.28), rgba(255,255,255,1))'
+                        : 'linear-gradient(135deg, rgba(217,243,235,0.55), rgba(255,255,255,1))',
+                  }}
+                >
+                  <p className="text-xs uppercase tracking-[0.24em] text-[#8b6e57]">Collection</p>
+                  <h3 className="mt-6 font-[family:var(--font-display)] text-3xl">{category.name}</h3>
+                  <p className="mt-3 text-sm text-[#66584c]">{category.description || 'Curated category for focused browsing.'}</p>
+                </Link>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -151,11 +209,35 @@ export default function Home() {
               See all products
             </Link>
           </div>
-          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-            {featuredProducts.slice(0, 6).map((product) => (
-              <ProductCard key={product.id} product={product} />
-            ))}
-          </div>
+          {isFeaturedLoading ? (
+            <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+              {[1, 2, 3].map((item) => (
+                <div key={item} className="h-[420px] animate-pulse rounded-[28px] bg-white" />
+              ))}
+            </div>
+          ) : isFeaturedError ? (
+            <StorefrontState
+              eyebrow="Featured now"
+              title="Featured feed unavailable"
+              description="The storefront could not load featured products from the live API."
+              actionLabel="Retry"
+              onAction={() => {
+                void refetchFeaturedProducts();
+              }}
+            />
+          ) : featuredProducts.length === 0 ? (
+            <StorefrontState
+              eyebrow="Featured now"
+              title="Nothing featured yet"
+              description="Featured products will appear here after vendors publish inventory and mark items as featured."
+            />
+          ) : (
+            <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+              {featuredProducts.slice(0, 6).map((product) => (
+                <ProductCard key={product.id} product={product} />
+              ))}
+            </div>
+          )}
         </section>
 
         <section id="services" className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8">

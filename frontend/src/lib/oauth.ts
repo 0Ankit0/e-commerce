@@ -1,4 +1,6 @@
-export type OAuthProvider = 'google' | 'github' | 'facebook';
+export type OAuthProvider = 'google' | 'github' | 'facebook' | 'apple';
+
+const OAUTH_PROVIDERS: OAuthProvider[] = ['google', 'github', 'facebook', 'apple'];
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000/api/v1';
 
@@ -16,7 +18,9 @@ export async function getEnabledProviders(): Promise<OAuthProvider[]> {
     });
     if (!res.ok) return [];
     const data = (await res.json()) as { providers: string[] };
-    return (data.providers ?? []) as OAuthProvider[];
+    return (data.providers ?? []).filter((provider): provider is OAuthProvider =>
+      OAUTH_PROVIDERS.includes(provider as OAuthProvider)
+    );
   } catch {
     return [];
   }

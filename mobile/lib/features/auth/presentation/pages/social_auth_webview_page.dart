@@ -3,6 +3,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/network/api_endpoints.dart';
+import '../widgets/social_provider_buttons.dart';
 
 /// Result returned when social auth WebView completes.
 class SocialAuthResult {
@@ -89,16 +90,7 @@ class _SocialAuthWebViewPageState extends State<SocialAuthWebViewPage> {
   }
 
   String get _providerLabel {
-    switch (widget.provider) {
-      case 'google':
-        return 'Google';
-      case 'github':
-        return 'GitHub';
-      case 'facebook':
-        return 'Facebook';
-      default:
-        return widget.provider[0].toUpperCase() + widget.provider.substring(1);
-    }
+    return socialProviderLabel(widget.provider);
   }
 
   @override

@@ -22,6 +22,7 @@ const PROVIDER_LABELS: Record<OAuthProvider, string> = {
   google: 'Google',
   github: 'GitHub',
   facebook: 'Facebook',
+  apple: 'Apple',
 };
 
 const signupSchema = z

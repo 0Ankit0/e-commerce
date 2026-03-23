@@ -1,5 +1,6 @@
 'use client';
 
+import axios from 'axios';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
 import type {
@@ -25,6 +26,16 @@ interface ProductQueryOptions {
   limit?: number;
 }
 
+function shouldRetryCatalogQuery(failureCount: number, error: unknown) {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+    if (status === 401 || status === 403 || status === 404) {
+      return false;
+    }
+  }
+  return failureCount < 2;
+}
+
 export function useCatalogProducts(options: ProductQueryOptions = {}) {
   return useQuery({
     queryKey: ['catalog-products', options],
@@ -48,6 +59,7 @@ export function useCatalogProducts(options: ProductQueryOptions = {}) {
       return response.data;
     },
     staleTime: 60_000,
+    retry: shouldRetryCatalogQuery,
   });
 }
 
@@ -63,6 +75,7 @@ export function useCatalogCategories() {
       return response.data;
     },
     staleTime: 5 * 60_000,
+    retry: shouldRetryCatalogQuery,
   });
 }
 
@@ -74,6 +87,7 @@ export function useCatalogBrands() {
       return response.data;
     },
     staleTime: 5 * 60_000,
+    retry: shouldRetryCatalogQuery,
   });
 }
 
@@ -86,5 +100,18 @@ export function useCatalogProduct(productId: string) {
     },
     enabled: Boolean(productId),
     staleTime: 60_000,
+    retry: shouldRetryCatalogQuery,
+  });
+}
+
+export function useVendorProducts() {
+  return useQuery({
+    queryKey: ['vendor-products'],
+    queryFn: async () => {
+      const response = await apiClient.get<CatalogListResponse<CatalogProduct>>('/vendor/products');
+      return response.data;
+    },
+    staleTime: 60_000,
+    retry: shouldRetryCatalogQuery,
   });
 }

@@ -4,6 +4,8 @@
 
 ## Documentation Structure
 
+This folder is the canonical design source for the project. The root [docs index](../README.md) links back here plus the runtime guides for backend, frontend, and mobile applications.
+
 | Phase | Folder | Description |
 |-------|--------|-------------|
 | 1 | [requirements](./requirements/) | Functional & non-functional requirements, user stories |

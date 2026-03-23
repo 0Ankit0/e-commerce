@@ -1,13 +1,14 @@
 'use client';
 
+import axios from 'axios';
 import { useDeferredValue, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { useCatalogBrands, useCatalogCategories, useCatalogProducts } from '@/hooks/use-catalog';
 import { ProductCard } from '@/components/storefront/product-card';
 import { SiteHeader } from '@/components/storefront/site-header';
 import { SiteFooter } from '@/components/storefront/site-footer';
+import { StorefrontState } from '@/components/storefront/storefront-state';
 import { formatCurrency } from '@/lib/commerce-format';
-import { mockCategories, mockProducts } from '@/lib/mock-commerce';
 
 export default function ShopPage() {
   const [query, setQuery] = useState('');
@@ -15,20 +16,31 @@ export default function ShopPage() {
   const [brand, setBrand] = useState('');
   const [featuredOnly, setFeaturedOnly] = useState(false);
   const deferredQuery = useDeferredValue(query);
-  const { data: productsData } = useCatalogProducts({
+  const {
+    data: productsData,
+    isLoading: isProductsLoading,
+    isError: isProductsError,
+    error: productsError,
+    refetch: refetchProducts,
+  } = useCatalogProducts({
     q: deferredQuery || undefined,
     category: category || undefined,
     brand: brand || undefined,
     isFeatured: featuredOnly || undefined,
     limit: 24,
   });
-  const { data: categoriesData } = useCatalogCategories();
+  const {
+    data: categoriesData,
+    isLoading: areCategoriesLoading,
+    isError: areCategoriesError,
+  } = useCatalogCategories();
   const { data: brandsData } = useCatalogBrands();
 
-  const products = productsData?.items?.length ? productsData.items : mockProducts;
-  const categories = categoriesData?.items?.length ? categoriesData.items : mockCategories;
-  const brands = brandsData?.items?.length ? brandsData.items : [];
+  const products = productsData?.items ?? [];
+  const categories = categoriesData?.items ?? [];
+  const brands = brandsData?.items ?? [];
   const groupedCategories = useMemo(() => categories.slice(0, 6), [categories]);
+  const productsErrorStatus = axios.isAxiosError(productsError) ? productsError.response?.status : undefined;
 
   return (
     <div className="min-h-screen bg-[#fcf7f0]">
@@ -54,6 +66,7 @@ export default function ShopPage() {
                     onChange={(event) => setQuery(event.target.value)}
                     placeholder="Search products, materials, moods..."
                     className="w-full bg-transparent text-sm outline-none"
+                    aria-label="Search products"
                   />
                 </label>
                 <button
@@ -64,7 +77,7 @@ export default function ShopPage() {
                   }`}
                 >
                   Featured only
-                  </button>
+                </button>
               </div>
               <div className="grid gap-3 md:grid-cols-3">
                 <label className="rounded-[24px] border border-[rgba(25,30,45,0.08)] bg-[#fcf7f0] px-4 py-3 text-sm text-[#55483d]">
@@ -73,6 +86,7 @@ export default function ShopPage() {
                     value={category}
                     onChange={(event) => setCategory(event.target.value)}
                     className="w-full bg-transparent outline-none"
+                    aria-label="Category"
                   >
                     <option value="">All collections</option>
                     {categories.map((item) => (
@@ -88,6 +102,7 @@ export default function ShopPage() {
                     value={brand}
                     onChange={(event) => setBrand(event.target.value)}
                     className="w-full bg-transparent outline-none"
+                    aria-label="Brand"
                   >
                     <option value="">All makers</option>
                     {brands.map((item) => (
@@ -107,36 +122,64 @@ export default function ShopPage() {
                   </div>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {groupedCategories.map((category) => (
-                  <span
-                    key={category.id}
-                    className="rounded-full bg-[#f7efe1] px-3 py-1 text-xs font-medium text-[#6b5648]"
-                  >
-                    {category.name}
-                  </span>
-                ))}
-              </div>
+              {areCategoriesLoading ? (
+                <div className="flex flex-wrap gap-2">
+                  {[1, 2, 3].map((item) => (
+                    <div key={item} className="h-7 w-28 animate-pulse rounded-full bg-[#f7efe1]" />
+                  ))}
+                </div>
+              ) : areCategoriesError ? (
+                <p className="text-sm text-[#7a573f]">Category chips are unavailable right now, but product search is still live.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {groupedCategories.map((item) => (
+                    <span key={item.id} className="rounded-full bg-[#f7efe1] px-3 py-1 text-xs font-medium text-[#6b5648]">
+                      {item.name}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        <div className="mt-10 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-          {products.map((product) => (
-            <ProductCard key={product.id} product={product} />
-          ))}
-        </div>
-        {products.length === 0 ? (
-          <div className="mt-10 rounded-[32px] border border-dashed border-[rgba(25,30,45,0.12)] bg-white p-10 text-center">
-            <p className="text-xs uppercase tracking-[0.22em] text-[#8b6e57]">No exact matches</p>
-            <h2 className="mt-3 font-[family:var(--font-display)] text-4xl text-[#1d1b18]">
-              Try a broader search or switch collections.
-            </h2>
-            <p className="mt-3 text-sm text-[#6f6257]">
-              The backend search and filters are wired, so your results update instantly as you change query, category, or brand.
-            </p>
+        {isProductsLoading ? (
+          <div className="mt-10 grid gap-6 md:grid-cols-2 xl:grid-cols-3" role="status" aria-label="Loading products">
+            {[1, 2, 3, 4, 5, 6].map((item) => (
+              <div key={item} className="h-[420px] animate-pulse rounded-[28px] bg-white" />
+            ))}
           </div>
-        ) : null}
+        ) : isProductsError ? (
+          <div className="mt-10">
+            <StorefrontState
+              eyebrow={productsErrorStatus === 404 ? 'Catalog not found' : 'Catalog unavailable'}
+              title={productsErrorStatus === 404 ? 'Catalog endpoint not found' : 'Products unavailable'}
+              description={
+                productsErrorStatus === 404
+                  ? 'The live products endpoint did not return a catalog response for this storefront request.'
+                  : 'The storefront could not load products from the live API. No placeholder products are shown when the catalog request fails.'
+              }
+              actionLabel="Retry"
+              onAction={() => {
+                void refetchProducts();
+              }}
+            />
+          </div>
+        ) : products.length === 0 ? (
+          <div className="mt-10">
+            <StorefrontState
+              eyebrow="No exact matches"
+              title="Try a broader search or switch collections."
+              description="The backend search and filters are live, but this combination of query, category, and brand returned no products."
+            />
+          </div>
+        ) : (
+          <div className="mt-10 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+            {products.map((product) => (
+              <ProductCard key={product.id} product={product} />
+            ))}
+          </div>
+        )}
       </main>
       <SiteFooter />
     </div>
