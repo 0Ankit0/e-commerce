@@ -11,15 +11,15 @@ export function ThemeSelector() {
   const themes = getAllThemes(customThemes);
 
   return (
-    <label className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
+    <label className="flex items-center gap-2 rounded-lg border border-[var(--border-color)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-secondary)]">
       <Palette className="h-4 w-4 text-[var(--accent)]" />
-      <span className="text-xs font-medium uppercase tracking-[0.18em] text-gray-400">
+      <span className="text-xs font-medium uppercase tracking-[0.18em] text-[var(--text-muted)]">
         Theme
       </span>
       <select
         value={activeThemeId}
         onChange={(event) => setActiveTheme(event.target.value)}
-        className="min-w-32 bg-transparent text-sm font-medium text-gray-700 outline-none"
+        className="min-w-32 bg-transparent text-sm font-medium text-[var(--text-primary)] outline-none"
         aria-label="Select theme"
       >
         {themes.map((theme) => (

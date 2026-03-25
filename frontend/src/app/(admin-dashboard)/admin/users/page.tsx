@@ -83,7 +83,7 @@ function UserEditor({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
-      <div className="w-full max-w-3xl rounded-[28px] border border-white/40 bg-[#fcfbf8] p-6 shadow-[0_16px_40px_rgba(15,23,42,0.12)]">
+      <div className="w-full max-w-3xl rounded-[28px] border border-[var(--border-color)] bg-[var(--surface)] p-6 shadow-[0_16px_40px_rgba(15,23,42,0.12)]">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-500">
@@ -127,22 +127,22 @@ function UserEditor({
         </div>
 
         <div className="mt-6 grid gap-3 md:grid-cols-2">
-          <label className="flex items-center justify-between rounded-2xl border border-gray-200 bg-white p-4">
+          <label className="flex items-center justify-between rounded-2xl border border-[var(--border-color)] bg-white p-4">
             <div>
-              <p className="text-sm font-medium text-gray-900">Account active</p>
-              <p className="text-xs text-gray-500">Controls whether the user can sign in.</p>
+              <p className="text-sm font-medium text-[var(--text-primary)]">Account active</p>
+              <p className="text-xs text-[var(--text-muted)]">Controls whether the user can sign in.</p>
             </div>
             <input
               type="checkbox"
               checked={isActive}
               onChange={(e) => setIsActive(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300"
+              className="h-4 w-4 rounded border-[var(--border-color)]"
             />
           </label>
-          <label className="flex items-center justify-between rounded-2xl border border-gray-200 bg-white p-4">
+          <label className="flex items-center justify-between rounded-2xl border border-[var(--border-color)] bg-white p-4">
             <div>
-              <p className="text-sm font-medium text-gray-900">Superuser access</p>
-              <p className="text-xs text-gray-500">Grants unrestricted admin privileges.</p>
+              <p className="text-sm font-medium text-[var(--text-primary)]">Superuser access</p>
+              <p className="text-xs text-[var(--text-muted)]">Grants unrestricted admin privileges.</p>
             </div>
             <input
               type="checkbox"
@@ -153,34 +153,34 @@ function UserEditor({
           </label>
         </div>
 
-        <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-4">
+        <div className="mt-6 rounded-2xl border border-[var(--border-color)] bg-white p-4">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-sm font-medium text-gray-900">Assigned roles</p>
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="text-sm font-medium text-[var(--text-primary)]">Assigned roles</p>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
                 Add or remove RBAC roles for this user directly from the admin dashboard.
               </p>
             </div>
-            <ShieldCheck className="h-5 w-5 text-blue-600" />
+            <ShieldCheck className="h-5 w-5 text-[var(--accent)]" />
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2">
             {assignedRoles.length === 0 ? (
-              <span className="rounded-full bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-600">
+              <span className="rounded-full bg-[var(--surface-muted)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)]">
                 No roles assigned
               </span>
             ) : (
               assignedRoles.map((role) => (
                 <span
                   key={role.id}
-                  className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700"
+                  className="inline-flex items-center gap-2 rounded-full bg-[var(--accent-soft)] px-3 py-1.5 text-xs font-medium text-[var(--accent)]"
                 >
                   {role.name}
                   <button
                     type="button"
                     onClick={() => removeRole.mutate({ user_id: user.id, role_id: role.id })}
                     disabled={removeRole.isPending}
-                    className="text-blue-500 transition-colors hover:text-red-600 disabled:opacity-50"
+                    className="text-[var(--accent)] transition-colors hover:text-red-600 disabled:opacity-50"
                     aria-label={`Remove ${role.name}`}
                   >
                     <X className="h-3.5 w-3.5" />
@@ -194,7 +194,7 @@ function UserEditor({
             <select
               value={selectedRoleId}
               onChange={(event) => setSelectedRoleId(event.target.value)}
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-[var(--border-color)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] shadow-sm focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
             >
               <option value="">Select a role to assign</option>
               {unassignedRoles.map((role) => (
@@ -278,7 +278,7 @@ export default function AdminUsersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-[32px] border border-[#d8d2c7] bg-[linear-gradient(140deg,#f7f1e8_0%,#fcfbf8_55%,#eef3ff_100%)] p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      <div className="rounded-[32px] border border-[var(--border-color)] bg-[var(--surface-muted)] p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-500">
@@ -300,8 +300,8 @@ export default function AdminUsersPage() {
         </div>
       </div>
 
-      <Card className="overflow-hidden rounded-[28px] border-[#e2ddd4]">
-        <CardHeader className="border-b border-gray-100 bg-[#fcfbf8]">
+      <Card className="overflow-hidden rounded-[28px] border-[var(--border-color)]">
+        <CardHeader className="border-b border-[var(--border-color)] bg-[var(--surface-muted)]">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <CardTitle className="text-xl">Roster</CardTitle>
@@ -320,7 +320,7 @@ export default function AdminUsersPage() {
                   className="pl-9"
                 />
               </div>
-              <div className="flex rounded-2xl border border-gray-200 bg-white p-1">
+              <div className="flex rounded-2xl border border-[var(--border-color)] bg-white p-1">
                 {(['all', 'active', 'inactive'] as const).map((filter) => (
                   <button
                     key={filter}
@@ -331,8 +331,8 @@ export default function AdminUsersPage() {
                     }}
                     className={`rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
                       activityFilter === filter
-                        ? 'bg-gray-900 text-white'
-                        : 'text-gray-600 hover:bg-gray-100'
+                        ? 'bg-[var(--foreground)] text-[var(--background)]'
+                        : 'text-[var(--text-secondary)] hover:bg-[var(--surface-subtle)]'
                     }`}
                   >
                     {filter[0].toUpperCase() + filter.slice(1)}
@@ -345,7 +345,7 @@ export default function AdminUsersPage() {
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[860px]">
-              <thead className="bg-[#f8f6f0] text-left">
+              <thead className="bg-[var(--surface-subtle)] text-left">
                 <tr>
                   <th className="px-5 py-4 text-xs font-semibold uppercase tracking-[0.16em] text-gray-500">
                     User
@@ -384,10 +384,10 @@ export default function AdminUsersPage() {
                   </tr>
                 ) : (
                   users.map((user) => (
-                    <tr key={user.id} className="border-t border-gray-100 bg-white">
+                    <tr key={user.id} className="border-t border-[var(--border-color)] bg-white">
                       <td className="px-5 py-4">
                         <div className="flex items-center gap-3">
-                          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#eef3ff] font-semibold text-[#275efe]">
+                          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--accent-soft)] font-semibold text-[var(--accent)]">
                             {(user.first_name?.[0] ?? user.username[0]).toUpperCase()}
                           </div>
                           <div>
@@ -485,7 +485,7 @@ export default function AdminUsersPage() {
       </Card>
 
       {total > 0 ? (
-        <div className="flex items-center justify-between rounded-2xl border border-gray-200 bg-white px-4 py-3">
+        <div className="flex items-center justify-between rounded-2xl border border-[var(--border-color)] bg-white px-4 py-3">
           <p className="text-sm text-gray-600">
             Showing {Math.min(total, page * limit + 1)}-{Math.min(total, (page + 1) * limit)} of {total}
           </p>
