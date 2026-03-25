@@ -6,7 +6,7 @@ export default function VendorInventoryPage() {
       <CardHeader>
         <CardTitle>Inventory console</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3 text-sm text-[#54483f]">
+      <CardContent className="space-y-3 text-sm text-[var(--text-secondary)]">
         <p>Track on-hand stock, reservations for unpaid orders, and low-stock alerts from this inventory view.</p>
         <p>The backend already supports warehouse-aware stock and reservation-safe checkout.</p>
       </CardContent>

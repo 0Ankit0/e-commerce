@@ -6,7 +6,7 @@ export default function VendorOrdersPage() {
       <CardHeader>
         <CardTitle>Vendor orders</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3 text-sm text-[#54483f]">
+      <CardContent className="space-y-3 text-sm text-[var(--text-secondary)]">
         <p>Process accepted orders, packing, shipping progression, and return-aware order timelines here.</p>
       </CardContent>
     </Card>

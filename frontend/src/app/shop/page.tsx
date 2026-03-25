@@ -80,7 +80,7 @@ export default function ShopPage() {
                 </button>
               </div>
               <div className="grid gap-3 md:grid-cols-3">
-                <label className="rounded-[24px] border border-[var(--border-color)] bg-[var(--surface-muted)] px-4 py-3 text-sm text-[#55483d]">
+                <label className="rounded-[24px] border border-[var(--border-color)] bg-[var(--surface-muted)] px-4 py-3 text-sm text-[var(--text-secondary)]">
                   <span className="mb-2 block text-[11px] uppercase tracking-[0.22em] text-[var(--text-muted)]">Category</span>
                   <select
                     value={category}
@@ -96,7 +96,7 @@ export default function ShopPage() {
                     ))}
                   </select>
                 </label>
-                <label className="rounded-[24px] border border-[var(--border-color)] bg-[var(--surface-muted)] px-4 py-3 text-sm text-[#55483d]">
+                <label className="rounded-[24px] border border-[var(--border-color)] bg-[var(--surface-muted)] px-4 py-3 text-sm text-[var(--text-secondary)]">
                   <span className="mb-2 block text-[11px] uppercase tracking-[0.22em] text-[var(--text-muted)]">Brand</span>
                   <select
                     value={brand}

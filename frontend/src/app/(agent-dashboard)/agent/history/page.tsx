@@ -6,7 +6,7 @@ export default function AgentHistoryPage() {
       <CardHeader>
         <CardTitle>Delivery history</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3 text-sm text-[#54483f]">
+      <CardContent className="space-y-3 text-sm text-[var(--text-secondary)]">
         <p>Review completed deliveries, exception notes, and POD activity.</p>
       </CardContent>
     </Card>

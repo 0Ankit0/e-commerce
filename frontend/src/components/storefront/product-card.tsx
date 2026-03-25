@@ -14,7 +14,7 @@ export function ProductCard({ product }: ProductCardProps) {
       href={`/products/${product.id}`}
       className="group block overflow-hidden rounded-[28px] border border-[var(--border-color)] bg-white shadow-[0_18px_50px_rgba(25,30,45,0.06)] transition-all hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(25,30,45,0.12)]"
     >
-      <div className="relative aspect-[4/3] overflow-hidden bg-[var(--accent-soft)]" style={{ background: `radial-gradient(circle at top, color-mix(in srgb, var(--accent) 28%, var(--surface-muted)), transparent 60%), var(--surface-muted)` }}>
+      <div className="relative aspect-[4/3] overflow-hidden" style={{ background: `radial-gradient(circle at top, color-mix(in srgb, var(--accent) 28%, var(--surface-muted)), transparent 60%), var(--surface-muted)` }}>
         {heroImage ? (
           <img
             src={heroImage}

@@ -32,8 +32,8 @@ export default function WishlistPage() {
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-xs uppercase tracking-[0.26em] text-[#8b6e57]">Wishlist</p>
-        <h1 className="mt-3 font-[family:var(--font-display)] text-5xl text-[#1d1b18]">Saved pieces and shareable picks</h1>
+        <p className="text-xs uppercase tracking-[0.26em] text-[var(--text-muted)]">Wishlist</p>
+        <h1 className="mt-3 font-[family:var(--font-display)] text-5xl text-[var(--text-primary)]">Saved pieces and shareable picks</h1>
       </div>
 
       <Card className="rounded-[32px]">
@@ -45,16 +45,16 @@ export default function WishlistPage() {
             <Link
               key={product.id}
               href={`/products/${product.product_id}`}
-              className="rounded-[24px] border border-[rgba(25,30,45,0.08)] p-5 transition-colors hover:bg-[#fcf7f0]"
+              className="rounded-[24px] border border-[var(--border-color)] p-5 transition-colors hover:bg-[var(--background)]"
             >
-              <p className="text-xs uppercase tracking-[0.2em] text-[#8b6e57]">{product.variant_name || 'Saved item'}</p>
-              <p className="mt-2 font-medium text-[#1d1b18]">{product.name}</p>
-              <p className="mt-2 text-sm text-[#6f6257]">{product.slug.replace(/-/g, ' ')}</p>
-              <p className="mt-4 text-sm font-semibold text-[#1d1b18]">{formatCurrency(product.price)}</p>
+              <p className="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">{product.variant_name || 'Saved item'}</p>
+              <p className="mt-2 font-medium text-[var(--text-primary)]">{product.name}</p>
+              <p className="mt-2 text-sm text-[var(--text-secondary)]">{product.slug.replace(/-/g, ' ')}</p>
+              <p className="mt-4 text-sm font-semibold text-[var(--text-primary)]">{formatCurrency(product.price)}</p>
             </Link>
           ))}
           {items.length === 0 ? (
-            <div className="rounded-[24px] border border-dashed border-[rgba(25,30,45,0.12)] bg-[#fcf7f0] p-6 text-sm text-[#6f6257]">
+            <div className="rounded-[24px] border border-dashed border-[rgba(25,30,45,0.12)] bg-[var(--background)] p-6 text-sm text-[var(--text-secondary)]">
               Your wishlist is still empty. Save items from the product detail page and generate share links here.
             </div>
           ) : null}
@@ -67,7 +67,7 @@ export default function WishlistPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <form
-            className="flex flex-col gap-3 rounded-[24px] border border-[rgba(25,30,45,0.08)] bg-[#fcf7f0] p-4 md:flex-row"
+            className="flex flex-col gap-3 rounded-[24px] border border-[var(--border-color)] bg-[var(--background)] p-4 md:flex-row"
             onSubmit={async (event) => {
               event.preventDefault();
               await createShareLink.mutateAsync(shareTitle);
@@ -78,11 +78,11 @@ export default function WishlistPage() {
               value={shareTitle}
               onChange={(event) => setShareTitle(event.target.value)}
               placeholder="Share collection title"
-              className="flex-1 rounded-full border border-[rgba(25,30,45,0.08)] bg-white px-4 py-3 text-sm outline-none"
+              className="flex-1 rounded-full border border-[var(--border-color)] bg-white px-4 py-3 text-sm outline-none"
             />
             <button
               type="submit"
-              className="inline-flex items-center justify-center gap-2 rounded-full bg-[#1d1b18] px-5 py-3 text-sm font-semibold text-white"
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-[var(--foreground)] px-5 py-3 text-sm font-semibold text-[var(--background)]"
             >
               <Link2 className="h-4 w-4" />
               Create share link
@@ -94,28 +94,28 @@ export default function WishlistPage() {
               return (
                 <div
                   key={link.id}
-                  className="flex flex-col gap-4 rounded-[24px] border border-[rgba(25,30,45,0.08)] p-4 md:flex-row md:items-center md:justify-between"
+                  className="flex flex-col gap-4 rounded-[24px] border border-[var(--border-color)] p-4 md:flex-row md:items-center md:justify-between"
                 >
                   <div>
-                    <p className="text-sm font-medium text-[#1d1b18]">{link.title || 'Untitled wishlist collection'}</p>
-                    <p className="mt-1 text-xs text-[#6f6257]">
+                    <p className="text-sm font-medium text-[var(--text-primary)]">{link.title || 'Untitled wishlist collection'}</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
                       Created {formatDateLabel(link.created_at)} · {link.is_active ? 'Active' : 'Revoked'}
                     </p>
-                    <p className="mt-2 text-xs text-[#8b6e57]">{shareUrl}</p>
+                    <p className="mt-2 text-xs text-[var(--text-muted)]">{shareUrl}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
                       onClick={() => handleCopy(link.token)}
-                      className="inline-flex items-center gap-2 rounded-full border border-[rgba(25,30,45,0.08)] px-4 py-2 text-sm font-medium text-[#3e352d]"
+                      className="inline-flex items-center gap-2 rounded-full border border-[var(--border-color)] px-4 py-2 text-sm font-medium text-[var(--text-secondary)]"
                     >
-                      {copiedToken === link.token ? <Check className="h-4 w-4 text-[#1a6f4c]" /> : <Copy className="h-4 w-4" />}
+                      {copiedToken === link.token ? <Check className="h-4 w-4 text-emerald-700" /> : <Copy className="h-4 w-4" />}
                       {copiedToken === link.token ? 'Copied' : 'Copy link'}
                     </button>
                     <button
                       type="button"
                       onClick={() => revokeShareLink.mutate(link.id)}
-                      className="inline-flex items-center gap-2 rounded-full border border-[rgba(25,30,45,0.08)] px-4 py-2 text-sm font-medium text-[#8c3d3d]"
+                      className="inline-flex items-center gap-2 rounded-full border border-[var(--border-color)] px-4 py-2 text-sm font-medium text-red-700"
                     >
                       <Trash2 className="h-4 w-4" />
                       Revoke
