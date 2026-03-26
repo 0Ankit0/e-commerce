@@ -6,7 +6,7 @@ export default function VendorShipmentsPage() {
       <CardHeader>
         <CardTitle>Shipping labels and shipments</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3 text-sm text-[#54483f]">
+      <CardContent className="space-y-3 text-sm text-[var(--text-secondary)]">
         <p>Generate stable shipping-label artifacts, monitor shipment status, and handle pickup coordination.</p>
       </CardContent>
     </Card>

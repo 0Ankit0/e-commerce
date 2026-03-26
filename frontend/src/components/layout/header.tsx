@@ -54,14 +54,14 @@ export function Header() {
   };
 
   return (
-    <header className="fixed left-0 right-0 top-0 z-10 h-16 border-b border-[rgba(25,30,45,0.08)] bg-[rgba(255,250,243,0.82)] backdrop-blur-xl lg:left-72">
+    <header className="fixed left-0 right-0 top-0 z-10 h-16 border-b border-[var(--border-color)] bg-[color-mix(in_srgb,var(--surface)_82%,transparent)] backdrop-blur-xl lg:left-72">
       <div className="flex h-full items-center justify-between px-6">
         <div className="flex items-center gap-3">
           <div>
-            <p className="font-[family:var(--font-display)] text-2xl leading-none text-[#1d1b18]">
+            <p className="font-[family:var(--font-display)] text-2xl leading-none text-[var(--text-primary)]">
               {portal.label}
             </p>
-            <p className="mt-1 text-xs uppercase tracking-[0.24em] text-[#8b6e57]">
+            <p className="mt-1 text-xs uppercase tracking-[0.24em] text-[var(--text-muted)]">
               {tenant ? `Org: ${tenant.name}` : portal.description}
             </p>
           </div>
@@ -75,7 +75,7 @@ export function Header() {
           <div ref={notifRef} className="relative">
             <button
               onClick={() => { setNotifOpen((o) => !o); setUserOpen(false); }}
-              className="relative p-2 text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-100"
+              className="relative p-2 text-[var(--text-muted)] hover:text-[var(--text-primary)] rounded-lg hover:bg-[var(--surface-subtle)]"
               aria-label="Notifications"
             >
               <Bell className="h-5 w-5" />
@@ -87,14 +87,14 @@ export function Header() {
             </button>
 
             {notifOpen && (
-              <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden z-50">
+              <div className="absolute right-0 mt-2 w-80 bg-[var(--surface)] rounded-xl shadow-lg border border-[var(--border-color)] overflow-hidden z-50">
                 {/* Header */}
-                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-                  <span className="text-sm font-semibold text-gray-900">Notifications</span>
+                <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)]">
+                  <span className="text-sm font-semibold text-[var(--text-primary)]">Notifications</span>
                   {unreadCount > 0 && (
                     <button
                       onClick={() => markAll.mutate()}
-                      className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800"
+                      className="flex items-center gap-1 text-xs text-[var(--accent)] hover:text-[var(--accent)]"
                     >
                       <CheckCheck className="h-3.5 w-3.5" />
                       Mark all read
@@ -103,11 +103,11 @@ export function Header() {
                 </div>
 
                 {/* List */}
-                <div className="max-h-72 overflow-y-auto divide-y divide-gray-50">
+                <div className="max-h-72 overflow-y-auto divide-y divide-[var(--border-color)]">
                   {notifications.length === 0 ? (
                     <div className="py-8 text-center">
-                      <Bell className="h-7 w-7 text-gray-300 mx-auto mb-2" />
-                      <p className="text-sm text-gray-400">No notifications</p>
+                      <Bell className="h-7 w-7 text-[var(--text-muted)] mx-auto mb-2" />
+                      <p className="text-sm text-[var(--text-muted)]">No notifications</p>
                     </div>
                   ) : (
                     notifications.map((n) => (
@@ -115,16 +115,16 @@ export function Header() {
                         key={n.id}
                         className={`flex items-start gap-3 px-4 py-3 hover:bg-gray-50 transition-colors ${!n.is_read ? 'bg-blue-50/60' : ''}`}
                       >
-                        <span className={`mt-1.5 h-2 w-2 rounded-full flex-shrink-0 ${n.is_read ? 'bg-gray-300' : 'bg-blue-500'}`} />
+                        <span className={`mt-1.5 h-2 w-2 rounded-full flex-shrink-0 ${n.is_read ? 'bg-[var(--text-muted)]' : 'bg-[var(--accent)]'}`} />
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 truncate">{n.title}</p>
-                          <p className="text-xs text-gray-500 truncate mt-0.5">{n.body}</p>
-                          <p className="text-[10px] text-gray-400 mt-1">{new Date(n.created_at).toLocaleDateString()}</p>
+                          <p className="text-sm font-medium text-[var(--text-primary)] truncate">{n.title}</p>
+                          <p className="text-xs text-[var(--text-muted)] truncate mt-0.5">{n.body}</p>
+                          <p className="text-[10px] text-[var(--text-muted)] mt-1">{new Date(n.created_at).toLocaleDateString()}</p>
                         </div>
                         {!n.is_read && (
                           <button
                             onClick={() => markOne.mutate(n.id)}
-                            className="text-[10px] text-blue-500 hover:text-blue-700 flex-shrink-0 mt-1"
+                            className="text-[10px] text-[var(--accent)] hover:text-[var(--accent)] flex-shrink-0 mt-1"
                           >
                             Mark read
                           </button>
@@ -138,7 +138,7 @@ export function Header() {
                 <Link
                   href="/notifications"
                   onClick={() => setNotifOpen(false)}
-                  className="flex items-center justify-center gap-1 px-4 py-2.5 text-xs font-medium text-blue-600 hover:bg-blue-50 border-t border-gray-100 transition-colors"
+                  className="flex items-center justify-center gap-1 px-4 py-2.5 text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] border-t border-[var(--border-color)] transition-colors"
                 >
                   View all notifications <ChevronRight className="h-3.5 w-3.5" />
                 </Link>
@@ -150,27 +150,27 @@ export function Header() {
           <div ref={userRef} className="relative">
             <button
               onClick={() => { setUserOpen((o) => !o); setNotifOpen(false); }}
-              className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+              className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--surface-subtle)] transition-colors"
               aria-label="User menu"
             >
-              <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center">
-                <User className="h-4 w-4 text-blue-600" />
+              <div className="h-8 w-8 rounded-full bg-[var(--accent-soft)] flex items-center justify-center">
+                <User className="h-4 w-4 text-[var(--accent)]" />
               </div>
-              <span className="text-sm font-medium text-gray-700 max-w-[120px] truncate">
+              <span className="text-sm font-medium text-[var(--text-secondary)] max-w-[120px] truncate">
                 {user?.first_name || user?.username || user?.email || 'User'}
               </span>
             </button>
 
             {userOpen && (
-              <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden z-50">
+              <div className="absolute right-0 mt-2 w-56 bg-[var(--surface)] rounded-xl shadow-lg border border-[var(--border-color)] overflow-hidden z-50">
                 {/* Identity */}
-                <div className="px-4 py-3 border-b border-gray-100">
-                  <p className="text-sm font-semibold text-gray-900 truncate">
+                <div className="px-4 py-3 border-b border-[var(--border-color)]">
+                  <p className="text-sm font-semibold text-[var(--text-primary)] truncate">
                     {user?.first_name && user?.last_name
                       ? `${user.first_name} ${user.last_name}`
                       : user?.username || 'User'}
                   </p>
-                  <p className="text-xs text-gray-500 truncate mt-0.5">{user?.email}</p>
+                  <p className="text-xs text-[var(--text-muted)] truncate mt-0.5">{user?.email}</p>
                 </div>
 
                 {/* Menu items */}
@@ -178,23 +178,23 @@ export function Header() {
                   <Link
                     href="/profile"
                     onClick={() => setUserOpen(false)}
-                    className="flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                    className="flex items-center gap-3 px-4 py-2 text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] transition-colors"
                   >
-                    <User className="h-4 w-4 text-gray-400" />
+                    <User className="h-4 w-4 text-[var(--text-muted)]" />
                     Profile
                   </Link>
                   <Link
                     href="/settings"
                     onClick={() => setUserOpen(false)}
-                    className="flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                    className="flex items-center gap-3 px-4 py-2 text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-muted)] transition-colors"
                   >
-                    <Settings className="h-4 w-4 text-gray-400" />
+                    <Settings className="h-4 w-4 text-[var(--text-muted)]" />
                     Settings
                   </Link>
                 </div>
 
                 {/* Logout */}
-                <div className="border-t border-gray-100 py-1">
+                <div className="border-t border-[var(--border-color)] py-1">
                   <button
                     onClick={() => { setUserOpen(false); setShowLogoutDialog(true); }}
                     className="flex w-full items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"

@@ -41,39 +41,39 @@ export default function DashboardPage() {
       value: unreadCount > 0 ? String(Math.min(unreadCount, 9)) : '0',
       icon: Heart,
       href: '/wishlist',
-      color: 'text-[#c96d44] bg-[#f7efe1]',
+      color: 'text-[var(--accent)] bg-[var(--surface-muted)]',
     },
     {
       name: 'Orders in motion',
       value: String(activeOrders).padStart(2, '0'),
       icon: Package,
       href: '/orders',
-      color: 'text-[#123f35] bg-[#dff1e8]',
+      color: 'text-emerald-700 bg-[var(--success-soft)]',
     },
     {
       name: 'Security posture',
       value: user?.otp_enabled ? 'Enabled' : 'Review',
       icon: Shield,
       href: '/settings',
-      color: user?.otp_enabled ? 'text-[#123f35] bg-[#dff1e8]' : 'text-[#9a6a16] bg-[#f6ebc9]',
+      color: user?.otp_enabled ? 'text-emerald-700 bg-[var(--success-soft)]' : 'text-amber-700 bg-[var(--warning-soft)]',
     },
     {
       name: 'Saved products',
       value: String(wishlist.length).padStart(2, '0'),
       icon: ShoppingBag,
       href: '/wishlist',
-      color: 'text-[#7c2f74] bg-[#f0d6ef]',
+      color: 'text-[var(--accent)] bg-[var(--accent-soft)]',
     },
   ];
 
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-xs uppercase tracking-[0.26em] text-[#8b6e57]">Customer portal</p>
-        <h1 className="mt-3 font-[family:var(--font-display)] text-5xl text-[#1d1b18]">
+        <p className="text-xs uppercase tracking-[0.26em] text-[var(--text-muted)]">Customer portal</p>
+        <h1 className="mt-3 font-[family:var(--font-display)] text-5xl text-[var(--text-primary)]">
           A buying dashboard that feels like a lounge, not a spreadsheet.
         </h1>
-        <p className="mt-3 max-w-3xl text-sm leading-6 text-[#66584c]">
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--text-secondary)]">
           Welcome back
           {user?.first_name ? `, ${user.first_name}` : user?.username ? `, ${user.username}` : ''}. Track orders, catch price drops, and move from discovery to checkout without leaving your own space.
         </p>
@@ -82,12 +82,12 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => (
           <Link key={stat.name} href={stat.href}>
-            <Card className="cursor-pointer rounded-[28px] border-[rgba(25,30,45,0.08)] bg-white transition-shadow hover:shadow-[0_20px_45px_rgba(25,30,45,0.08)]">
+            <Card className="cursor-pointer rounded-[28px] border-[var(--border-color)] bg-white transition-shadow hover:shadow-[0_20px_45px_rgba(25,30,45,0.08)]">
               <CardContent className="pt-6">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm text-[#8b6e57]">{stat.name}</p>
-                    <p className="mt-1 text-2xl font-bold text-[#1d1b18]">{stat.value}</p>
+                    <p className="text-sm text-[var(--text-muted)]">{stat.name}</p>
+                    <p className="mt-1 text-2xl font-bold text-[var(--text-primary)]">{stat.value}</p>
                   </div>
                   <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${stat.color}`}>
                     <stat.icon className="h-6 w-6" />
@@ -100,13 +100,13 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-        <Card className="rounded-[32px] border-[rgba(25,30,45,0.08)] bg-white">
+        <Card className="rounded-[32px] border-[var(--border-color)] bg-white">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="flex items-center gap-2">
               <Bell className="h-5 w-5" />
               Recent activity
             </CardTitle>
-            <Link href="/notifications" className="text-sm text-[#6f4f3c] hover:underline">
+            <Link href="/notifications" className="text-sm text-[var(--accent)] hover:underline">
               View all
             </Link>
           </CardHeader>
@@ -119,26 +119,26 @@ export default function DashboardPage() {
               </div>
             ) : recentNotifs.length === 0 ? (
               <div className="py-8 text-center">
-                <Bell className="mx-auto mb-2 h-8 w-8 text-[#d0b59b]" />
-                <p className="text-sm text-[#7d6758]">No notifications yet</p>
+                <Bell className="mx-auto mb-2 h-8 w-8 text-[var(--text-muted)]" />
+                <p className="text-sm text-[var(--text-muted)]">No notifications yet</p>
               </div>
             ) : (
               <div className="space-y-3">
                 {recentNotifs.map((n) => (
                   <div
                     key={n.id}
-                    className={`flex items-start gap-3 rounded-2xl p-3 ${n.is_read ? 'bg-[#fcf7f0]' : 'bg-[#f7efe1]'}`}
+                    className={`flex items-start gap-3 rounded-2xl p-3 ${n.is_read ? 'bg-[var(--surface-muted)]' : 'bg-[var(--accent-soft)]'}`}
                   >
                     <div
                       className={`mt-0.5 h-2 w-2 flex-shrink-0 rounded-full ${
-                        n.is_read ? 'bg-[#d0b59b]' : 'bg-[#c96d44]'
+                        n.is_read ? 'bg-[var(--text-muted)]' : 'bg-[var(--accent)]'
                       }`}
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-[#1d1b18]">{n.title}</p>
-                      <p className="truncate text-xs text-[#6f6257]">{n.body}</p>
+                      <p className="truncate text-sm font-medium text-[var(--text-primary)]">{n.title}</p>
+                      <p className="truncate text-xs text-[var(--text-secondary)]">{n.body}</p>
                     </div>
-                    <span className="flex-shrink-0 text-xs text-[#8b6e57]">
+                    <span className="flex-shrink-0 text-xs text-[var(--text-muted)]">
                       {new Date(n.created_at).toLocaleDateString()}
                     </span>
                   </div>
@@ -148,35 +148,35 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card className="rounded-[32px] border-[rgba(25,30,45,0.08)] bg-white">
+        <Card className="rounded-[32px] border-[var(--border-color)] bg-white">
           <CardHeader>
             <CardTitle>Featured for you</CardTitle>
           </CardHeader>
           <CardContent>
             {latestOrder ? (
-              <div className="rounded-[26px] bg-[#fcf7f0] p-5">
-                <p className="text-xs uppercase tracking-[0.2em] text-[#8b6e57]">Latest order</p>
-                <p className="mt-2 font-[family:var(--font-display)] text-3xl text-[#1d1b18]">{latestOrder.order_number}</p>
-                <p className="mt-2 text-sm text-[#6f6257]">
+              <div className="rounded-[26px] bg-[var(--surface-muted)] p-5">
+                <p className="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">Latest order</p>
+                <p className="mt-2 font-[family:var(--font-display)] text-3xl text-[var(--text-primary)]">{latestOrder.order_number}</p>
+                <p className="mt-2 text-sm text-[var(--text-secondary)]">
                   {titleCaseStatus(latestOrder.status)} · {formatDateLabel(latestOrder.created_at)} · {formatCurrency(latestOrder.total)}
                 </p>
                 <div className="mt-4 grid gap-2">
                   {latestOrder.shipments.slice(0, 2).map((shipment) => (
-                    <div key={shipment.id} className="rounded-2xl border border-[rgba(25,30,45,0.08)] bg-white px-4 py-3">
-                      <p className="text-xs uppercase tracking-[0.2em] text-[#8b6e57]">{shipment.awb}</p>
-                      <p className="mt-1 text-sm font-medium text-[#1d1b18]">{titleCaseStatus(shipment.status)}</p>
-                      <p className="mt-1 text-xs text-[#6f6257]">{shipment.current_location || 'Awaiting shipment update'}</p>
+                    <div key={shipment.id} className="rounded-2xl border border-[var(--border-color)] bg-white px-4 py-3">
+                      <p className="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">{shipment.awb}</p>
+                      <p className="mt-1 text-sm font-medium text-[var(--text-primary)]">{titleCaseStatus(shipment.status)}</p>
+                      <p className="mt-1 text-xs text-[var(--text-secondary)]">{shipment.current_location || 'Awaiting shipment update'}</p>
                     </div>
                   ))}
                 </div>
-                <Link href={`/orders/${latestOrder.id}`} className="mt-4 inline-flex text-sm font-semibold text-[#6f4f3c] hover:underline">
+                <Link href={`/orders/${latestOrder.id}`} className="mt-4 inline-flex text-sm font-semibold text-[var(--accent)] hover:underline">
                   Open order detail
                 </Link>
               </div>
             ) : featuredProductsLoading ? (
               <div className="space-y-3">
                 {[1, 2, 3].map((item) => (
-                  <div key={item} className="h-20 animate-pulse rounded-2xl bg-[#fcf7f0]" />
+                  <div key={item} className="h-20 animate-pulse rounded-2xl bg-[var(--surface-muted)]" />
                 ))}
               </div>
             ) : featuredProductsError ? (
@@ -195,18 +195,18 @@ export default function DashboardPage() {
                   <Link
                     key={product.id}
                     href={`/products/${product.id}`}
-                    className="flex items-center justify-between rounded-2xl border border-[rgba(25,30,45,0.08)] p-4 transition-colors hover:bg-[#fcf7f0]"
+                    className="flex items-center justify-between rounded-2xl border border-[var(--border-color)] p-4 transition-colors hover:bg-[var(--background)]"
                   >
                     <div>
-                      <p className="text-xs uppercase tracking-[0.2em] text-[#8b6e57]">
+                      <p className="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">
                         {product.category?.name ?? 'Product'}
                       </p>
-                      <p className="mt-1 text-sm font-medium text-[#1d1b18]">{product.name}</p>
-                      <p className="mt-1 text-xs text-[#6f6257]">
+                      <p className="mt-1 text-sm font-medium text-[var(--text-primary)]">{product.name}</p>
+                      <p className="mt-1 text-xs text-[var(--text-secondary)]">
                         {product.min_selling_price ? formatCurrency(product.min_selling_price) : 'Quote'}
                       </p>
                     </div>
-                    <Store className="h-4 w-4 text-[#c96d44]" />
+                    <Store className="h-4 w-4 text-[var(--accent)]" />
                   </Link>
                 ))}
               </div>
@@ -222,45 +222,45 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
-        <Card className="rounded-[32px] border-[rgba(25,30,45,0.08)] bg-white">
+        <Card className="rounded-[32px] border-[var(--border-color)] bg-white">
           <CardHeader>
             <CardTitle>Cart pulse</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="rounded-[26px] bg-[#fcf7f0] p-5">
-              <p className="text-xs uppercase tracking-[0.22em] text-[#8b6e57]">Ready to checkout</p>
-              <p className="mt-3 font-[family:var(--font-display)] text-5xl text-[#1d1b18]">{cartUnits}</p>
-              <p className="mt-2 text-sm text-[#6f6257]">
+            <div className="rounded-[26px] bg-[var(--surface-muted)] p-5">
+              <p className="text-xs uppercase tracking-[0.22em] text-[var(--text-muted)]">Ready to checkout</p>
+              <p className="mt-3 font-[family:var(--font-display)] text-5xl text-[var(--text-primary)]">{cartUnits}</p>
+              <p className="mt-2 text-sm text-[var(--text-secondary)]">
                 {cartUnits === 0 ? 'Your cart is empty right now.' : `${cart?.items.length ?? 0} line items waiting for a shipping quote.`}
               </p>
-              <Link href="/cart" className="mt-5 inline-flex rounded-full bg-[#1d1b18] px-4 py-2 text-sm font-semibold text-white">
+              <Link href="/cart" className="mt-5 inline-flex rounded-full bg-[var(--foreground)] px-4 py-2 text-sm font-semibold text-[var(--background)]">
                 Review cart
               </Link>
             </div>
           </CardContent>
         </Card>
 
-        <Card className="rounded-[32px] border-[rgba(25,30,45,0.08)] bg-white">
+        <Card className="rounded-[32px] border-[var(--border-color)] bg-white">
           <CardHeader>
             <CardTitle>Pickup where you left off</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-2">
-            <Link href="/shop" className="rounded-[24px] border border-[rgba(25,30,45,0.08)] p-5 transition-colors hover:bg-[#fcf7f0]">
-              <p className="text-xs uppercase tracking-[0.2em] text-[#8b6e57]">Browse</p>
-              <p className="mt-2 text-lg font-medium text-[#1d1b18]">Discover something new</p>
-              <p className="mt-2 text-sm text-[#6f6257]">Jump back into the live catalog with search, category, and brand filters.</p>
+            <Link href="/shop" className="rounded-[24px] border border-[var(--border-color)] p-5 transition-colors hover:bg-[var(--background)]">
+              <p className="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">Browse</p>
+              <p className="mt-2 text-lg font-medium text-[var(--text-primary)]">Discover something new</p>
+              <p className="mt-2 text-sm text-[var(--text-secondary)]">Jump back into the live catalog with search, category, and brand filters.</p>
             </Link>
-            <Link href="/wishlist" className="rounded-[24px] border border-[rgba(25,30,45,0.08)] p-5 transition-colors hover:bg-[#fcf7f0]">
-              <p className="text-xs uppercase tracking-[0.2em] text-[#8b6e57]">Wishlist</p>
-              <p className="mt-2 text-lg font-medium text-[#1d1b18]">Share saved picks</p>
-              <p className="mt-2 text-sm text-[#6f6257]">Create public share links and keep an eye on live price-drop alerts.</p>
+            <Link href="/wishlist" className="rounded-[24px] border border-[var(--border-color)] p-5 transition-colors hover:bg-[var(--background)]">
+              <p className="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">Wishlist</p>
+              <p className="mt-2 text-lg font-medium text-[var(--text-primary)]">Share saved picks</p>
+              <p className="mt-2 text-sm text-[var(--text-secondary)]">Create public share links and keep an eye on live price-drop alerts.</p>
             </Link>
           </CardContent>
         </Card>
       </div>
 
       {accessiblePortals.length > 0 ? (
-        <Card className="rounded-[32px] border-[rgba(25,30,45,0.08)] bg-[#1d1b18] text-white">
+        <Card className="rounded-[32px] border-[var(--border-color)] bg-[var(--foreground)] text-white">
           <CardContent className="pt-6">
             <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
               <div>

@@ -1,14 +1,180 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+'use client';
 
-export default function AdminOrdersPage() {
+import { useState } from 'react';
+import { Plus, ShoppingBag, X } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+
+type OrderStatus = 'pending' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
+
+interface OrderItem {
+  id: string;
+  orderNumber: string;
+  customer: string;
+  vendor: string;
+  amount: string;
+  status: OrderStatus;
+  placedAt: string;
+}
+
+const INITIAL_ORDERS: OrderItem[] = [
+  { id: '1', orderNumber: 'ORD-2025-0041', customer: 'Jane Cooper', vendor: 'Artisan Crafts Co.', amount: '$84.00', status: 'processing', placedAt: '2025-03-22' },
+  { id: '2', orderNumber: 'ORD-2025-0040', customer: 'Wade Warren', vendor: 'Tech Gadgets Ltd.', amount: '$159.98', status: 'shipped', placedAt: '2025-03-21' },
+  { id: '3', orderNumber: 'ORD-2025-0039', customer: 'Esther Howard', vendor: 'Green Living Store', amount: '$34.50', status: 'delivered', placedAt: '2025-03-18' },
+  { id: '4', orderNumber: 'ORD-2025-0038', customer: 'Cameron Williamson', vendor: 'Vintage Finds', amount: '$120.00', status: 'cancelled', placedAt: '2025-03-15' },
+  { id: '5', orderNumber: 'ORD-2025-0037', customer: 'Brooklyn Simmons', vendor: 'Artisan Crafts Co.', amount: '$45.00', status: 'pending', placedAt: '2025-03-24' },
+];
+
+const STATUS_STYLES: Record<OrderStatus, string> = {
+  pending: 'bg-[var(--surface-muted)] text-[var(--text-secondary)]',
+  processing: 'bg-[var(--warning-soft)] text-[var(--text-secondary)]',
+  shipped: 'bg-[var(--accent-soft)] text-[var(--accent)]',
+  delivered: 'bg-[var(--success-soft)] text-emerald-700',
+  cancelled: 'bg-[var(--danger-soft)] text-red-700',
+};
+
+function AddOrderNoteModal({ onClose }: { onClose: () => void }) {
+  const [orderId, setOrderId] = useState('');
+  const [note, setNote] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onClose();
+  };
+
   return (
-    <Card className="rounded-[32px]">
-      <CardHeader>
-        <CardTitle>Admin order oversight</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3 text-sm text-[#54483f]">
-        <p>View cross-platform order activity, intervene on order notes, and inspect status progression.</p>
-      </CardContent>
-    </Card>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-[28px] border border-[var(--border-color)] bg-[var(--surface)] p-6 shadow-[0_16px_40px_rgba(0,0,0,0.16)]">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold text-[var(--text-primary)]">Add order note</h2>
+          <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close"><X className="h-4 w-4" /></Button>
+        </div>
+        <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">Order number</label>
+            <Input value={orderId} onChange={(e) => setOrderId(e.target.value)} placeholder="ORD-2025-XXXX" required />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">Admin note</label>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={4}
+              className="w-full rounded-xl border border-[var(--border-color)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
+              placeholder="Capture your findings or actions taken on this order."
+              required
+            />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="outline" type="button" onClick={onClose}>Cancel</Button>
+            <Button type="submit">Save note</Button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
+
+export default function AdminOrdersPage() {
+  const [orders] = useState<OrderItem[]>(INITIAL_ORDERS);
+  const [showAdd, setShowAdd] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<'all' | OrderStatus>('all');
+
+  const filtered = statusFilter === 'all' ? orders : orders.filter((o) => o.status === statusFilter);
+
+  const activeCount = orders.filter((o) => !['delivered', 'cancelled'].includes(o.status)).length;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">Admin Console</p>
+          <h1 className="mt-2 text-3xl font-semibold text-[var(--text-primary)]">Order Oversight</h1>
+          <p className="mt-1 max-w-2xl text-sm text-[var(--text-secondary)]">
+            View cross-platform order activity, intervene on order notes, and inspect status progression.
+          </p>
+        </div>
+        <Button onClick={() => setShowAdd(true)} className="shrink-0">
+          <Plus className="mr-2 h-4 w-4" />
+          Add note
+        </Button>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        {[
+          { label: 'Total orders', value: orders.length },
+          { label: 'Active', value: activeCount },
+          { label: 'Delivered', value: orders.filter((o) => o.status === 'delivered').length },
+        ].map((stat) => (
+          <Card key={stat.label} className="rounded-[24px]">
+            <CardContent className="pt-5">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">{stat.label}</p>
+              <p className="mt-1 text-3xl font-semibold text-[var(--text-primary)]">{stat.value}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <Card className="rounded-[28px]">
+        <CardHeader className="border-b border-[var(--border-color)]">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle>Order queue</CardTitle>
+              <CardDescription className="mt-1">Monitor and intervene on active orders across all vendors.</CardDescription>
+            </div>
+            <div className="flex flex-wrap rounded-xl border border-[var(--border-color)] bg-white p-1">
+              {(['all', 'pending', 'processing', 'shipped', 'delivered', 'cancelled'] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setStatusFilter(f)}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                    statusFilter === f
+                      ? 'bg-[var(--foreground)] text-[var(--background)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--surface-subtle)]'
+                  }`}
+                >
+                  {f[0].toUpperCase() + f.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {filtered.length === 0 ? (
+            <div className="px-6 py-14 text-center">
+              <p className="text-sm font-medium text-[var(--text-primary)]">No orders found.</p>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">Try a different filter.</p>
+            </div>
+          ) : (
+            <ul className="divide-y divide-[var(--border-color)]">
+              {filtered.map((order) => (
+                <li key={order.id} className="flex flex-col gap-3 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[var(--surface-muted)] text-[var(--text-muted)]">
+                      <ShoppingBag className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-[var(--text-primary)]">{order.orderNumber}</p>
+                      <p className="truncate text-xs text-[var(--text-muted)]">{order.customer} · {order.vendor} · {order.amount}</p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_STYLES[order.status]}`}>
+                      {order.status}
+                    </span>
+                    <span className="text-xs text-[var(--text-muted)]">{order.placedAt}</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      {showAdd && <AddOrderNoteModal onClose={() => setShowAdd(false)} />}
+    </div>
+  );
+}
+

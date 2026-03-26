@@ -186,9 +186,9 @@ textarea {
 
 .dashboard-stage {
   background:
-    radial-gradient(circle at top left, rgba(201, 109, 68, 0.12), transparent 28%),
-    radial-gradient(circle at top right, rgba(18, 63, 53, 0.1), transparent 30%),
-    linear-gradient(180deg, #fcf7f0 0%, #fffdf9 100%);
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 12%, transparent), transparent 28%),
+    radial-gradient(circle at top right, color-mix(in srgb, var(--foreground) 8%, transparent), transparent 30%),
+    var(--background);
 }
 
 .grain-overlay {

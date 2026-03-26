@@ -236,28 +236,28 @@ export default function CheckoutPage() {
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-xs uppercase tracking-[0.26em] text-[#8b6e57]">Checkout</p>
-        <h1 className="mt-3 font-[family:var(--font-display)] text-5xl text-[#1d1b18]">
+        <p className="text-xs uppercase tracking-[0.26em] text-[var(--text-muted)]">Checkout</p>
+        <h1 className="mt-3 font-[family:var(--font-display)] text-5xl text-[var(--text-primary)]">
           Move from cart to confirmed order.
         </h1>
       </div>
 
       {message ? (
-        <div className="rounded-[24px] border border-[rgba(25,30,45,0.08)] bg-[#fff7ed] px-5 py-4 text-sm text-[#7a573f]">
+        <div className="rounded-[24px] border border-[var(--border-color)] bg-[var(--warning-soft)] px-5 py-4 text-sm text-[var(--text-secondary)]">
           {message}
         </div>
       ) : null}
 
       <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
         <div className="space-y-6">
-          <section className="rounded-[32px] border border-[rgba(25,30,45,0.08)] bg-white p-6 shadow-[0_16px_45px_rgba(25,30,45,0.05)]">
+          <section className="rounded-[32px] border border-[var(--border-color)] bg-white p-6 shadow-[0_16px_45px_rgba(25,30,45,0.05)]">
             <div className="flex items-center gap-3">
-              <MapPin className="h-5 w-5 text-[#c96d44]" />
+              <MapPin className="h-5 w-5 text-[var(--accent)]" />
               <div>
-                <p className="text-xs uppercase tracking-[0.22em] text-[#8b6e57]">
+                <p className="text-xs uppercase tracking-[0.22em] text-[var(--text-muted)]">
                   Delivery address
                 </p>
-                <p className="text-lg font-medium text-[#1d1b18]">
+                <p className="text-lg font-medium text-[var(--text-primary)]">
                   Pick a saved address or add a new one.
                 </p>
               </div>
@@ -268,8 +268,8 @@ export default function CheckoutPage() {
                   key={address.id}
                   className={`rounded-[24px] border p-4 transition-colors ${
                     effectiveAddressId === address.id
-                      ? 'border-[#1d1b18] bg-[#fcf7f0]'
-                      : 'border-[rgba(25,30,45,0.08)] bg-white'
+                      ? 'border-[var(--foreground)] bg-[var(--background)]'
+                      : 'border-[var(--border-color)] bg-white'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-4">
@@ -281,11 +281,11 @@ export default function CheckoutPage() {
                         className="mt-1"
                       />
                       <div>
-                        <p className="text-sm font-medium text-[#1d1b18]">{address.name}</p>
-                        <p className="mt-1 text-sm text-[#6f6257]">
+                        <p className="text-sm font-medium text-[var(--text-primary)]">{address.name}</p>
+                        <p className="mt-1 text-sm text-[var(--text-secondary)]">
                           {address.line1}, {address.city}, {address.state} {address.pincode}
                         </p>
-                        <p className="mt-1 text-xs text-[#8b6e57]">
+                        <p className="mt-1 text-xs text-[var(--text-muted)]">
                           {address.phone} · {address.type}
                         </p>
                       </div>
@@ -294,12 +294,12 @@ export default function CheckoutPage() {
                       <button
                         type="button"
                         onClick={() => setDefaultAddress.mutate(address.id)}
-                        className="rounded-full border border-[rgba(25,30,45,0.08)] px-3 py-2 text-xs font-semibold text-[#3e352d]"
+                        className="rounded-full border border-[var(--border-color)] px-3 py-2 text-xs font-semibold text-[var(--text-secondary)]"
                       >
                         Make default
                       </button>
                     ) : (
-                      <span className="rounded-full bg-[#dff1e8] px-3 py-2 text-xs font-semibold text-[#1a6f4c]">
+                      <span className="rounded-full bg-[var(--success-soft)] px-3 py-2 text-xs font-semibold text-emerald-700">
                         Default
                       </span>
                     )}
@@ -310,14 +310,14 @@ export default function CheckoutPage() {
 
             <form
               onSubmit={handleCreateAddress}
-              className="mt-6 space-y-4 rounded-[28px] bg-[#fcf7f0] p-5"
+              className="mt-6 space-y-4 rounded-[28px] bg-[var(--background)] p-5"
             >
               <div className="grid gap-4 md:grid-cols-2">
                 <input
                   value={addressSearch}
                   onChange={(event) => setAddressSearch(event.target.value)}
                   placeholder="Search saved or map suggestions"
-                  className="rounded-full border border-[rgba(25,30,45,0.08)] bg-white px-4 py-3 text-sm outline-none md:col-span-2"
+                  className="rounded-full border border-[var(--border-color)] bg-white px-4 py-3 text-sm outline-none md:col-span-2"
                 />
                 {suggestions?.slice(0, 3).map((suggestion) => (
                   <button
@@ -334,7 +334,7 @@ export default function CheckoutPage() {
                         pincode: suggestion.pincode,
                       }))
                     }
-                    className="rounded-[22px] border border-[rgba(25,30,45,0.08)] bg-white px-4 py-3 text-left text-sm text-[#55483d]"
+                    className="rounded-[22px] border border-[var(--border-color)] bg-white px-4 py-3 text-left text-sm text-[var(--text-secondary)]"
                   >
                     {suggestion.label}
                   </button>
@@ -345,7 +345,7 @@ export default function CheckoutPage() {
                     setFormState((current) => ({ ...current, name: event.target.value }))
                   }
                   placeholder="Full name"
-                  className="rounded-full border border-[rgba(25,30,45,0.08)] bg-white px-4 py-3 text-sm outline-none"
+                  className="rounded-full border border-[var(--border-color)] bg-white px-4 py-3 text-sm outline-none"
                 />
                 <input
                   value={formState.phone}
@@ -353,7 +353,7 @@ export default function CheckoutPage() {
                     setFormState((current) => ({ ...current, phone: event.target.value }))
                   }
                   placeholder="Phone number"
-                  className="rounded-full border border-[rgba(25,30,45,0.08)] bg-white px-4 py-3 text-sm outline-none"
+                  className="rounded-full border border-[var(--border-color)] bg-white px-4 py-3 text-sm outline-none"
                 />
                 <input
                   value={formState.line1}
@@ -361,7 +361,7 @@ export default function CheckoutPage() {
                     setFormState((current) => ({ ...current, line1: event.target.value }))
                   }
                   placeholder="Address line 1"
-                  className="rounded-full border border-[rgba(25,30,45,0.08)] bg-white px-4 py-3 text-sm outline-none md:col-span-2"
+                  className="rounded-full border border-[var(--border-color)] bg-white px-4 py-3 text-sm outline-none md:col-span-2"
                 />
                 <input
                   value={formState.line2}
@@ -369,7 +369,7 @@ export default function CheckoutPage() {
                     setFormState((current) => ({ ...current, line2: event.target.value }))
                   }
                   placeholder="Address line 2"
-                  className="rounded-full border border-[rgba(25,30,45,0.08)] bg-white px-4 py-3 text-sm outline-none md:col-span-2"
+                  className="rounded-full border border-[var(--border-color)] bg-white px-4 py-3 text-sm outline-none md:col-span-2"
                 />
                 <input
                   value={formState.city}
@@ -377,7 +377,7 @@ export default function CheckoutPage() {
                     setFormState((current) => ({ ...current, city: event.target.value }))
                   }
                   placeholder="City"
-                  className="rounded-full border border-[rgba(25,30,45,0.08)] bg-white px-4 py-3 text-sm outline-none"
+                  className="rounded-full border border-[var(--border-color)] bg-white px-4 py-3 text-sm outline-none"
                 />
                 <input
                   value={formState.state}
@@ -385,7 +385,7 @@ export default function CheckoutPage() {
                     setFormState((current) => ({ ...current, state: event.target.value }))
                   }
                   placeholder="State"
-                  className="rounded-full border border-[rgba(25,30,45,0.08)] bg-white px-4 py-3 text-sm outline-none"
+                  className="rounded-full border border-[var(--border-color)] bg-white px-4 py-3 text-sm outline-none"
                 />
                 <input
                   value={formState.pincode}
@@ -393,7 +393,7 @@ export default function CheckoutPage() {
                     setFormState((current) => ({ ...current, pincode: event.target.value }))
                   }
                   placeholder="Postal code"
-                  className="rounded-full border border-[rgba(25,30,45,0.08)] bg-white px-4 py-3 text-sm outline-none"
+                  className="rounded-full border border-[var(--border-color)] bg-white px-4 py-3 text-sm outline-none"
                 />
                 <input
                   value={formState.landmark}
@@ -401,28 +401,28 @@ export default function CheckoutPage() {
                     setFormState((current) => ({ ...current, landmark: event.target.value }))
                   }
                   placeholder="Landmark"
-                  className="rounded-full border border-[rgba(25,30,45,0.08)] bg-white px-4 py-3 text-sm outline-none"
+                  className="rounded-full border border-[var(--border-color)] bg-white px-4 py-3 text-sm outline-none"
                 />
               </div>
               <button
                 type="submit"
-                className="rounded-full bg-[#1d1b18] px-5 py-3 text-sm font-semibold text-white"
+                className="rounded-full bg-[var(--foreground)] px-5 py-3 text-sm font-semibold text-[var(--background)]"
               >
                 Save address
               </button>
             </form>
           </section>
 
-          <section className="rounded-[32px] border border-[rgba(25,30,45,0.08)] bg-white p-6 shadow-[0_16px_45px_rgba(25,30,45,0.05)]">
-            <p className="text-xs uppercase tracking-[0.22em] text-[#8b6e57]">Payment method</p>
+          <section className="rounded-[32px] border border-[var(--border-color)] bg-white p-6 shadow-[0_16px_45px_rgba(25,30,45,0.05)]">
+            <p className="text-xs uppercase tracking-[0.22em] text-[var(--text-muted)]">Payment method</p>
             <div className="mt-4 grid gap-3">
               {paymentMethods.map((method) => (
                 <label
                   key={method.value}
                   className={`rounded-[24px] border p-4 ${
                     paymentMethod === method.value
-                      ? 'border-[#1d1b18] bg-[#fcf7f0]'
-                      : 'border-[rgba(25,30,45,0.08)] bg-white'
+                      ? 'border-[var(--foreground)] bg-[var(--background)]'
+                      : 'border-[var(--border-color)] bg-white'
                   }`}
                 >
                   <div className="flex items-start gap-3">
@@ -433,14 +433,14 @@ export default function CheckoutPage() {
                       className="mt-1"
                     />
                     <div>
-                      <p className="text-sm font-medium text-[#1d1b18]">{method.label}</p>
-                      <p className="mt-1 text-xs text-[#6f6257]">{method.help}</p>
+                      <p className="text-sm font-medium text-[var(--text-primary)]">{method.label}</p>
+                      <p className="mt-1 text-xs text-[var(--text-secondary)]">{method.help}</p>
                     </div>
                   </div>
                 </label>
               ))}
               {enabledGatewayMethods.length === 0 ? (
-                <div className="rounded-[22px] border border-dashed border-[rgba(25,30,45,0.12)] bg-[#fcf7f0] px-4 py-3 text-xs text-[#6f6257]">
+                <div className="rounded-[22px] border border-dashed border-[rgba(25,30,45,0.12)] bg-[var(--background)] px-4 py-3 text-xs text-[var(--text-secondary)]">
                   No online gateway is enabled by the backend right now, so checkout only shows COD
                   and wallet.
                 </div>
@@ -451,65 +451,65 @@ export default function CheckoutPage() {
               onChange={(event) => setNotes(event.target.value)}
               placeholder="Delivery notes"
               rows={4}
-              className="mt-4 w-full rounded-[24px] border border-[rgba(25,30,45,0.08)] bg-[#fcf7f0] px-4 py-3 text-sm outline-none"
+              className="mt-4 w-full rounded-[24px] border border-[var(--border-color)] bg-[var(--background)] px-4 py-3 text-sm outline-none"
             />
           </section>
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-[32px] border border-[rgba(25,30,45,0.08)] bg-white p-6 shadow-[0_16px_45px_rgba(25,30,45,0.05)]">
+          <div className="rounded-[32px] border border-[var(--border-color)] bg-white p-6 shadow-[0_16px_45px_rgba(25,30,45,0.05)]">
             <div className="flex items-center gap-3">
-              <ShieldCheck className="h-5 w-5 text-[#1a6f4c]" />
+              <ShieldCheck className="h-5 w-5 text-emerald-700" />
               <div>
-                <p className="text-xs uppercase tracking-[0.22em] text-[#8b6e57]">Quote status</p>
-                <p className="text-lg font-medium text-[#1d1b18]">Server-calculated totals</p>
+                <p className="text-xs uppercase tracking-[0.22em] text-[var(--text-muted)]">Quote status</p>
+                <p className="text-lg font-medium text-[var(--text-primary)]">Server-calculated totals</p>
               </div>
             </div>
 
             {quoteQuery.data ? (
               <div className="mt-6 space-y-4">
-                <div className="rounded-[24px] bg-[#fcf7f0] p-4">
-                  <p className="text-xs uppercase tracking-[0.22em] text-[#8b6e57]">
+                <div className="rounded-[24px] bg-[var(--background)] p-4">
+                  <p className="text-xs uppercase tracking-[0.22em] text-[var(--text-muted)]">
                     Serviceability
                   </p>
-                  <p className="mt-2 text-sm font-medium text-[#1d1b18]">
+                  <p className="mt-2 text-sm font-medium text-[var(--text-primary)]">
                     {quoteQuery.data.shipping.serviceable
                       ? 'Address is serviceable.'
                       : 'Address is not serviceable.'}
                   </p>
-                  <p className="mt-1 text-xs text-[#6f6257]">
+                  <p className="mt-1 text-xs text-[var(--text-secondary)]">
                     Zone {quoteQuery.data.shipping.zone_code ?? 'N/A'} · shipping option{' '}
                     {quoteQuery.data.shipping.shipping_option ?? 'default'}
                   </p>
                 </div>
-                <div className="space-y-3 text-sm text-[#55483d]">
+                <div className="space-y-3 text-sm text-[var(--text-secondary)]">
                   <div className="flex items-center justify-between">
                     <span>Cart subtotal</span>
-                    <span className="font-medium text-[#1d1b18]">
+                    <span className="font-medium text-[var(--text-primary)]">
                       {formatCurrency(quoteQuery.data.cart.subtotal)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span>Discount</span>
-                    <span className="font-medium text-[#1d1b18]">
+                    <span className="font-medium text-[var(--text-primary)]">
                       - {formatCurrency(quoteQuery.data.cart.discount)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span>Shipping</span>
-                    <span className="font-medium text-[#1d1b18]">
+                    <span className="font-medium text-[var(--text-primary)]">
                       {formatCurrency(quoteQuery.data.shipping.shipping_rate)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span>Tax ({Math.round(quoteQuery.data.tax_rate * 100)}%)</span>
-                    <span className="font-medium text-[#1d1b18]">
+                    <span className="font-medium text-[var(--text-primary)]">
                       {formatCurrency(quoteQuery.data.tax)}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between border-t border-[rgba(25,30,45,0.08)] pt-3 text-base">
-                    <span className="font-medium text-[#1d1b18]">Total</span>
-                    <span className="font-semibold text-[#1d1b18]">
+                  <div className="flex items-center justify-between border-t border-[var(--border-color)] pt-3 text-base">
+                    <span className="font-medium text-[var(--text-primary)]">Total</span>
+                    <span className="font-semibold text-[var(--text-primary)]">
                       {formatCurrency(quoteQuery.data.total)}
                     </span>
                   </div>
@@ -518,7 +518,7 @@ export default function CheckoutPage() {
                   type="button"
                   onClick={handlePlaceOrder}
                   disabled={createOrder.isPending || initiatePayment.isPending}
-                  className="inline-flex w-full items-center justify-center rounded-full bg-[#1d1b18] px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex w-full items-center justify-center rounded-full bg-[var(--foreground)] px-5 py-3 text-sm font-semibold text-[var(--background)] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {createOrder.isPending
                     ? 'Placing order...'
@@ -528,7 +528,7 @@ export default function CheckoutPage() {
                 </button>
               </div>
             ) : (
-              <div className="mt-6 rounded-[24px] bg-[#fcf7f0] p-5 text-sm text-[#6f6257]">
+              <div className="mt-6 rounded-[24px] bg-[var(--background)] p-5 text-sm text-[var(--text-secondary)]">
                 Choose a saved address to fetch the backend checkout quote.
               </div>
             )}

@@ -15,7 +15,7 @@ export default function AdminLiveFeedPage() {
       </CardHeader>
       <CardContent className="space-y-3">
         {events.map((event) => (
-          <div key={event} className="rounded-[22px] border border-[rgba(25,30,45,0.08)] p-4 text-sm text-[#54483f]">
+          <div key={event} className="rounded-[22px] border border-[var(--border-color)] p-4 text-sm text-[var(--text-secondary)]">
             {event}
           </div>
         ))}
