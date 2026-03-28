@@ -42,6 +42,7 @@ from src.apps.finance.services.esewa import EsewaService
 from src.apps.finance.services.khalti import KhaltiService
 from src.apps.finance.services.stripe import StripeService
 from src.apps.finance.services.paypal import PayPalService
+from src.apps.finance.services.razorpay import RazorpayService
 from src.apps.finance.services.stored_value import create_wallet_entry, get_wallet_balance, redeem_gift_card
 from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User
@@ -73,6 +74,8 @@ def _build_registry() -> dict[PaymentProvider, BasePaymentProvider]:
         registry[PaymentProvider.STRIPE] = StripeService()
     if settings.PAYPAL_ENABLED:
         registry[PaymentProvider.PAYPAL] = PayPalService()
+    if settings.RAZORPAY_ENABLED:
+        registry[PaymentProvider.RAZORPAY] = RazorpayService()
     return registry
 
 _PROVIDERS: dict[PaymentProvider, BasePaymentProvider] = _build_registry()
@@ -83,6 +86,8 @@ def _webhook_secret_for(provider: PaymentProvider) -> str:
         return settings.STRIPE_WEBHOOK_SECRET
     if provider == PaymentProvider.PAYPAL:
         return settings.PAYPAL_CLIENT_SECRET
+    if provider == PaymentProvider.RAZORPAY:
+        return settings.RAZORPAY_WEBHOOK_SECRET or settings.RAZORPAY_KEY_SECRET
     if provider == PaymentProvider.KHALTI:
         return settings.KHALTI_SECRET_KEY
     if provider == PaymentProvider.ESEWA:

@@ -60,10 +60,7 @@ Supported now:
 - `paypal`
 - `wallet`
 - `cod`
-
-Not implemented yet:
-
-- Razorpay
+- `razorpay`
 
 ### Webhooks
 
@@ -152,7 +149,6 @@ See [backend-status-matrix.md](/Users/ankit/Projects/Python/fastapi/e-commerce/d
 
 Future-only items called out explicitly:
 
-- Razorpay integration
 - external routing providers beyond the built-in nearest-neighbor + 2-opt optimizer
 - advanced native Apple Sign In client work across frontend/mobile
 

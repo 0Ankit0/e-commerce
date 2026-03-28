@@ -29,7 +29,7 @@ const CORE_PAYMENT_METHODS = [
 ];
 
 const GATEWAY_PAYMENT_METHODS: Record<
-  'khalti' | 'esewa',
+  'khalti' | 'esewa' | 'razorpay',
   { value: PaymentProvider; label: string; help: string }
 > = {
   khalti: {
@@ -41,6 +41,11 @@ const GATEWAY_PAYMENT_METHODS: Record<
     value: 'esewa',
     label: 'eSewa',
     help: 'Shown only when eSewa is enabled in the backend.',
+  },
+  razorpay: {
+    value: 'razorpay',
+    label: 'Razorpay',
+    help: 'Shown only when Razorpay is enabled in the backend.',
   },
 };
 
@@ -77,8 +82,8 @@ export default function CheckoutPage() {
     () =>
       (enabledProviders ?? [])
         .filter(
-          (provider): provider is 'khalti' | 'esewa' =>
-            provider === 'khalti' || provider === 'esewa'
+          (provider): provider is 'khalti' | 'esewa' | 'razorpay' =>
+            provider === 'khalti' || provider === 'esewa' || provider === 'razorpay'
         )
         .map((provider) => GATEWAY_PAYMENT_METHODS[provider]),
     [enabledProviders]
@@ -156,8 +161,8 @@ export default function CheckoutPage() {
     }
 
     try {
-      if (paymentMethod === 'khalti' || paymentMethod === 'esewa') {
-        const gatewayProvider = paymentMethod as Extract<PaymentProvider, 'khalti' | 'esewa'>;
+      if (paymentMethod === 'khalti' || paymentMethod === 'esewa' || paymentMethod === 'razorpay') {
+        const gatewayProvider = paymentMethod as Extract<PaymentProvider, 'khalti' | 'esewa' | 'razorpay'>;
         const purchaseOrderId = `CHK-${Date.now()}`;
         const customerName =
           [user?.first_name, user?.last_name].filter(Boolean).join(' ').trim() ||
@@ -167,7 +172,7 @@ export default function CheckoutPage() {
         const initiated = await initiatePayment.mutateAsync({
           provider: gatewayProvider,
           amount:
-            gatewayProvider === 'khalti'
+            gatewayProvider === 'khalti' || gatewayProvider === 'razorpay'
               ? Math.round(quoteQuery.data.total * 100)
               : Math.round(quoteQuery.data.total),
           purchase_order_id: purchaseOrderId,
@@ -212,10 +217,10 @@ export default function CheckoutPage() {
 
         if (!initiated.payment_url) {
           clearPendingCheckoutPayment();
-          throw new Error('The backend did not return a Khalti payment URL.');
+          throw new Error(`The backend did not return a ${gatewayProvider} payment URL.`);
         }
 
-        setMessage('Redirecting to Khalti to complete payment...');
+        setMessage(`Redirecting to ${gatewayProvider === 'razorpay' ? 'Razorpay' : 'Khalti'} to complete payment...`);
         window.location.assign(initiated.payment_url);
         return;
       }

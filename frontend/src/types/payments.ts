@@ -1,6 +1,6 @@
 // Finance / Payments module types
 
-export type PaymentProvider = 'khalti' | 'esewa' | 'stripe' | 'paypal';
+export type PaymentProvider = 'khalti' | 'esewa' | 'stripe' | 'paypal' | 'razorpay';
 export type PaymentStatus = 'pending' | 'completed' | 'failed' | 'refunded' | 'cancelled';
 
 export interface InitiatePaymentRequest {

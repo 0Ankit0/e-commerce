@@ -52,7 +52,9 @@ export function PaymentInitiateForm({ onSuccess, onError }: PaymentInitiateFormP
 
     // Khalti expects paisa (1 NPR = 100 paisa); eSewa expects NPR directly
     const amount =
-      selectedProvider === 'khalti' ? Math.round(nprAmount * 100) : Math.round(nprAmount);
+      selectedProvider === 'khalti' || selectedProvider === 'razorpay'
+        ? Math.round(nprAmount * 100)
+        : Math.round(nprAmount);
 
     const returnUrl = `${window.location.origin}/payment-callback?provider=${selectedProvider}`;
 
@@ -91,7 +93,9 @@ export function PaymentInitiateForm({ onSuccess, onError }: PaymentInitiateFormP
       ? 'Amount in NPR — e.g. 10 sends 1000 paisa to Khalti'
       : selectedProvider === 'esewa'
         ? 'Amount in NPR — e.g. 100 = NPR 100'
-        : '';
+        : selectedProvider === 'razorpay'
+          ? 'Amount in INR/NPR minor unit expected by backend (multiplied by 100).'
+          : '';
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">

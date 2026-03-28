@@ -6,7 +6,7 @@ const PENDING_CHECKOUT_PAYMENT_KEY = 'pending_checkout_payment';
 
 export interface PendingCheckoutPayment {
   addressId: string;
-  paymentMethod: Extract<PaymentProvider, 'khalti' | 'esewa'>;
+  paymentMethod: Extract<PaymentProvider, 'khalti' | 'esewa' | 'razorpay'>;
   quoteFingerprint: string;
   notes: string;
   transactionId: string;
@@ -18,7 +18,7 @@ function hasSessionStorage() {
   return typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined';
 }
 
-export function buildPaymentCallbackUrl(provider: Extract<PaymentProvider, 'khalti' | 'esewa'>) {
+export function buildPaymentCallbackUrl(provider: Extract<PaymentProvider, 'khalti' | 'esewa' | 'razorpay'>) {
   if (typeof window === 'undefined') {
     return '';
   }
