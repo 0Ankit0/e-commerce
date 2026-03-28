@@ -56,8 +56,9 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
       return;
     }
 
-    // Khalti expects paisa (×100), eSewa expects NPR directly
-    final amount = _selectedProvider == PaymentProvider.khalti
+    // Khalti and Razorpay expect minor units (×100), eSewa expects NPR directly
+    final amount = _selectedProvider == PaymentProvider.khalti ||
+            _selectedProvider == PaymentProvider.razorpay
         ? (nprAmount * 100).round()
         : nprAmount.round();
 
@@ -147,8 +148,9 @@ class _PaymentsPageState extends ConsumerState<PaymentsPage> {
     _resetForm();
   }
 
-  /// Web fallback: Khalti → open payment URL in browser tab.
-  /// eSewa → POST form via dart:html (see payment_utils_web.dart).
+  /// Web fallback:
+  /// - eSewa → POST form via dart:html (see payment_utils_web.dart)
+  /// - Khalti / Razorpay / others → open payment URL in browser tab
   Future<void> _handleWebPayment(InitiatePaymentResponse response) async {
     try {
       if (response.provider == PaymentProvider.esewa) {
@@ -328,6 +330,19 @@ class _PaymentForm extends ConsumerWidget {
                   ],
                 ),
               ],
+              if (selectedProvider == PaymentProvider.razorpay) ...[
+                const SizedBox(height: 8),
+                _CredentialHint(
+                  color: Colors.indigo.shade50,
+                  borderColor: Colors.indigo.shade200,
+                  title: 'Razorpay Test Mode',
+                  lines: const [
+                    'Use Razorpay test cards/accounts from your dashboard.',
+                    'Amount is sent in minor units (×100).',
+                    'Callback params include payment_id, order_id, signature.',
+                  ],
+                ),
+              ],
 
               const SizedBox(height: 16),
 
@@ -502,7 +517,9 @@ class _TransactionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final amountDisplay = tx.provider == PaymentProvider.khalti
+    final amountDisplay =
+        tx.provider == PaymentProvider.khalti ||
+            tx.provider == PaymentProvider.razorpay
         ? 'NPR ${(tx.amount / 100).toStringAsFixed(2)}'
         : 'NPR ${tx.amount}';
 

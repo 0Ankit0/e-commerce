@@ -14,7 +14,7 @@ import { clearPendingCheckoutPayment, getPendingCheckoutPayment } from '@/lib/ch
  *
  * Khalti redirect params: ?status=Completed&transaction_id=...&tidx=...&amount=...&mobile=...&purchase_order_id=...&purchase_order_name=...&pidx=...
  * eSewa redirect params:  ?data=BASE64_ENCODED_RESPONSE&provider=esewa
- * Generic:                ?provider=stripe|paypal&transaction_id=...
+ * Generic:                ?provider=stripe|paypal|razorpay&transaction_id=...
  */
 function PaymentCallbackInner() {
   const searchParams = useSearchParams();
@@ -35,8 +35,14 @@ function PaymentCallbackInner() {
 
     async function finalizePayment() {
       const provider = (searchParams.get('provider') || 'khalti') as PaymentProvider;
-      const pidx = searchParams.get('pidx') ?? undefined;
+      const pidx =
+        searchParams.get('pidx') ??
+        searchParams.get('razorpay_payment_id') ??
+        undefined;
       const data = searchParams.get('data') ?? undefined;
+      const oid = searchParams.get('oid') ?? searchParams.get('razorpay_order_id') ?? undefined;
+      const refId =
+        searchParams.get('refId') ?? searchParams.get('razorpay_signature') ?? undefined;
       const pendingCheckout = getPendingCheckoutPayment();
 
       if (!pidx && !data) {
@@ -51,6 +57,8 @@ function PaymentCallbackInner() {
           pidx,
           data,
           transaction_id: pendingCheckout?.transactionId,
+          oid,
+          refId,
         });
 
         if (result.status !== 'completed') {

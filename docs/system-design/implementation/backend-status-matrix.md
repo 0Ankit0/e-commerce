@@ -45,11 +45,11 @@ Status labels:
 | Logistics | Built-in nearest-neighbor + 2-opt route optimization for manifests and trips | `implemented in this completion pass` |
 | Logistics | Real-time courier GPS ingestion, trip last-known position, and shipment location updates | `implemented in this completion pass` |
 | Recommendations | ML-grade feature scoring, reason generation, and diversity re-ranking | `implemented in this completion pass` |
-| Payments | Razorpay integration | `future` |
+| Payments | Razorpay integration | `implemented in this completion pass` |
 
 ## Requirement Coverage Notes
 
-- The requirements docs list Razorpay under payment gateways. The running backend intentionally keeps the active provider set to `khalti`, `esewa`, `stripe`, `paypal`, `wallet`, and `cod`; Razorpay remains future work.
+- The active provider set now includes `razorpay` alongside `khalti`, `esewa`, `stripe`, `paypal`, `wallet`, and `cod` (subject to per-provider enabled flags).
 - Route optimization is implemented in-process for manifests and trips. External routing vendors and solver fleets remain optional future enhancements rather than current dependencies.
 - Courier GPS ingestion is implemented through persisted trip pings and shipment location updates.
 - Recommendation ranking now uses a weighted multi-signal ranker with diversity re-ranking in the running backend.

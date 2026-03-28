@@ -120,13 +120,22 @@ class _PaymentWebViewPageState extends ConsumerState<PaymentWebViewPage> {
           provider: PaymentProvider.khalti,
           pidx: pidx,
         );
-      } else {
+      } else if (widget.provider == PaymentProvider.esewa) {
         // eSewa sends base64-encoded `data` param
         final data = uri.queryParameters['data'];
         verifyReq = VerifyPaymentRequest(
           provider: PaymentProvider.esewa,
           data: data,
         );
+      } else if (widget.provider == PaymentProvider.razorpay) {
+        verifyReq = VerifyPaymentRequest(
+          provider: PaymentProvider.razorpay,
+          pidx: uri.queryParameters['pidx'] ?? uri.queryParameters['razorpay_payment_id'],
+          oid: uri.queryParameters['oid'] ?? uri.queryParameters['razorpay_order_id'],
+          refId: uri.queryParameters['refId'] ?? uri.queryParameters['razorpay_signature'],
+        );
+      } else {
+        verifyReq = VerifyPaymentRequest(provider: widget.provider);
       }
 
       final result = await repo.verifyPayment(verifyReq);

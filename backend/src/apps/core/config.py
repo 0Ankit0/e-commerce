@@ -48,6 +48,8 @@ NON_RUNTIME_EDITABLE_SETTING_KEYS = frozenset(
         "STRIPE_SECRET_KEY",
         "STRIPE_WEBHOOK_SECRET",
         "PAYPAL_CLIENT_SECRET",
+        "RAZORPAY_KEY_SECRET",
+        "RAZORPAY_WEBHOOK_SECRET",
         "GOOGLE_CLIENT_SECRET",
         "GITHUB_CLIENT_SECRET",
         "FACEBOOK_CLIENT_SECRET",
@@ -81,6 +83,7 @@ PUBLIC_GENERAL_SETTING_KEYS = frozenset(
         "ESEWA_ENABLED",
         "STRIPE_ENABLED",
         "PAYPAL_ENABLED",
+        "RAZORPAY_ENABLED",
         "APPLE_ENABLED",
     }
 )
@@ -300,6 +303,11 @@ class Settings(BaseSettings):
     PAYPAL_CLIENT_ID: str = "your_paypal_sandbox_client_id"
     PAYPAL_CLIENT_SECRET: str = "your_paypal_sandbox_client_secret"
     PAYPAL_MODE: str = "sandbox"
+    RAZORPAY_ENABLED: bool = False
+    RAZORPAY_KEY_ID: str = "rzp_test_your_key_id"
+    RAZORPAY_KEY_SECRET: str = "your_razorpay_key_secret"
+    RAZORPAY_WEBHOOK_SECRET: str = ""
+    RAZORPAY_BASE_URL: str = "https://api.razorpay.com"
 
     GOOGLE_ENABLED: bool = False
     GOOGLE_CLIENT_ID: str = "your-google-client-id"
@@ -345,6 +353,7 @@ class Settings(BaseSettings):
         "ESEWA_ENABLED",
         "STRIPE_ENABLED",
         "PAYPAL_ENABLED",
+        "RAZORPAY_ENABLED",
         "GOOGLE_ENABLED",
         "GITHUB_ENABLED",
         "FACEBOOK_ENABLED",

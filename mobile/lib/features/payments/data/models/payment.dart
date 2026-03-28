@@ -2,7 +2,8 @@ enum PaymentProvider {
   khalti,
   esewa,
   stripe,
-  paypal;
+  paypal,
+  razorpay;
 
   static PaymentProvider fromString(String v) {
     return PaymentProvider.values.firstWhere(
@@ -21,6 +22,8 @@ enum PaymentProvider {
         return 'Stripe';
       case PaymentProvider.paypal:
         return 'PayPal';
+      case PaymentProvider.razorpay:
+        return 'Razorpay';
     }
   }
 }

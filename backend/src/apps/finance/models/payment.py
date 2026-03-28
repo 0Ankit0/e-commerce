@@ -11,6 +11,7 @@ class PaymentProvider(str, Enum):
     ESEWA = "esewa"
     STRIPE = "stripe"
     PAYPAL = "paypal"
+    RAZORPAY = "razorpay"
     WALLET = "wallet"
     COD = "cod"
 

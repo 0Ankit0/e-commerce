@@ -30,6 +30,7 @@ class _CheckoutPageState extends ConsumerState<CheckoutPage> {
   static const _gatewayLabels = {
     'khalti': ('Khalti', 'Shown only when Khalti is enabled in the backend.'),
     'esewa': ('eSewa', 'Shown only when eSewa is enabled in the backend.'),
+    'razorpay': ('Razorpay', 'Shown only when Razorpay is enabled in the backend.'),
   };
   String _selectedAddressId = '';
   String _paymentMethod = 'cod';
@@ -125,7 +126,7 @@ class _CheckoutPageState extends ConsumerState<CheckoutPage> {
     try {
       String? paymentTransactionId;
 
-      if (_paymentMethod == 'khalti' || _paymentMethod == 'esewa') {
+      if (_paymentMethod == 'khalti' || _paymentMethod == 'esewa' || _paymentMethod == 'razorpay') {
         final provider = PaymentProvider.fromString(_paymentMethod);
         final authUser = ref.read(authNotifierProvider).valueOrNull?.user;
         final purchaseOrderId = 'CHK-${DateTime.now().millisecondsSinceEpoch}';
@@ -135,7 +136,7 @@ class _CheckoutPageState extends ConsumerState<CheckoutPage> {
         final initiated = await paymentRepository.initiatePayment(
           InitiatePaymentRequest(
             provider: provider,
-            amount: provider == PaymentProvider.khalti
+            amount: provider == PaymentProvider.khalti || provider == PaymentProvider.razorpay
                 ? (quote.total * 100).round()
                 : quote.total.round(),
             purchaseOrderId: purchaseOrderId,
@@ -248,7 +249,7 @@ class _CheckoutPageState extends ConsumerState<CheckoutPage> {
                 );
           final enabledGatewayOptions = (paymentProvidersAsync.valueOrNull ??
                   const <String>[])
-              .where((provider) => provider == 'khalti' || provider == 'esewa')
+              .where((provider) => provider == 'khalti' || provider == 'esewa' || provider == 'razorpay')
               .map((provider) {
             final label = _gatewayLabels[provider]!;
             return (provider, label.$1, label.$2);
