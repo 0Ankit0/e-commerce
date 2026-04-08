@@ -100,3 +100,19 @@ export interface AdminOTPStatusResponse {
   items: AdminOTPStatusItem[];
   total: number;
 }
+
+export interface PrivilegedActionChallengeDetail {
+  code: 'OTP_CHALLENGE_REQUIRED';
+  message: string;
+  action: string;
+  otp: {
+    required_freshness_seconds: number;
+  };
+}
+
+export interface StepUpVerificationResponse {
+  step_up_token: string;
+  expires_at: string;
+  required_freshness_seconds: number;
+  action: string;
+}

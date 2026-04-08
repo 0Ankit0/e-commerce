@@ -1,12 +1,16 @@
 import asyncio
+import time
 import pytest
+import pyotp
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from src.apps.core import security
+from src.apps.iam.security import PrivilegedAction, PRIVILEGED_ACTION_POLICY_MAP, PrivilegedActionPolicy
 from src.apps.iam.models.token_tracking import TokenTracking
 from src.apps.iam.models.user import User
+from src.apps.iam.utils.hashid import encode_id
 
 
 class TestAuthenticationSecurity:
@@ -251,3 +255,128 @@ class TestAuthenticationSecurity:
         active_tokens = [token for token in tokens if token.is_active]
         assert len(active_tokens) == 2
         assert len(tokens) >= 12
+
+    @pytest.mark.asyncio
+    async def test_privileged_action_requires_recent_otp_and_blocks_replay(self, client: AsyncClient, db_session: AsyncSession):
+        otp_secret = pyotp.random_base32()
+        admin = User(
+            username="stepup_admin",
+            email="stepup-admin@example.com",
+            hashed_password=security.get_password_hash("ValidPass123"),
+            is_active=True,
+            is_superuser=True,
+            is_confirmed=True,
+            otp_enabled=True,
+            otp_verified=True,
+            otp_base32=otp_secret,
+        )
+        target = User(
+            username="stepup_target",
+            email="stepup-target@example.com",
+            hashed_password=security.get_password_hash("ValidPass123"),
+            is_active=True,
+            is_superuser=False,
+            is_confirmed=True,
+        )
+        db_session.add(admin)
+        db_session.add(target)
+        await db_session.commit()
+
+        login = await client.post(
+            "/api/v1/auth/login/?set_cookie=false",
+            json={"username": "stepup_admin", "password": "ValidPass123"},
+        )
+        token = login.json()["access"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        blocked = await client.patch(
+            f"/api/v1/users/{encode_id(target.id)}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        assert blocked.status_code == 403
+        assert blocked.json()["detail"]["code"] == "OTP_CHALLENGE_REQUIRED"
+
+        step_up = await client.post(
+            "/api/v1/auth/otp/step-up/verify",
+            json={"otp_code": pyotp.TOTP(otp_secret).now(), "action": PrivilegedAction.USER_STATUS_EDIT.value},
+            headers=headers,
+        )
+        assert step_up.status_code == 200, step_up.text
+        step_token = step_up.json()["step_up_token"]
+
+        allowed_headers = {**headers, "X-Privileged-Auth": step_token}
+        allowed = await client.patch(
+            f"/api/v1/users/{encode_id(target.id)}",
+            json={"is_active": False},
+            headers=allowed_headers,
+        )
+        assert allowed.status_code == 200, allowed.text
+        assert allowed.json()["is_active"] is False
+
+        replay = await client.patch(
+            f"/api/v1/users/{encode_id(target.id)}",
+            json={"is_active": True},
+            headers=allowed_headers,
+        )
+        assert replay.status_code == 403
+        assert replay.json()["detail"]["code"] == "OTP_CHALLENGE_REQUIRED"
+
+    @pytest.mark.asyncio
+    async def test_privileged_action_rejects_expired_step_up_session(self, client: AsyncClient, db_session: AsyncSession, monkeypatch):
+        otp_secret = pyotp.random_base32()
+        admin = User(
+            username="stepup_expiry_admin",
+            email="stepup-expiry-admin@example.com",
+            hashed_password=security.get_password_hash("ValidPass123"),
+            is_active=True,
+            is_superuser=True,
+            is_confirmed=True,
+            otp_enabled=True,
+            otp_verified=True,
+            otp_base32=otp_secret,
+        )
+        target = User(
+            username="stepup_expiry_target",
+            email="stepup-expiry-target@example.com",
+            hashed_password=security.get_password_hash("ValidPass123"),
+            is_active=True,
+            is_superuser=False,
+            is_confirmed=True,
+        )
+        db_session.add(admin)
+        db_session.add(target)
+        await db_session.commit()
+
+        original_policy = PRIVILEGED_ACTION_POLICY_MAP[PrivilegedAction.USER_STATUS_EDIT]
+        monkeypatch.setitem(
+            PRIVILEGED_ACTION_POLICY_MAP,
+            PrivilegedAction.USER_STATUS_EDIT,
+            PrivilegedActionPolicy(
+                action=original_policy.action,
+                required_roles=original_policy.required_roles,
+                otp_freshness_seconds=1,
+            ),
+        )
+
+        login = await client.post(
+            "/api/v1/auth/login/?set_cookie=false",
+            json={"username": "stepup_expiry_admin", "password": "ValidPass123"},
+        )
+        token = login.json()["access"]
+        headers = {"Authorization": f"Bearer {token}"}
+        step_up = await client.post(
+            "/api/v1/auth/otp/step-up/verify",
+            json={"otp_code": pyotp.TOTP(otp_secret).now(), "action": PrivilegedAction.USER_STATUS_EDIT.value},
+            headers=headers,
+        )
+        assert step_up.status_code == 200
+        time.sleep(2)
+
+        expired = await client.patch(
+            f"/api/v1/users/{encode_id(target.id)}",
+            json={"is_active": False},
+            headers={**headers, "X-Privileged-Auth": step_up.json()["step_up_token"]},
+        )
+        assert expired.status_code == 403
+        assert expired.json()["detail"]["code"] == "OTP_CHALLENGE_REQUIRED"
