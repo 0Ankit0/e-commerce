@@ -119,6 +119,8 @@ async def calculate_tax_amount(
             continue
         if rule.state and rule.state.lower() != (address.state or "").lower():
             continue
+        if rule.city and rule.city.lower() != (address.city or "").lower():
+            continue
         if rule.pincode_prefix and not (address.pincode or "").startswith(rule.pincode_prefix):
             continue
         if rule.category_id and rule.category_id not in category_ids:
