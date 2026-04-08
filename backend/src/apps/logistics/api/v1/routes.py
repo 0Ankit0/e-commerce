@@ -938,7 +938,7 @@ async def initiate_exception_rto(
 async def update_shipment_status(
     shipment_id: str,
     payload: ShipmentStatusRequest,
-    _: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
     analytics: AnalyticsService = Depends(get_analytics),
 ):
@@ -948,6 +948,9 @@ async def update_shipment_status(
         payload.location or "Logistics update",
         payload.remarks or payload.status.value,
         db,
+        actor_type="admin",
+        actor_id=current_user.id,
+        context={"source": "manual_status_api"},
     )
     await db.commit()
     await analytics.capture("system", "shipment_status_updated", {"shipment_id": shipment.id, "status": payload.status.value})
@@ -1016,7 +1019,7 @@ async def get_shipping_label_metadata(
 async def capture_proof_of_delivery(
     shipment_id: str,
     payload: ShipmentProofRequest,
-    _: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
     decoded_shipment_id = decode_id_or_404(shipment_id)
@@ -1033,15 +1036,15 @@ async def capture_proof_of_delivery(
         notes=payload.notes,
         db=db,
     )
-    shipment.status = OrderStatus.DELIVERED
-    shipment.current_location = "Delivered"
-    db.add(
-        ShipmentTracking(
-            shipment_id=shipment.id,
-            status=OrderStatus.DELIVERED,
-            location="Customer address",
-            remarks=payload.notes or "Proof of delivery captured",
-        )
+    shipment = await update_shipment_tracking(
+        decoded_shipment_id,
+        OrderStatus.DELIVERED,
+        "Delivered",
+        payload.notes or "Proof of delivery captured",
+        db,
+        actor_type="admin",
+        actor_id=current_user.id,
+        context={"source": "pod_capture", "proof_id": proof.id},
     )
     await db.commit()
     await _notify_customer_for_shipment_status(

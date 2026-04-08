@@ -214,9 +214,13 @@ class ShipmentTracking(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     shipment_id: int = Field(foreign_key="shipments.id", index=True)
+    from_status: Optional[OrderStatus] = Field(default=None)
     status: OrderStatus = Field(default=OrderStatus.CONFIRMED)
     location: str = Field(default="", max_length=255)
     remarks: str = Field(default="", max_length=500)
+    actor_type: str = Field(default="system", max_length=40)
+    actor_id: Optional[int] = Field(default=None, index=True)
+    context_json: str = Field(default="{}")
     timestamp: datetime = Field(default_factory=utc_now)
 
 

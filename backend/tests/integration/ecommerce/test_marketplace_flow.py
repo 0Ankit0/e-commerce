@@ -14,10 +14,10 @@ from src.apps.finance.models.payment import PaymentProvider, PaymentStatus, Paym
 from src.apps.commerce.models import Address, WishlistShareLink
 from src.apps.iam.models.token_tracking import TokenTracking
 from src.apps.iam.models.user import User, UserProfile
-from src.apps.logistics.models import CourierLocationPing, RouteOptimizationPlan
+from src.apps.logistics.models import CourierLocationPing, DeliveryException, RouteOptimizationPlan, ShipmentManifest
 from src.apps.messaging.models import ChatMessageEnvelope
 from src.apps.multitenancy.models.tenant import Tenant, TenantMember, TenantRole
-from src.apps.orders.models import Order, ReturnRequest, Shipment
+from src.apps.orders.models import Order, OrderStatus, ReturnRequest, Shipment, ShipmentTracking
 
 
 async def _create_user_headers(
@@ -933,6 +933,224 @@ async def test_internal_logistics_and_support_flow(client: AsyncClient, db_sessi
     admin_tickets = await client.get("/api/v1/admin/support/tickets", headers=admin_headers)
     assert admin_tickets.status_code == 200
     assert admin_tickets.json()["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_shipment_transition_rules_and_idempotency(client: AsyncClient, db_session: AsyncSession):
+    admin, admin_headers = await _create_user_headers(
+        db_session,
+        username="ops_admin_transition",
+        email="ops_admin_transition@example.com",
+        is_superuser=True,
+    )
+    vendor_user, vendor_headers = await _create_user_headers(
+        db_session,
+        username="vendor_transition",
+        email="vendor_transition@example.com",
+    )
+    customer_user, customer_headers = await _create_user_headers(
+        db_session,
+        username="customer_transition",
+        email="customer_transition@example.com",
+    )
+    tenant = await _create_tenant_for_owner(db_session, vendor_user, "vendor-transition-tenant")
+    hashid = __import__("src.apps.iam.utils.hashid", fromlist=["encode_id", "decode_id"])
+    encode_id = hashid.encode_id
+    decode_id = hashid.decode_id
+
+    vendor_resp = await client.post(
+        "/api/v1/vendor/profile",
+        headers=vendor_headers,
+        json={
+            "tenant_id": encode_id(tenant.id),
+            "business_name": "Transition Vendor",
+            "display_name": "Transition Vendor",
+            "slug": "transition-vendor",
+        },
+    )
+    vendor_id = vendor_resp.json()["vendor"]["id"]
+    await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    await _create_delivery_zone(client, admin_headers, code="transition-zone")
+    hub_resp = await client.post(
+        "/api/v1/logistics/hubs",
+        headers=admin_headers,
+        json={"name": "Transition Hub", "code": "HUB-TRN", "city": "Kathmandu"},
+    )
+    hub_id = hub_resp.json()["hub_id"]
+    zone_id = (await client.get("/api/v1/logistics/zones", headers=admin_headers)).json()["items"][0]["id"]
+    first_branch_resp = await client.post(
+        "/api/v1/logistics/branches",
+        headers=admin_headers,
+        json={"hub_id": hub_id, "zone_id": zone_id, "name": "Branch One", "code": "BR-TRN-1"},
+    )
+    second_branch_resp = await client.post(
+        "/api/v1/logistics/branches",
+        headers=admin_headers,
+        json={"hub_id": hub_id, "zone_id": zone_id, "name": "Branch Two", "code": "BR-TRN-2"},
+    )
+    first_branch_id = first_branch_resp.json()["branch_id"]
+    second_branch_id = second_branch_resp.json()["branch_id"]
+    agent_resp = await client.post(
+        "/api/v1/logistics/agents",
+        headers=admin_headers,
+        json={"branch_id": first_branch_id, "name": "Rider Two", "phone": "+9779800009999"},
+    )
+    agent_id = agent_resp.json()["agent_id"]
+
+    await client.post("/api/v1/vendor/warehouses", headers=vendor_headers, json={"name": "Transition Warehouse"})
+    await client.post("/api/v1/admin/categories", headers=admin_headers, json={"name": "Shoes", "slug": "shoes", "level": 1})
+    category_id = (await client.get("/api/v1/categories")).json()["items"][0]["id"]
+    brand_resp = await client.post(
+        "/api/v1/admin/catalog/brands",
+        headers=admin_headers,
+        json={"name": "Transition Brand", "slug": "transition-brand"},
+    )
+    brand_id = brand_resp.json()["brand"]["id"]
+    product_resp = await client.post(
+        "/api/v1/vendor/products",
+        headers=vendor_headers,
+        json={
+            "category_id": category_id,
+            "brand_id": brand_id,
+            "name": "Sneaker",
+            "slug": "sneaker-transition",
+            "variants": [{"sku": "SN-1", "name": "42", "mrp": 120, "selling_price": 100, "quantity": 2, "is_default": True}],
+        },
+    )
+    product_id = product_resp.json()["product"]["id"]
+    approve_resp = await client.post(f"/api/v1/admin/catalog/products/{product_id}/approve", headers=admin_headers)
+    variant_id = approve_resp.json()["product"]["variants"][0]["id"]
+    address_resp = await client.post(
+        "/api/v1/addresses",
+        headers=customer_headers,
+        json={"name": "Home", "phone": "+9779801000000", "line1": "Koteshwor", "city": "Kathmandu", "state": "Bagmati", "pincode": "44600"},
+    )
+    await client.post("/api/v1/cart/items", headers=customer_headers, json={"variant_id": variant_id, "quantity": 1})
+    order_resp = await client.post(
+        "/api/v1/checkout",
+        headers={**customer_headers, "Idempotency-Key": "transition-order-1"},
+        json={"address_id": address_resp.json()["address"]["id"], "payment_method": "cod"},
+    )
+    assert order_resp.status_code == 201, order_resp.text
+    vendor_order_id = order_resp.json()["order"]["vendor_orders"][0]["id"]
+    shipment_id = order_resp.json()["order"]["shipments"][0]["id"]
+    shipment_db_id = decode_id(shipment_id)
+
+    illegal_transition_resp = await client.post(
+        f"/api/v1/logistics/shipments/{shipment_id}/status",
+        headers=admin_headers,
+        json={"status": "out_for_delivery", "location": "Bad jump", "remarks": "skip graph"},
+    )
+    assert illegal_transition_resp.status_code == 409, illegal_transition_resp.text
+    shipment = await db_session.get(Shipment, shipment_db_id)
+    assert shipment is not None
+    assert shipment.status == OrderStatus.CONFIRMED
+
+    pickup_job_resp = await client.post(
+        f"/api/v1/vendor/orders/{vendor_order_id}/pickup-jobs",
+        headers=vendor_headers,
+        params={"branch_id": first_branch_id},
+    )
+    pickup_job_id = pickup_job_resp.json()["pickup_job_id"]
+    await client.post(
+        f"/api/v1/logistics/pickup-jobs/{pickup_job_id}/assign",
+        headers=admin_headers,
+        json={"agent_id": agent_id},
+    )
+    await client.post(
+        f"/api/v1/logistics/pickup-jobs/{pickup_job_id}/complete",
+        headers=admin_headers,
+        params={"location": "Branch One"},
+    )
+    shipped_count_before = len(
+        (
+            await db_session.execute(
+                select(ShipmentTracking).where(ShipmentTracking.shipment_id == shipment_db_id, ShipmentTracking.status == OrderStatus.SHIPPED)
+            )
+        ).scalars().all()
+    )
+    shipped_repeat_resp = await client.post(
+        f"/api/v1/logistics/shipments/{shipment_id}/status",
+        headers=admin_headers,
+        json={"status": "shipped", "location": "Branch One", "remarks": "idempotent repeat"},
+    )
+    assert shipped_repeat_resp.status_code == 200, shipped_repeat_resp.text
+    shipped_count_after = len(
+        (
+            await db_session.execute(
+                select(ShipmentTracking).where(ShipmentTracking.shipment_id == shipment_db_id, ShipmentTracking.status == OrderStatus.SHIPPED)
+            )
+        ).scalars().all()
+    )
+    assert shipped_count_after == shipped_count_before
+
+    manifest_resp = await client.post(
+        "/api/v1/logistics/manifests",
+        headers=admin_headers,
+        json={"code": "MNF-TRN-001", "origin_hub_id": hub_id, "destination_hub_id": hub_id, "branch_id": first_branch_id, "shipment_ids": [shipment_id]},
+    )
+    manifest_db_id = decode_id(manifest_resp.json()["manifest_id"])
+    trip_resp = await client.post(
+        "/api/v1/logistics/trips",
+        headers=admin_headers,
+        json={"manifest_id": manifest_resp.json()["manifest_id"], "vehicle_number": "BA-1-PA-9999"},
+    )
+    await client.post(f"/api/v1/logistics/trips/{trip_resp.json()['trip_id']}/dispatch", headers=admin_headers)
+
+    manifest = await db_session.get(ShipmentManifest, manifest_db_id)
+    assert manifest is not None
+    manifest.branch_id = decode_id(second_branch_id)
+    db_session.add(manifest)
+    await db_session.commit()
+
+    arrive_resp = await client.post(f"/api/v1/logistics/trips/{trip_resp.json()['trip_id']}/arrive", headers=admin_headers)
+    assert arrive_resp.status_code == 200, arrive_resp.text
+    latest_out_for_delivery = (
+        (
+            await db_session.execute(
+                select(ShipmentTracking)
+                .where(ShipmentTracking.shipment_id == shipment_db_id, ShipmentTracking.status == OrderStatus.OUT_FOR_DELIVERY)
+                .order_by(ShipmentTracking.id.desc())
+            )
+        )
+        .scalars()
+        .first()
+    )
+    assert latest_out_for_delivery is not None
+    assert latest_out_for_delivery.location == "Branch Two"
+
+    exception_resp = await client.post(
+        f"/api/v1/logistics/shipments/{shipment_id}/exceptions",
+        headers=admin_headers,
+        json={"exception_type": "failed_delivery", "failure_reason": "Customer unavailable", "agent_id": agent_id},
+    )
+    assert exception_resp.status_code == 201, exception_resp.text
+    exception_id = exception_resp.json()["exception_id"]
+    rto_resp = await client.post(f"/api/v1/logistics/exceptions/{exception_id}/rto", headers=admin_headers)
+    assert rto_resp.status_code == 200, rto_resp.text
+
+    repeated_rto_resp = await client.post(f"/api/v1/logistics/exceptions/{exception_id}/rto", headers=admin_headers)
+    assert repeated_rto_resp.status_code == 200, repeated_rto_resp.text
+    returned_events = (
+        (
+            await db_session.execute(
+                select(ShipmentTracking).where(ShipmentTracking.shipment_id == shipment_db_id, ShipmentTracking.status == OrderStatus.RETURNED)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(returned_events) == 1
+
+    reschedule_after_rto_resp = await client.post(
+        f"/api/v1/logistics/exceptions/{exception_id}/reschedule",
+        headers=admin_headers,
+        json={"rescheduled_for": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()},
+    )
+    assert reschedule_after_rto_resp.status_code == 409, reschedule_after_rto_resp.text
+    exception_db = await db_session.get(DeliveryException, decode_id(exception_id))
+    assert exception_db is not None
+    assert exception_db.status.value == "rto_initiated"
 
 
 @pytest.mark.asyncio
