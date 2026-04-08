@@ -12,6 +12,7 @@ from src.apps.commerce.models import Address
 from src.apps.core.time import utc_now
 from src.apps.iam.utils.hashid import encode_id
 from src.apps.logistics.models import (
+    Branch,
     BranchInventoryMovement,
     CourierLocationPing,
     DeliveryAgent,
@@ -33,6 +34,13 @@ from src.apps.logistics.models import (
     ShippingOption,
 )
 from src.apps.orders.models import Order, OrderStatus, ReturnRequest, Shipment, ShipmentTracking, VendorOrder, VendorOrderStatus
+
+ALLOWED_SHIPMENT_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
+    OrderStatus.CONFIRMED: {OrderStatus.PROCESSING},
+    OrderStatus.PROCESSING: {OrderStatus.SHIPPED},
+    OrderStatus.SHIPPED: {OrderStatus.OUT_FOR_DELIVERY},
+    OrderStatus.OUT_FOR_DELIVERY: {OrderStatus.DELIVERED, OrderStatus.RETURNED},
+}
 
 
 async def get_zone_by_pincode(pincode: str, db: AsyncSession) -> DeliveryZone | None:
@@ -135,19 +143,35 @@ async def update_shipment_tracking(
     location: str,
     remarks: str,
     db: AsyncSession,
+    *,
+    actor_type: str = "system",
+    actor_id: int | None = None,
+    context: dict[str, object] | None = None,
 ) -> Shipment:
     shipment = await db.get(Shipment, shipment_id)
     if shipment is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
+    previous_status = shipment.status
+    if previous_status == status_value:
+        return shipment
+    if status_value not in ALLOWED_SHIPMENT_TRANSITIONS.get(previous_status, set()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Illegal shipment transition: {previous_status.value} -> {status_value.value}",
+        )
     shipment.status = status_value
     shipment.current_location = location
     shipment.updated_at = utc_now()
     db.add(
         ShipmentTracking(
             shipment_id=shipment.id,
+            from_status=previous_status,
             status=status_value,
             location=location,
             remarks=remarks,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            context_json=json.dumps(context or {}),
         )
     )
     return shipment
@@ -212,10 +236,18 @@ async def arrive_line_haul_trip(trip: LineHaulTrip, db: AsyncSession) -> None:
     manifest.updated_at = utc_now()
     trip.status = LineHaulTripStatus.ARRIVED
     trip.arrived_at = utc_now()
+    destination_branch = await db.get(Branch, manifest.branch_id) if manifest.branch_id else None
     destination_hub = await db.get(Hub, manifest.destination_hub_id) if manifest.destination_hub_id else None
-    location = destination_hub.name if destination_hub else "Destination hub"
+    location = destination_branch.name if destination_branch else (destination_hub.name if destination_hub else "Destination hub")
     for shipment_id in json.loads(manifest.shipment_ids_json or "[]"):
-        await update_shipment_tracking(shipment_id, OrderStatus.OUT_FOR_DELIVERY, location, "Shipment received at destination hub", db)
+        await update_shipment_tracking(
+            shipment_id,
+            OrderStatus.OUT_FOR_DELIVERY,
+            location,
+            "Shipment received at destination hub",
+            db,
+            context={"manifest_id": manifest.id, "trip_id": trip.id, "branch_id": manifest.branch_id},
+        )
 
 
 async def create_reverse_pickup(return_request: ReturnRequest, db: AsyncSession) -> ReversePickupJob:
@@ -270,6 +302,11 @@ async def create_delivery_exception(
     rescheduled_for: datetime | None,
     db: AsyncSession,
 ) -> DeliveryException:
+    if shipment.status != OrderStatus.OUT_FOR_DELIVERY:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Delivery exceptions can only be reported from {OrderStatus.OUT_FOR_DELIVERY.value}",
+        )
     exception = DeliveryException(
         shipment_id=shipment.id or 0,
         agent_id=agent_id,
@@ -284,9 +321,19 @@ async def create_delivery_exception(
     db.add(
         ShipmentTracking(
             shipment_id=shipment.id or 0,
+            from_status=shipment.status,
             status=shipment.status,
             location="Delivery exception",
             remarks=failure_reason or exception_type,
+            actor_type="ops",
+            actor_id=agent_id,
+            context_json=json.dumps(
+                {
+                    "event": "delivery_exception_reported",
+                    "exception_type": exception_type,
+                    "rescheduled_for": rescheduled_for.isoformat() if rescheduled_for else None,
+                }
+            ),
         )
     )
     await db.flush()
@@ -299,6 +346,8 @@ async def reschedule_delivery_exception(
     rescheduled_for: datetime,
     db: AsyncSession,
 ) -> None:
+    if exception.status == DeliveryExceptionStatus.RTO_INITIATED or shipment.status == OrderStatus.RETURNED:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot reschedule after RTO initiation")
     exception.status = DeliveryExceptionStatus.RESCHEDULED
     exception.rescheduled_for = rescheduled_for
     exception.updated_at = utc_now()
@@ -306,9 +355,13 @@ async def reschedule_delivery_exception(
     db.add(
         ShipmentTracking(
             shipment_id=shipment.id or 0,
+            from_status=shipment.status,
             status=shipment.status,
             location=shipment.current_location or "Delivery branch",
             remarks=f"Delivery rescheduled for {rescheduled_for.isoformat()}",
+            actor_type="ops",
+            actor_id=exception.agent_id,
+            context_json=json.dumps({"event": "delivery_rescheduled", "exception_id": exception.id}),
         )
     )
 
@@ -318,19 +371,25 @@ async def initiate_rto_for_exception(
     shipment: Shipment,
     db: AsyncSession,
 ) -> None:
+    if exception.status == DeliveryExceptionStatus.RTO_INITIATED and shipment.status == OrderStatus.RETURNED:
+        return
+    if shipment.status != OrderStatus.OUT_FOR_DELIVERY:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"RTO can only be initiated from {OrderStatus.OUT_FOR_DELIVERY.value}",
+        )
     exception.status = DeliveryExceptionStatus.RTO_INITIATED
     exception.rto_initiated_at = utc_now()
     exception.updated_at = utc_now()
-    shipment.status = OrderStatus.RETURNED
-    shipment.current_location = "RTO initiated"
-    shipment.updated_at = utc_now()
-    db.add(
-        ShipmentTracking(
-            shipment_id=shipment.id or 0,
-            status=OrderStatus.RETURNED,
-            location="Origin return flow",
-            remarks="Return to origin initiated",
-        )
+    await update_shipment_tracking(
+        shipment.id or 0,
+        OrderStatus.RETURNED,
+        "RTO initiated",
+        "Return to origin initiated",
+        db,
+        actor_type="ops",
+        actor_id=exception.agent_id,
+        context={"event": "rto_initiated", "exception_id": exception.id},
     )
 
 
