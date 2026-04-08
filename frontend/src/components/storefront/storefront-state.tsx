@@ -4,6 +4,7 @@ interface StorefrontStateProps {
   description: string;
   actionLabel?: string;
   onAction?: () => void;
+  details?: string;
 }
 
 export function StorefrontState({
@@ -12,12 +13,14 @@ export function StorefrontState({
   description,
   actionLabel,
   onAction,
+  details,
 }: StorefrontStateProps) {
   return (
     <div className="rounded-[32px] border border-dashed border-[var(--border-color)] bg-white p-10 text-center shadow-[0_16px_45px_rgba(25,30,45,0.04)]">
       <p className="text-xs uppercase tracking-[0.22em] text-[var(--text-muted)]">{eyebrow}</p>
       <h2 className="mt-3 font-[family:var(--font-display)] text-4xl text-[var(--text-primary)]">{title}</h2>
       <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">{description}</p>
+      {details ? <p className="mx-auto mt-2 max-w-2xl text-xs text-[var(--text-muted)]">{details}</p> : null}
       {actionLabel && onAction ? (
         <button
           type="button"

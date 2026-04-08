@@ -1,17 +1,49 @@
 'use client';
 
 import Link from 'next/link';
-import { Activity, BadgeDollarSign, LayoutGrid, ShieldCheck, Store, Truck, Users } from 'lucide-react';
+import { Activity, BadgeDollarSign, LayoutGrid, ShieldCheck, Truck, Users } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-
-const stats = [
-  { label: 'Orders under watch', value: '124', icon: Activity, color: 'bg-[var(--accent-soft)] text-[var(--accent)]' },
-  { label: 'Vendors in review', value: '08', icon: Store, color: 'bg-[var(--warning-soft)] text-[var(--text-secondary)]' },
-  { label: 'Open logistics exceptions', value: '11', icon: Truck, color: 'bg-[var(--warning-soft)] text-[var(--text-secondary)]' },
-  { label: 'Pending settlements', value: '$18.2k', icon: BadgeDollarSign, color: 'bg-[var(--success-soft)] text-[var(--text-secondary)]' },
-];
+import { useOrders } from '@/hooks/use-orders';
+import { useListUsers } from '@/hooks/use-users';
+import { useVendorProducts } from '@/hooks/use-catalog';
+import { StorefrontState } from '@/components/storefront/storefront-state';
+import { getRuntimeErrorState, isPaginatedPayload } from '@/lib/runtime-route';
 
 export default function AdminDashboardPage() {
+  const { data: ordersData, isLoading: loadingOrders, isError: ordersError, error: ordersErrorValue, refetch: refetchOrders } = useOrders();
+  const { data: usersData, isLoading: loadingUsers, isError: usersError, error: usersErrorValue, refetch: refetchUsers } = useListUsers({ limit: 10 });
+  const {
+    data: vendorProductsData,
+    isLoading: loadingVendorProducts,
+    isError: vendorProductsError,
+    error: vendorProductsErrorValue,
+    refetch: refetchVendorProducts,
+  } = useVendorProducts();
+
+  const hasPartialOrdersPayload = ordersData !== undefined && !isPaginatedPayload(ordersData);
+  const hasPartialUsersPayload = usersData !== undefined && !isPaginatedPayload(usersData);
+  const hasPartialVendorProductsPayload = vendorProductsData !== undefined && !isPaginatedPayload(vendorProductsData);
+
+  const hasDataError =
+    ordersError ||
+    usersError ||
+    vendorProductsError ||
+    hasPartialOrdersPayload ||
+    hasPartialUsersPayload ||
+    hasPartialVendorProductsPayload;
+
+  const stats = [
+    { label: 'Orders under watch', value: String(ordersData?.total ?? 0), icon: Activity, color: 'bg-[var(--accent-soft)] text-[var(--accent)]' },
+    { label: 'Users in scope', value: String(usersData?.total ?? 0), icon: Users, color: 'bg-[var(--warning-soft)] text-[var(--text-secondary)]' },
+    {
+      label: 'Vendor SKUs visible',
+      value: String(vendorProductsData?.total ?? 0),
+      icon: Truck,
+      color: 'bg-[var(--warning-soft)] text-[var(--text-secondary)]',
+    },
+    { label: 'Pending settlements', value: '$18.2k', icon: BadgeDollarSign, color: 'bg-[var(--success-soft)] text-[var(--text-secondary)]' },
+  ];
+
   return (
     <div className="space-y-6">
       <div>
@@ -21,23 +53,49 @@ export default function AdminDashboardPage() {
         </h1>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {stats.map((stat) => (
-          <Card key={stat.label} className="rounded-[28px]">
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-[var(--text-muted)]">{stat.label}</p>
-                  <p className="mt-1 text-2xl font-semibold text-[var(--text-primary)]">{stat.value}</p>
+      {loadingOrders || loadingUsers || loadingVendorProducts ? (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" role="status" aria-label="Loading admin metrics">
+          {[1, 2, 3, 4].map((stat) => (
+            <div key={stat} className="h-32 animate-pulse rounded-[28px] bg-white" />
+          ))}
+        </div>
+      ) : hasDataError ? (
+        <StorefrontState
+          eyebrow="Admin runtime"
+          title="Admin metrics unavailable"
+          description="One or more admin metric feeds failed validation or request execution. This route does not fall back to placeholder totals."
+          details={
+            hasPartialOrdersPayload || hasPartialUsersPayload || hasPartialVendorProductsPayload
+              ? 'Payload validation failed for /orders, /users, or /vendor/products (expected paginated shape).'
+              : [ordersErrorValue, usersErrorValue, vendorProductsErrorValue]
+                  .filter(Boolean)
+                  .map((error) => getRuntimeErrorState(error, 'Admin metrics unavailable').details)
+                  .join(' | ')
+          }
+          actionLabel="Retry"
+          onAction={() => {
+            void Promise.all([refetchOrders(), refetchUsers(), refetchVendorProducts()]);
+          }}
+        />
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {stats.map((stat) => (
+            <Card key={stat.label} className="rounded-[28px]">
+              <CardContent className="pt-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-[var(--text-muted)]">{stat.label}</p>
+                    <p className="mt-1 text-2xl font-semibold text-[var(--text-primary)]">{stat.value}</p>
+                  </div>
+                  <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${stat.color}`}>
+                    <stat.icon className="h-5 w-5" />
+                  </div>
                 </div>
-                <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${stat.color}`}>
-                  <stat.icon className="h-5 w-5" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_0.9fr]">
         <Card className="rounded-[32px]">

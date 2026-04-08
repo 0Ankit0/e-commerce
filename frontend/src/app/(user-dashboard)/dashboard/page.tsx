@@ -9,15 +9,22 @@ import { useFeaturedProducts } from '@/hooks/use-catalog';
 import { useOrders } from '@/hooks/use-orders';
 import { formatCurrency, formatDateLabel, titleCaseStatus } from '@/lib/commerce-format';
 import { StorefrontState } from '@/components/storefront/storefront-state';
+import { getRuntimeErrorState, isPaginatedPayload } from '@/lib/runtime-route';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PORTAL_DEFINITIONS, getUserPortals } from '@/lib/portal';
 
 export default function DashboardPage() {
   const { user } = useAuthStore();
   const { data: cart } = useCart();
-  const { data: ordersData } = useOrders();
+  const { data: ordersData, isError: ordersError, error: ordersErrorValue, refetch: refetchOrders } = useOrders();
   const { data: wishlistData } = useWishlist();
-  const { data: notifData, isLoading: loadingNotifs } = useNotifications({ limit: 5 });
+  const {
+    data: notifData,
+    isLoading: loadingNotifs,
+    isError: notifError,
+    error: notifErrorValue,
+    refetch: refetchNotifications,
+  } = useNotifications({ limit: 5 });
   const {
     data: featuredProductsData,
     isLoading: featuredProductsLoading,
@@ -28,6 +35,13 @@ export default function DashboardPage() {
   const recentNotifs = notifData?.items ?? [];
   const unreadCount = notifData?.unread_count ?? 0;
   const orders = ordersData?.items ?? [];
+
+  const hasPartialOrdersPayload = ordersData !== undefined && !isPaginatedPayload(ordersData);
+  const hasPartialNotificationsPayload =
+    notifData !== undefined &&
+    !(typeof notifData === 'object' && notifData !== null && Array.isArray((notifData as { items?: unknown }).items));
+  const orderRuntimeError = getRuntimeErrorState(ordersErrorValue, 'Orders unavailable');
+  const notificationRuntimeError = getRuntimeErrorState(notifErrorValue, 'Notifications unavailable');
   const wishlist = wishlistData?.items ?? [];
   const activeOrders = orders.filter((order) => !['delivered', 'cancelled'].includes(order.status)).length;
   const cartUnits = cart?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0;
@@ -117,6 +131,25 @@ export default function DashboardPage() {
                   <div key={i} className="h-12 animate-pulse rounded bg-gray-100" />
                 ))}
               </div>
+            ) : notifError || hasPartialNotificationsPayload ? (
+              <StorefrontState
+                eyebrow="Customer dashboard"
+                title="Notifications unavailable"
+                description={
+                  hasPartialNotificationsPayload
+                    ? 'Notifications response is incomplete. Activity feed is paused until a valid payload is returned.'
+                    : notificationRuntimeError.description
+                }
+                details={
+                  hasPartialNotificationsPayload
+                    ? 'Payload validation failed: expected { items: [], total: number } from notifications endpoint.'
+                    : notificationRuntimeError.details
+                }
+                actionLabel="Retry"
+                onAction={() => {
+                  void refetchNotifications();
+                }}
+              />
             ) : recentNotifs.length === 0 ? (
               <div className="py-8 text-center">
                 <Bell className="mx-auto mb-2 h-8 w-8 text-[var(--text-muted)]" />
@@ -153,7 +186,26 @@ export default function DashboardPage() {
             <CardTitle>Featured for you</CardTitle>
           </CardHeader>
           <CardContent>
-            {latestOrder ? (
+            {ordersError || hasPartialOrdersPayload ? (
+              <StorefrontState
+                eyebrow="Orders"
+                title="Orders unavailable"
+                description={
+                  hasPartialOrdersPayload
+                    ? 'Orders payload is incomplete. The dashboard is not rendering fallback order data.'
+                    : orderRuntimeError.description
+                }
+                details={
+                  hasPartialOrdersPayload
+                    ? 'Payload validation failed: expected { items: [], total: number } from /orders.'
+                    : orderRuntimeError.details
+                }
+                actionLabel="Retry"
+                onAction={() => {
+                  void refetchOrders();
+                }}
+              />
+            ) : latestOrder ? (
               <div className="rounded-[26px] bg-[var(--surface-muted)] p-5">
                 <p className="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">Latest order</p>
                 <p className="mt-2 font-[family:var(--font-display)] text-3xl text-[var(--text-primary)]">{latestOrder.order_number}</p>

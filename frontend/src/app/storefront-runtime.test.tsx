@@ -257,7 +257,7 @@ describe('storefront runtime states', () => {
     roots.push(view);
 
     expect(view.container.textContent).toContain('Inventory unavailable');
-    expect(view.container.textContent).toContain('vendor catalog access');
+    expect(view.container.textContent).toContain('access denied for this resource');
 
     const retryButton = findButton(view.container, 'Retry');
     act(() => {

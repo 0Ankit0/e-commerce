@@ -4,7 +4,9 @@ import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useVerifyEmail, useResendVerification } from '@/hooks/use-auth';
+import axios from 'axios';
 import { MailCheck, XCircle, Loader2, RefreshCw } from 'lucide-react';
+import { getRuntimeErrorState } from '@/lib/runtime-route';
 
 function VerifyEmailPageInner() {
   const searchParams = useSearchParams();
@@ -12,6 +14,7 @@ function VerifyEmailPageInner() {
   const token = searchParams.get('t');
   const [status, setStatus] = useState<'loading' | 'success' | 'error' | 'no-token'>('loading');
   const [message, setMessage] = useState('');
+  const [errorDetails, setErrorDetails] = useState('');
   const [resendSent, setResendSent] = useState(false);
 
   const verifyEmail = useVerifyEmail();
@@ -20,6 +23,7 @@ function VerifyEmailPageInner() {
   useEffect(() => {
     if (!token) {
       setStatus('no-token');
+      setErrorDetails('Missing query parameter: t (verification token).');
       return;
     }
     verifyEmail.mutate(token, {
@@ -28,9 +32,18 @@ function VerifyEmailPageInner() {
         setMessage('Your email has been verified successfully!');
         setTimeout(() => router.push('/login'), 3000);
       },
-      onError: () => {
+      onError: (error) => {
         setStatus('error');
-        setMessage('The verification link is invalid or has expired.');
+        const runtimeError = getRuntimeErrorState(error, 'Verification failed');
+        const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+        setMessage(
+          status === 404
+            ? 'This verification link no longer exists. Request a fresh email and retry.'
+            : status === 409
+              ? 'This email is already verified. You can continue to sign in.'
+              : runtimeError.description
+        );
+        setErrorDetails(runtimeError.details);
       },
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -85,6 +98,32 @@ function VerifyEmailPageInner() {
                 {resend.isPending ? 'Sending…' : 'Resend verification email'}
               </button>
             )}
+
+
+            {status === 'error' && token ? (
+              <button
+                onClick={() => {
+                  setStatus('loading');
+                  verifyEmail.mutate(token, {
+                    onSuccess: () => {
+                      setStatus('success');
+                      setMessage('Your email has been verified successfully!');
+                    },
+                    onError: (error) => {
+                      setStatus('error');
+                      const runtimeError = getRuntimeErrorState(error, 'Verification failed');
+                      setMessage(runtimeError.description);
+                      setErrorDetails(runtimeError.details);
+                    },
+                  });
+                }}
+                className="mx-auto inline-flex text-sm font-medium text-blue-600 hover:text-blue-700"
+              >
+                Retry verification
+              </button>
+            ) : null}
+
+            {errorDetails ? <p className="text-xs text-gray-400">{errorDetails}</p> : null}
 
             <Link href="/login" className="block text-sm text-gray-400 hover:underline">
               Back to login
