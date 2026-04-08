@@ -25,7 +25,9 @@ class CommissionTier(str, Enum):
 
 
 class VendorDocumentStatus(str, Enum):
-    PENDING = "pending"
+    SUBMITTED = "submitted"
+    UNDER_REVIEW = "under_review"
+    NEEDS_RESUBMISSION = "needs_resubmission"
     VERIFIED = "verified"
     REJECTED = "rejected"
 
@@ -71,8 +73,10 @@ class VendorDocument(SQLModel, table=True):
     doc_type: str = Field(max_length=50)
     doc_number: str = Field(default="", max_length=120)
     file_url: str = Field(default="", max_length=500)
-    status: VendorDocumentStatus = Field(default=VendorDocumentStatus.PENDING)
+    status: VendorDocumentStatus = Field(default=VendorDocumentStatus.SUBMITTED)
     remarks: str = Field(default="", max_length=500)
+    version: int = Field(default=1, ge=1)
+    is_current: bool = Field(default=True, index=True)
     uploaded_at: datetime = Field(default_factory=utc_now)
     verified_at: Optional[datetime] = Field(default=None)
 

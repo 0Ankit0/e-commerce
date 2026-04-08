@@ -9,7 +9,14 @@ from sqlmodel import select
 from src.apps.core.time import utc_now
 from src.apps.iam.models.user import User
 from src.apps.multitenancy.models.tenant import Tenant, TenantMember, TenantRole
-from src.apps.vendors.models import Vendor, VendorPayout, VendorPayoutRequest, VendorStatus, VendorTimelineEvent
+from src.apps.vendors.models import (
+    Vendor,
+    VendorDocumentStatus,
+    VendorPayout,
+    VendorPayoutRequest,
+    VendorStatus,
+    VendorTimelineEvent,
+)
 
 
 async def require_tenant_admin(tenant_id: int, user: User, db: AsyncSession) -> Tenant:
@@ -113,6 +120,25 @@ def assert_vendor_status_transition(vendor: Vendor, target_status: VendorStatus)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Invalid vendor status transition: {vendor.status.value} -> {target_status.value}",
+        )
+
+
+def assert_document_status_transition(current_status: VendorDocumentStatus, target_status: VendorDocumentStatus) -> None:
+    allowed_transitions: dict[VendorDocumentStatus, set[VendorDocumentStatus]] = {
+        VendorDocumentStatus.SUBMITTED: {VendorDocumentStatus.UNDER_REVIEW},
+        VendorDocumentStatus.UNDER_REVIEW: {
+            VendorDocumentStatus.VERIFIED,
+            VendorDocumentStatus.REJECTED,
+            VendorDocumentStatus.NEEDS_RESUBMISSION,
+        },
+        VendorDocumentStatus.NEEDS_RESUBMISSION: {VendorDocumentStatus.SUBMITTED},
+        VendorDocumentStatus.VERIFIED: set(),
+        VendorDocumentStatus.REJECTED: set(),
+    }
+    if target_status not in allowed_transitions[current_status]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Invalid document status transition: {current_status.value} -> {target_status.value}",
         )
 
 
