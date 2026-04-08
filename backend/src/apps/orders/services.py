@@ -245,6 +245,8 @@ async def create_order_from_cart(
         await db.execute(select(CartItem).where(CartItem.cart_id == cart.id))
     ).scalars().all()
     reservation_expiry = utc_now() + timedelta(minutes=30)
+
+    await release_expired_inventory_reservations(db)
     for item in cart_items:
         variant = await db.get(ProductVariant, item.variant_id)
         if variant is None:
@@ -253,7 +255,12 @@ async def create_order_from_cart(
         if product is None:
             continue
         inventory_rows = (
-            await db.execute(select(Inventory).where(Inventory.variant_id == variant.id))
+            await db.execute(
+                select(Inventory)
+                .where(Inventory.variant_id == variant.id)
+                .order_by(Inventory.id.asc())
+                .with_for_update()
+            )
         ).scalars().all()
         available = sum(max(inv.quantity - inv.reserved_qty, 0) for inv in inventory_rows)
         if available < item.quantity:
@@ -402,31 +409,11 @@ async def cancel_order(order: Order, db: AsyncSession) -> Order:
         return order
 
     order_items = (await db.execute(select(OrderItem).where(OrderItem.order_id == order.id))).scalars().all()
-    active_reservations = (
-        await db.execute(
-            select(InventoryReservation).where(
-                InventoryReservation.order_id == order.id,
-                InventoryReservation.status == InventoryReservationStatus.ACTIVE,
-            )
-        )
-    ).scalars().all()
-    reservations_by_variant: dict[int, list[InventoryReservation]] = defaultdict(list)
-    for reservation in active_reservations:
-        reservations_by_variant[reservation.variant_id].append(reservation)
+    await release_inventory_reservations_for_order(order, db, target_status=InventoryReservationStatus.RELEASED)
     for item in order_items:
-        reservations = reservations_by_variant.get(item.variant_id, [])
-        if reservations:
-            for reservation in reservations:
-                metadata = json.loads(reservation.metadata_json or "{}")
-                inventory = await db.get(Inventory, metadata.get("inventory_id")) if metadata.get("inventory_id") else None
-                if inventory:
-                    inventory.reserved_qty = max(inventory.reserved_qty - reservation.quantity, 0)
-                    inventory.updated_at = utc_now()
-                reservation.status = InventoryReservationStatus.RELEASED
-                reservation.updated_at = utc_now()
-        else:
+        if order.payment_method in {PaymentMethod.COD, PaymentMethod.WALLET}:
             inventory = (
-                await db.execute(select(Inventory).where(Inventory.variant_id == item.variant_id))
+                await db.execute(select(Inventory).where(Inventory.variant_id == item.variant_id).with_for_update())
             ).scalars().first()
             if inventory:
                 inventory.quantity += item.quantity
@@ -702,11 +689,15 @@ async def commit_inventory_reservations_for_order(order: Order, db: AsyncSession
                 InventoryReservation.order_id == order.id,
                 InventoryReservation.status == InventoryReservationStatus.ACTIVE,
             )
+            .order_by(InventoryReservation.id.asc())
+            .with_for_update()
         )
     ).scalars().all()
     for reservation in reservations:
         metadata = json.loads(reservation.metadata_json or "{}")
-        inventory = await db.get(Inventory, metadata.get("inventory_id")) if metadata.get("inventory_id") else None
+        inventory = (
+            await db.get(Inventory, metadata.get("inventory_id"), with_for_update=True) if metadata.get("inventory_id") else None
+        )
         if inventory:
             inventory.reserved_qty = max(inventory.reserved_qty - reservation.quantity, 0)
             inventory.quantity = max(inventory.quantity - reservation.quantity, 0)
@@ -717,6 +708,34 @@ async def commit_inventory_reservations_for_order(order: Order, db: AsyncSession
 
 async def confirm_order_payment(order: Order, db: AsyncSession) -> None:
     if order.payment_status == OrderPaymentStatus.PAID and order.status == OrderStatus.CONFIRMED:
+        return
+    await release_inventory_reservations_for_order(
+        order,
+        db,
+        target_status=InventoryReservationStatus.EXPIRED,
+        only_expired=True,
+    )
+    remaining_active = (
+        await db.execute(
+            select(InventoryReservation).where(
+                InventoryReservation.order_id == order.id,
+                InventoryReservation.status == InventoryReservationStatus.ACTIVE,
+            )
+        )
+    ).scalars().all()
+    if not remaining_active and order.status == OrderStatus.PENDING_PAYMENT:
+        order.payment_status = OrderPaymentStatus.FAILED
+        order.status = OrderStatus.CANCELLED
+        order.cancelled_at = order.cancelled_at or utc_now()
+        db.add(OrderStatusHistory(order_id=order.id, status=order.status, note="Payment callback received after reservation expiry"))
+        await record_order_event(
+            order_id=order.id,
+            event_type="payment.expired",
+            message="Payment callback received after reservation expiry",
+            actor_user_id=order.user_id,
+            payload={},
+            db=db,
+        )
         return
     await commit_inventory_reservations_for_order(order, db)
     order.payment_status = OrderPaymentStatus.PAID
@@ -731,3 +750,66 @@ async def confirm_order_payment(order: Order, db: AsyncSession) -> None:
         payload={},
         db=db,
     )
+
+
+async def release_inventory_reservations_for_order(
+    order: Order,
+    db: AsyncSession,
+    *,
+    target_status: InventoryReservationStatus,
+    only_expired: bool = False,
+) -> int:
+    stmt = (
+        select(InventoryReservation)
+        .where(
+            InventoryReservation.order_id == order.id,
+            InventoryReservation.status == InventoryReservationStatus.ACTIVE,
+        )
+        .order_by(InventoryReservation.id.asc())
+        .with_for_update()
+    )
+    reservations = (await db.execute(stmt)).scalars().all()
+    released_count = 0
+    now = utc_now()
+    for reservation in reservations:
+        if only_expired and reservation.reserved_until > now:
+            continue
+        metadata = json.loads(reservation.metadata_json or "{}")
+        inventory = (
+            await db.get(Inventory, metadata.get("inventory_id"), with_for_update=True) if metadata.get("inventory_id") else None
+        )
+        if inventory:
+            inventory.reserved_qty = max(inventory.reserved_qty - reservation.quantity, 0)
+            inventory.updated_at = now
+        reservation.status = target_status
+        reservation.updated_at = now
+        released_count += 1
+    return released_count
+
+
+async def release_expired_inventory_reservations(db: AsyncSession) -> int:
+    now = utc_now()
+    expired_reservations = (
+        await db.execute(
+            select(InventoryReservation)
+            .where(
+                InventoryReservation.status == InventoryReservationStatus.ACTIVE,
+                InventoryReservation.reserved_until <= now,
+            )
+            .order_by(InventoryReservation.id.asc())
+            .with_for_update()
+        )
+    ).scalars().all()
+    released_count = 0
+    for reservation in expired_reservations:
+        metadata = json.loads(reservation.metadata_json or "{}")
+        inventory = (
+            await db.get(Inventory, metadata.get("inventory_id"), with_for_update=True) if metadata.get("inventory_id") else None
+        )
+        if inventory:
+            inventory.reserved_qty = max(inventory.reserved_qty - reservation.quantity, 0)
+            inventory.updated_at = now
+        reservation.status = InventoryReservationStatus.EXPIRED
+        reservation.updated_at = now
+        released_count += 1
+    return released_count

@@ -164,8 +164,9 @@ async def _sync_order_after_transaction(
     db: AsyncSession,
 ) -> None:
     from src.apps.orders.models import Order, OrderPaymentStatus, OrderStatus
-    from src.apps.orders.services import cancel_order, confirm_order_payment
+    from src.apps.orders.services import cancel_order, confirm_order_payment, release_expired_inventory_reservations
 
+    await release_expired_inventory_reservations(db)
     order = (
         await db.execute(select(Order).where(Order.payment_transaction_id == tx.id))
     ).scalars().first()
@@ -178,7 +179,7 @@ async def _sync_order_after_transaction(
 
     if tx.status == PaymentStatus.COMPLETED:
         await confirm_order_payment(order, db)
-    elif tx.status == PaymentStatus.CANCELLED and order.status == OrderStatus.PENDING_PAYMENT:
+    elif tx.status in {PaymentStatus.CANCELLED, PaymentStatus.FAILED} and order.status == OrderStatus.PENDING_PAYMENT:
         await cancel_order(order, db)
         order.payment_status = OrderPaymentStatus.FAILED
     elif tx.status == PaymentStatus.REFUNDED:
