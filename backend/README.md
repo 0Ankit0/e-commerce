@@ -38,7 +38,7 @@ The app creates tables automatically in test mode. For local development, point 
 
 ## Key Configuration
 
-Important groups in [`.env.example`](/Users/ankit/Projects/Python/fastapi/e-commerce/backend/.env.example):
+Important groups in [`.env.example`](./.env.example):
 
 - Core/auth: `SECRET_KEY`, `PASSWORD_PEPPER`, token expiry, password policy, login lockout.
 - Runtime/features: `DEBUG`, `TESTING`, `FEATURE_*`.
@@ -145,7 +145,7 @@ uv run pytest -q
 
 ## Status Matrix And Future Work
 
-See [backend-status-matrix.md](/Users/ankit/Projects/Python/fastapi/e-commerce/docs/system-design/implementation/backend-status-matrix.md).
+See [backend-status-matrix.md](../docs/system-design/implementation/backend-status-matrix.md).
 
 Future-only items called out explicitly:
 
