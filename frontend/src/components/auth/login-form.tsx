@@ -20,7 +20,7 @@ import {
   CardFooter,
 } from '@/components/ui/card';
 import { startOAuthLogin, type OAuthProvider } from '@/lib/oauth';
-import type { OTPLoginResponse, User } from '@/types';
+import type { LoginSuccessResponse, OTPLoginResponse, User } from '@/types';
 
 const loginSchema = z.object({
   username: z.string().min(1, 'Username is required'),
@@ -60,6 +60,12 @@ export function LoginForm({ enabledProviders }: LoginFormProps) {
         const otpResult = result as OTPLoginResponse;
         router.push(`/otp-verify?temp_token=${otpResult.temp_token}`);
       } else {
+        const loginResult = result as LoginSuccessResponse;
+        if (loginResult.otp_recommended && loginResult.otp_recommendation_message) {
+          sessionStorage.setItem('admin_otp_recommendation', loginResult.otp_recommendation_message);
+        } else {
+          sessionStorage.removeItem('admin_otp_recommendation');
+        }
         const userResponse = await apiClient.get<User>('/users/me/');
         setUser(userResponse.data);
         router.push(getDefaultPortalPath(userResponse.data));

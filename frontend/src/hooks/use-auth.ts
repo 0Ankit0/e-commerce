@@ -9,6 +9,7 @@ import type {
   LoginCredentials,
   SignupData,
   AuthTokens,
+  LoginSuccessResponse,
   User,
   OTPLoginResponse,
   VerifyOTPData,
@@ -24,7 +25,7 @@ export function useAuth() {
 
   const loginMutation = useMutation({
     mutationFn: async (credentials: LoginCredentials) => {
-      const response = await apiClient.post<AuthTokens | OTPLoginResponse>(
+      const response = await apiClient.post<LoginSuccessResponse | OTPLoginResponse>(
         '/auth/login/',
         credentials,
         { params: { set_cookie: false } }
@@ -33,7 +34,7 @@ export function useAuth() {
     },
     onSuccess: (data) => {
       if ('requires_otp' in data) return;
-      const tokens = data as AuthTokens;
+      const tokens = data as LoginSuccessResponse;
       setTokens(tokens.access, tokens.refresh);
       queryClient.invalidateQueries({ queryKey: ['currentUser'] });
       analytics.capture(AuthEvents.LOGGED_IN, { method: 'email' });
@@ -218,4 +219,3 @@ export function useResendVerification() {
     },
   });
 }
-
