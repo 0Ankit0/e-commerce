@@ -13,7 +13,7 @@ from src.apps.analytics.service import AnalyticsService
 from src.apps.core.time import utc_now
 from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User
-from src.apps.iam.utils.hashid import decode_id_or_404
+from src.apps.iam.utils.hashid import decode_id_or_404, encode_id
 from src.apps.notification.services.commerce_events import notify_payout_event
 from src.apps.orders.models import VendorOrder
 from src.apps.vendors.models import (
@@ -32,6 +32,7 @@ from src.apps.vendors.models import (
     Warehouse,
 )
 from src.apps.vendors.services import (
+    assert_document_status_transition,
     assert_vendor_status_transition,
     ensure_vendor_active,
     get_vendor_for_user,
@@ -91,6 +92,11 @@ class VendorStatusUpdateRequest(BaseModel):
 class VendorDocumentReviewRequest(BaseModel):
     remarks: str = Field(default="", max_length=500)
     expected_uploaded_at: str = Field(min_length=1)
+    expected_version: int = Field(gt=0)
+
+
+class VendorDocumentDecisionRequest(VendorDocumentReviewRequest):
+    remarks: str = Field(min_length=1, max_length=500)
 
 
 class PayoutRequestCreateRequest(BaseModel):
@@ -159,7 +165,11 @@ async def get_my_vendor_profile(
         await db.execute(select(Warehouse).where(Warehouse.vendor_id == vendor.id).order_by(Warehouse.id.asc()))
     ).scalars().all()
     documents = (
-        await db.execute(select(VendorDocument).where(VendorDocument.vendor_id == vendor.id).order_by(VendorDocument.id.desc()))
+        await db.execute(
+            select(VendorDocument)
+            .where(VendorDocument.vendor_id == vendor.id)
+            .order_by(VendorDocument.doc_type.asc(), VendorDocument.version.desc(), VendorDocument.id.desc())
+        )
     ).scalars().all()
     bank_accounts = (
         await db.execute(select(BankAccount).where(BankAccount.vendor_id == vendor.id).order_by(BankAccount.id.desc()))
@@ -184,6 +194,10 @@ async def get_my_vendor_profile(
                 "doc_number": document.doc_number,
                 "file_url": document.file_url,
                 "status": document.status.value,
+                "remarks": document.remarks,
+                "version": document.version,
+                "is_current": document.is_current,
+                "uploaded_at": document.uploaded_at.isoformat(),
             }
             for document in documents
         ],
@@ -237,23 +251,38 @@ async def upload_vendor_document(
 ):
     vendor = await get_vendor_for_user(current_user, db)
     repeated_upload = False
-    document = (
+    latest_document = (
         await db.execute(
             select(VendorDocument)
-            .where(VendorDocument.vendor_id == vendor.id, VendorDocument.doc_type == payload.doc_type)
-            .order_by(VendorDocument.uploaded_at.desc(), VendorDocument.id.desc())
+            .where(
+                VendorDocument.vendor_id == vendor.id,
+                VendorDocument.doc_type == payload.doc_type,
+                VendorDocument.is_current == True,  # noqa: E712
+            )
+            .order_by(VendorDocument.version.desc(), VendorDocument.id.desc())
         )
     ).scalars().first()
-    if document:
+    if latest_document and latest_document.doc_number == payload.doc_number and latest_document.file_url == payload.file_url:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Duplicate upload detected for current document version",
+        )
+
+    if latest_document:
         repeated_upload = True
-        document.doc_number = payload.doc_number
-        document.file_url = payload.file_url
-        document.status = VendorDocumentStatus.PENDING
-        document.remarks = ""
-        document.verified_at = None
-        document.uploaded_at = utc_now()
+        latest_document.is_current = False
+        document = VendorDocument(
+            vendor_id=vendor.id,
+            doc_type=payload.doc_type,
+            doc_number=payload.doc_number,
+            file_url=payload.file_url,
+            status=VendorDocumentStatus.SUBMITTED,
+            version=latest_document.version + 1,
+            is_current=True,
+        )
+        db.add(document)
     else:
-        document = VendorDocument(vendor_id=vendor.id, **payload.model_dump())
+        document = VendorDocument(vendor_id=vendor.id, **payload.model_dump(), status=VendorDocumentStatus.SUBMITTED)
         db.add(document)
     await db.commit()
     await db.refresh(document)
@@ -303,22 +332,38 @@ async def resubmit_vendor_document(
     document = await db.get(VendorDocument, decode_id_or_404(document_id))
     if document is None or document.vendor_id != vendor.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor document not found")
-    document.doc_type = payload.doc_type
-    document.doc_number = payload.doc_number
-    document.file_url = payload.file_url
-    document.status = VendorDocumentStatus.PENDING
-    document.remarks = ""
-    document.uploaded_at = utc_now()
+    if not document.is_current:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only current document version can be resubmitted")
+    if payload.doc_type != document.doc_type:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Document type cannot change on resubmission")
+    if document.status not in {VendorDocumentStatus.NEEDS_RESUBMISSION, VendorDocumentStatus.REJECTED}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Document is not eligible for resubmission")
+    if document.doc_number == payload.doc_number and document.file_url == payload.file_url:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Duplicate upload detected for current document version")
+
+    document.is_current = False
+    assert_document_status_transition(document.status, VendorDocumentStatus.SUBMITTED)
+    new_document = VendorDocument(
+        vendor_id=vendor.id,
+        doc_type=document.doc_type,
+        doc_number=payload.doc_number,
+        file_url=payload.file_url,
+        status=VendorDocumentStatus.SUBMITTED,
+        version=document.version + 1,
+        is_current=True,
+    )
+    db.add(new_document)
     await record_vendor_timeline_event(
         vendor=vendor,
         event_type="vendor.document_resubmitted",
         message=f"Document resubmitted: {document.doc_type}",
         actor_user_id=current_user.id,
-        payload={"document_id": document.id},
+        payload={"previous_document_id": document.id, "new_version": document.version + 1},
         db=db,
     )
     await db.commit()
-    return {"success": True}
+    await db.refresh(new_document)
+    return {"success": True, "document_id": encode_id(new_document.id)}
 
 
 @router.post("/vendor/bank-accounts/{bank_account_id}/resubmit")
@@ -580,6 +625,41 @@ async def request_vendor_resubmission(
     return {"vendor": serialize_vendor(vendor)}
 
 
+@router.post("/admin/vendor-documents/{document_id}/mark-under-review")
+async def mark_vendor_document_under_review(
+    document_id: str,
+    payload: VendorDocumentReviewRequest,
+    admin_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    document = await db.get(VendorDocument, decode_id_or_404(document_id))
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor document not found")
+    if not document.is_current:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot review non-current document version")
+    if document.uploaded_at.isoformat() != payload.expected_uploaded_at:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stale document review action")
+    if document.version != payload.expected_version:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stale document version for review action")
+    if document.status != VendorDocumentStatus.SUBMITTED:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Document is not submitted")
+    assert_document_status_transition(document.status, VendorDocumentStatus.UNDER_REVIEW)
+    document.status = VendorDocumentStatus.UNDER_REVIEW
+    document.remarks = payload.remarks
+    vendor = await db.get(Vendor, document.vendor_id)
+    if vendor:
+        await record_vendor_timeline_event(
+            vendor=vendor,
+            event_type="vendor.document_under_review",
+            message=f"Document under review: {document.doc_type}",
+            payload={"document_id": document.id},
+            actor_user_id=admin_user.id,
+            db=db,
+        )
+    await db.commit()
+    return {"success": True}
+
+
 @router.post("/admin/vendor-documents/{document_id}/verify")
 async def verify_vendor_document(
     document_id: str,
@@ -590,10 +670,15 @@ async def verify_vendor_document(
     document = await db.get(VendorDocument, decode_id_or_404(document_id))
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor document not found")
+    if not document.is_current:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot review non-current document version")
     if document.uploaded_at.isoformat() != payload.expected_uploaded_at:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stale document review action")
-    if document.status != VendorDocumentStatus.PENDING:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Document is not pending review")
+    if document.version != payload.expected_version:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stale document version for review action")
+    if document.status != VendorDocumentStatus.UNDER_REVIEW:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Document is not under review")
+    assert_document_status_transition(document.status, VendorDocumentStatus.VERIFIED)
     document.status = VendorDocumentStatus.VERIFIED
     document.remarks = payload.remarks
     document.verified_at = utc_now()
@@ -614,17 +699,22 @@ async def verify_vendor_document(
 @router.post("/admin/vendor-documents/{document_id}/reject")
 async def reject_vendor_document(
     document_id: str,
-    payload: VendorDocumentReviewRequest,
+    payload: VendorDocumentDecisionRequest,
     admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
     document = await db.get(VendorDocument, decode_id_or_404(document_id))
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor document not found")
+    if not document.is_current:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot review non-current document version")
     if document.uploaded_at.isoformat() != payload.expected_uploaded_at:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stale document review action")
-    if document.status != VendorDocumentStatus.PENDING:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Document is not pending review")
+    if document.version != payload.expected_version:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stale document version for review action")
+    if document.status != VendorDocumentStatus.UNDER_REVIEW:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Document is not under review")
+    assert_document_status_transition(document.status, VendorDocumentStatus.REJECTED)
     document.status = VendorDocumentStatus.REJECTED
     document.remarks = payload.remarks
     vendor = await db.get(Vendor, document.vendor_id)
@@ -634,6 +724,42 @@ async def reject_vendor_document(
             vendor=vendor,
             event_type="vendor.document_rejected",
             message=f"Document rejected: {document.doc_type}",
+            payload={"document_id": document.id, "remarks": payload.remarks},
+            actor_user_id=admin_user.id,
+            db=db,
+        )
+    await db.commit()
+    return {"success": True}
+
+
+@router.post("/admin/vendor-documents/{document_id}/request-resubmission")
+async def request_vendor_document_resubmission(
+    document_id: str,
+    payload: VendorDocumentDecisionRequest,
+    admin_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    document = await db.get(VendorDocument, decode_id_or_404(document_id))
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor document not found")
+    if not document.is_current:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot review non-current document version")
+    if document.uploaded_at.isoformat() != payload.expected_uploaded_at:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stale document review action")
+    if document.version != payload.expected_version:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stale document version for review action")
+    if document.status != VendorDocumentStatus.UNDER_REVIEW:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Document is not under review")
+    assert_document_status_transition(document.status, VendorDocumentStatus.NEEDS_RESUBMISSION)
+    document.status = VendorDocumentStatus.NEEDS_RESUBMISSION
+    document.remarks = payload.remarks
+    vendor = await db.get(Vendor, document.vendor_id)
+    if vendor:
+        mark_vendor_status(vendor, VendorStatus.NEEDS_RESUBMISSION, payload.remarks)
+        await record_vendor_timeline_event(
+            vendor=vendor,
+            event_type="vendor.document_resubmission_requested",
+            message=f"Document needs resubmission: {document.doc_type}",
             payload={"document_id": document.id, "remarks": payload.remarks},
             actor_user_id=admin_user.id,
             db=db,

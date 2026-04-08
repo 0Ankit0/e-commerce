@@ -1229,10 +1229,16 @@ async def test_vendor_payout_content_and_reporting_flow(client: AsyncClient, db_
     assert bank_resp.status_code == 201, bank_resp.text
     document_db = await db_session.get(VendorDocument, decode_id_or_404(document_resp.json()["document_id"]))
     assert document_db is not None
+    mark_doc_review_resp = await client.post(
+        f"/api/v1/admin/vendor-documents/{document_resp.json()['document_id']}/mark-under-review",
+        headers=admin_headers,
+        json={"remarks": "triaged", "expected_uploaded_at": document_db.uploaded_at.isoformat(), "expected_version": document_db.version},
+    )
+    assert mark_doc_review_resp.status_code == 200, mark_doc_review_resp.text
     verify_doc_resp = await client.post(
         f"/api/v1/admin/vendor-documents/{document_resp.json()['document_id']}/verify",
         headers=admin_headers,
-        json={"remarks": "Looks good", "expected_uploaded_at": document_db.uploaded_at.isoformat()},
+        json={"remarks": "Looks good", "expected_uploaded_at": document_db.uploaded_at.isoformat(), "expected_version": document_db.version},
     )
     assert verify_doc_resp.status_code == 200, verify_doc_resp.text
     verify_bank_resp = await client.post(
@@ -1809,21 +1815,83 @@ async def test_vendor_onboarding_transitions_and_audit_consistency(client: Async
     doc_v2 = await db_session.get(VendorDocument, decode_id_or_404(document_id))
     assert doc_v2 is not None
     assert doc_v2.doc_number == "PAN222"
+    assert doc_v2.version == 2
     assert doc_v2.uploaded_at.isoformat() != stale_uploaded_at
+    assert doc_v2.status.value == "submitted"
+
+    duplicate_upload_resp = await client.post(
+        "/api/v1/vendor/documents",
+        headers=vendor_headers,
+        json={"doc_type": "pan", "doc_number": "PAN222", "file_url": "https://example.com/pan-v2.pdf"},
+    )
+    assert duplicate_upload_resp.status_code == 409, duplicate_upload_resp.text
+
+    mark_review_resp = await client.post(
+        f"/api/v1/admin/vendor-documents/{document_id}/mark-under-review",
+        headers=admin_headers,
+        json={"remarks": "starting review", "expected_uploaded_at": doc_v2.uploaded_at.isoformat(), "expected_version": doc_v2.version},
+    )
+    assert mark_review_resp.status_code == 200, mark_review_resp.text
+
+    missing_notes_resubmission = await client.post(
+        f"/api/v1/admin/vendor-documents/{document_id}/request-resubmission",
+        headers=admin_headers,
+        json={"remarks": "", "expected_uploaded_at": doc_v2.uploaded_at.isoformat(), "expected_version": doc_v2.version},
+    )
+    assert missing_notes_resubmission.status_code == 422, missing_notes_resubmission.text
+
+    request_doc_resubmission = await client.post(
+        f"/api/v1/admin/vendor-documents/{document_id}/request-resubmission",
+        headers=admin_headers,
+        json={"remarks": "Image is blurry, upload a clearer PAN scan", "expected_uploaded_at": doc_v2.uploaded_at.isoformat(), "expected_version": doc_v2.version},
+    )
+    assert request_doc_resubmission.status_code == 200, request_doc_resubmission.text
+
+    vendor_resubmit_resp = await client.post(
+        f"/api/v1/vendor/documents/{document_id}/resubmit",
+        headers=vendor_headers,
+        json={"doc_type": "pan", "doc_number": "PAN333", "file_url": "https://example.com/pan-v3.pdf"},
+    )
+    assert vendor_resubmit_resp.status_code == 200, vendor_resubmit_resp.text
+    document_id = vendor_resubmit_resp.json()["document_id"]
+    doc_v3 = await db_session.get(VendorDocument, decode_id_or_404(document_id))
+    assert doc_v3 is not None
+    assert doc_v3.version == 3
 
     stale_verify_resp = await client.post(
         f"/api/v1/admin/vendor-documents/{document_id}/verify",
         headers=admin_headers,
-        json={"remarks": "approved", "expected_uploaded_at": stale_uploaded_at},
+        json={"remarks": "approved", "expected_uploaded_at": stale_uploaded_at, "expected_version": doc_v3.version},
     )
     assert stale_verify_resp.status_code == 409, stale_verify_resp.text
+
+    mark_review_v3_resp = await client.post(
+        f"/api/v1/admin/vendor-documents/{document_id}/mark-under-review",
+        headers=admin_headers,
+        json={"remarks": "starting review", "expected_uploaded_at": doc_v3.uploaded_at.isoformat(), "expected_version": doc_v3.version},
+    )
+    assert mark_review_v3_resp.status_code == 200, mark_review_v3_resp.text
 
     verify_resp = await client.post(
         f"/api/v1/admin/vendor-documents/{document_id}/verify",
         headers=admin_headers,
-        json={"remarks": "approved", "expected_uploaded_at": doc_v2.uploaded_at.isoformat()},
+        json={"remarks": "approved", "expected_uploaded_at": doc_v3.uploaded_at.isoformat(), "expected_version": doc_v3.version},
     )
     assert verify_resp.status_code == 200, verify_resp.text
+    profile_resp = await client.get("/api/v1/vendor/profile", headers=vendor_headers)
+    assert profile_resp.status_code == 200, profile_resp.text
+    pan_docs = [doc for doc in profile_resp.json()["documents"] if doc["doc_type"] == "pan"]
+    assert len(pan_docs) >= 2
+    assert pan_docs[0]["version"] >= pan_docs[1]["version"]
+    assert pan_docs[0]["remarks"] == "approved"
+    assert pan_docs[0]["is_current"] is True
+
+    unauthorized_doc_action = await client.post(
+        f"/api/v1/admin/vendor-documents/{document_id}/request-resubmission",
+        headers=vendor_headers,
+        json={"remarks": "not allowed", "expected_uploaded_at": doc_v3.uploaded_at.isoformat(), "expected_version": doc_v3.version},
+    )
+    assert unauthorized_doc_action.status_code == 403, unauthorized_doc_action.text
 
     concurrent_approve, concurrent_reject = await asyncio.gather(
         client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers),
