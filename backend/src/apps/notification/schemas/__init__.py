@@ -1,4 +1,5 @@
 from .notification import NotificationCreate, NotificationList, NotificationRead, NotificationUpdate
+from .notification_delivery import NotificationDeliveryList, NotificationDeliveryRead
 from .notification_device import (
     FcmDeviceCreate,
     NotificationDeviceCreate,
@@ -14,6 +15,8 @@ __all__ = [
     "NotificationDeviceRead",
     "NotificationList",
     "NotificationRead",
+    "NotificationDeliveryRead",
+    "NotificationDeliveryList",
     "OneSignalDeviceCreate",
     "NotificationUpdate",
     "WebPushDeviceCreate",

@@ -61,7 +61,9 @@ class TestNotificationService:
         with patch(
             "src.apps.notification.services.notification._push_to_ws",
             new_callable=AsyncMock,
-        ) as mock_push:
+        ) as mock_push, patch(
+            "src.apps.notification.services.notification.dispatch_notification_delivery_task.delay"
+        ):
             notification = await create_notification(db_session, data, push_ws=True)
 
         assert notification.id is not None
@@ -73,7 +75,8 @@ class TestNotificationService:
     async def test_create_notification_no_ws(self, db_session: AsyncSession):
         user = await _make_user(db_session, username="notifuser2", email="notif2@example.com")
         data = NotificationCreate(user_id=user.id, title="T", body="B")
-        notification = await create_notification(db_session, data, push_ws=False)
+        with patch("src.apps.notification.services.notification.dispatch_notification_delivery_task.delay"):
+            notification = await create_notification(db_session, data, push_ws=False)
         assert notification.id is not None
 
     @pytest.mark.asyncio
@@ -275,7 +278,7 @@ class TestNotificationAPI:
         with patch(
             "src.apps.notification.services.notification._push_to_ws",
             new_callable=AsyncMock,
-        ):
+        ), patch("src.apps.notification.services.notification.dispatch_notification_delivery_task.delay"):
             resp = await client.post(
                 "/api/v1/notifications/",
                 json={"user_id": target.id, "title": "Hi", "body": "There", "type": "success"},
@@ -439,3 +442,55 @@ class TestNotificationAPI:
 
         assert resp.status_code == 503
         assert "not configured" in resp.json()["detail"].lower()
+
+
+    @pytest.mark.asyncio
+    async def test_admin_failed_delivery_diagnostics_and_retry(
+        self, client: AsyncClient, db_session: AsyncSession
+    ):
+        from src.apps.notification.models.notification_delivery import (
+            NotificationDelivery,
+            NotificationDeliveryChannel,
+            NotificationDeliveryStatus,
+        )
+
+        user = await _make_user(db_session, username="diag-user", email="diag-user@example.com")
+        await _make_user(db_session, username="diag-admin", email="diag-admin@example.com", is_superuser=True)
+        token = await _login(client, "diag-admin")
+
+        n = Notification(user_id=user.id, title="Diag", body="Fail")
+        db_session.add(n)
+        await db_session.commit()
+        await db_session.refresh(n)
+
+        delivery = NotificationDelivery(
+            notification_id=n.id,
+            user_id=user.id,
+            channel=NotificationDeliveryChannel.EMAIL,
+            status=NotificationDeliveryStatus.DEAD_LETTER,
+            dedup_key="diag-key-1",
+            target=f"user:{user.id}",
+            attempt_count=4,
+            max_attempts=4,
+            last_error_code="provider_error",
+            last_error_reason="provider outage",
+        )
+        db_session.add(delivery)
+        await db_session.commit()
+        await db_session.refresh(delivery)
+
+        list_resp = await client.get(
+            "/api/v1/notifications/admin/deliveries/failed/",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert list_resp.status_code == 200, list_resp.text
+        assert list_resp.json()["total"] >= 1
+
+        with patch("src.apps.notification.services.notification.dispatch_notification_delivery_task.delay"):
+            retry_resp = await client.post(
+                f"/api/v1/notifications/admin/deliveries/{delivery.id}/retry/",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert retry_resp.status_code == 200, retry_resp.text
+        assert retry_resp.json()["status"] == "pending"
