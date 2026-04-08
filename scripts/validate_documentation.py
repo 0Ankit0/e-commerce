@@ -64,6 +64,7 @@ REQUIRED_SYSTEM_DESIGN_FILES = {
         "backend-status-matrix.md",
         "c4-code-diagram.md",
         "implementation-guidelines.md",
+        "requirements-traceability.md",
     ],
 }
 
