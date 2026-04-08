@@ -6,8 +6,16 @@ import { useVerifyPayment } from '@/hooks/use-finances';
 import { useCreateOrder } from '@/hooks/use-commerce';
 import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import Link from 'next/link';
-import type { PaymentProvider, VerifyPaymentRequest } from '@/types';
+import type { PaymentProvider } from '@/types';
 import { clearPendingCheckoutPayment, getPendingCheckoutPayment } from '@/lib/checkout-payment';
+import {
+  createVerifyPayload,
+  getPendingCheckoutState,
+  hasProcessedCallback,
+  markProcessedCallback,
+  resolveCallbackOutcome,
+  toCallbackKey,
+} from '@/lib/checkout-orchestration';
 
 /**
  * Handles payment provider callbacks.
@@ -34,74 +42,19 @@ function PaymentCallbackInner() {
     hasStartedRef.current = true;
 
     async function finalizePayment() {
-      const provider = (searchParams.get('provider') || 'khalti') as PaymentProvider;
-      const khaltiPidx = searchParams.get('pidx') ?? undefined;
-      const razorpayPaymentId = searchParams.get('razorpay_payment_id') ?? undefined;
-      const razorpayOrderId = searchParams.get('razorpay_order_id') ?? undefined;
-      const razorpaySignature = searchParams.get('razorpay_signature') ?? undefined;
-      const data = searchParams.get('data') ?? undefined;
-      const oid = searchParams.get('oid') ?? undefined;
-      const refId = searchParams.get('refId') ?? undefined;
-      const queryTransactionId = searchParams.get('transaction_id') ?? undefined;
       const pendingCheckout = getPendingCheckoutPayment();
-      const transactionId = queryTransactionId ?? pendingCheckout?.transactionId;
-
-      const verifyPayload: VerifyPaymentRequest = { provider };
-      const missingFields: string[] = [];
-
-      switch (provider) {
-        case 'khalti': {
-          const khaltiToken = khaltiPidx ?? searchParams.get('token') ?? undefined;
-          if (!khaltiToken) {
-            missingFields.push('pidx');
-            break;
-          }
-          verifyPayload.pidx = khaltiToken;
-          if (transactionId) {
-            verifyPayload.transaction_id = transactionId;
-          }
-          break;
-        }
-        case 'esewa': {
-          if (data) {
-            verifyPayload.data = data;
-          } else if (oid && refId) {
-            verifyPayload.oid = oid;
-            verifyPayload.refId = refId;
-          } else {
-            missingFields.push('data or legacy pair: oid + refId');
-          }
-          if (transactionId) {
-            verifyPayload.transaction_id = transactionId;
-          }
-          break;
-        }
-        case 'razorpay': {
-          if (!razorpayPaymentId) missingFields.push('razorpay_payment_id');
-          if (!razorpayOrderId) missingFields.push('razorpay_order_id');
-          if (!razorpaySignature) missingFields.push('razorpay_signature');
-          if (missingFields.length === 0) {
-            verifyPayload.pidx = razorpayPaymentId;
-            verifyPayload.oid = razorpayOrderId;
-            verifyPayload.refId = razorpaySignature;
-          }
-          if (transactionId) {
-            verifyPayload.transaction_id = transactionId;
-          }
-          break;
-        }
-        case 'stripe':
-        case 'paypal': {
-          if (!transactionId) {
-            missingFields.push('transaction_id (query or pending checkout)');
-            break;
-          }
-          verifyPayload.transaction_id = transactionId;
-          break;
-        }
-        default:
-          missingFields.push('provider');
+      const pendingState = getPendingCheckoutState(pendingCheckout);
+      if (!pendingState.ok) {
+        setStatus('error');
+        setMessage(pendingState.reason);
+        clearPendingCheckoutPayment();
+        return;
       }
+
+      const { provider, verifyPayload, missingFields, transactionId } = createVerifyPayload({
+        searchParams,
+        pendingCheckout,
+      });
 
       if (missingFields.length > 0) {
         setStatus('error');
@@ -111,19 +64,28 @@ function PaymentCallbackInner() {
         return;
       }
 
+      const callbackKey = toCallbackKey(provider as PaymentProvider, transactionId);
+      if (hasProcessedCallback(callbackKey)) {
+        setStatus('success');
+        setMessage('This callback was already processed. Redirecting to your payment history.');
+        setTimeout(() => router.push('/finances'), 2000);
+        return;
+      }
+
       try {
         const result = await verifyPayment.mutateAsync(verifyPayload);
-
-        if (result.status !== 'completed') {
-          if (result.status === 'failed' || result.status === 'cancelled') {
-            clearPendingCheckoutPayment();
-          }
-          setStatus('error');
-          setMessage(`Payment status: ${result.status}. Please try again or contact support.`);
-          return;
-        }
+        markProcessedCallback(callbackKey);
+        const outcome = resolveCallbackOutcome(result);
 
         if (pendingCheckout && pendingCheckout.paymentMethod === provider) {
+          if (outcome.state !== 'success') {
+            if (outcome.clearPending) {
+              clearPendingCheckoutPayment();
+            }
+            setStatus('error');
+            setMessage(outcome.message);
+            return;
+          }
           try {
             const response = await createOrder.mutateAsync({
               addressId: pendingCheckout.addressId,
@@ -148,8 +110,11 @@ function PaymentCallbackInner() {
           }
         }
 
-        setStatus('success');
-        setMessage('Payment completed successfully.');
+        if (outcome.clearPending) {
+          clearPendingCheckoutPayment();
+        }
+        setStatus(outcome.state === 'success' ? 'success' : 'error');
+        setMessage(outcome.message);
         setTimeout(() => router.push('/finances'), 2500);
       } catch {
         setStatus('error');
