@@ -24,11 +24,6 @@ export interface AuthTokens {
   token_type: string;
 }
 
-export interface LoginSuccessResponse extends AuthTokens {
-  otp_recommended?: boolean;
-  otp_recommendation_message?: string;
-}
-
 export interface LoginCredentials {
   username: string;
   password: string;
@@ -83,20 +78,4 @@ export interface OTPSetupResponse {
   otp_base32: string;
   otp_auth_url: string;
   qr_code: string;
-}
-
-export interface AdminOTPStatusItem {
-  user_id: string;
-  username: string;
-  email: string;
-  otp_enabled: boolean;
-  otp_verified: boolean;
-  last_verified_state: 'verified' | 'pending_verification' | 'not_enabled';
-  last_otp_event_code: string | null;
-  last_otp_event_at: string | null;
-}
-
-export interface AdminOTPStatusResponse {
-  items: AdminOTPStatusItem[];
-  total: number;
 }

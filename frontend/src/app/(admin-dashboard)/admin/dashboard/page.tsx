@@ -2,17 +2,14 @@
 
 import Link from 'next/link';
 import { Activity, BadgeDollarSign, LayoutGrid, ShieldCheck, Truck, Users } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useOrders } from '@/hooks/use-orders';
 import { useListUsers } from '@/hooks/use-users';
 import { useVendorProducts } from '@/hooks/use-catalog';
-import { useAdminOTPStatus } from '@/hooks/use-admin-security';
 import { StorefrontState } from '@/components/storefront/storefront-state';
 import { getRuntimeErrorState, isPaginatedPayload } from '@/lib/runtime-route';
 
 export default function AdminDashboardPage() {
-  const [otpRecommendation, setOtpRecommendation] = useState<string | null>(null);
   const { data: ordersData, isLoading: loadingOrders, isError: ordersError, error: ordersErrorValue, refetch: refetchOrders } = useOrders();
   const { data: usersData, isLoading: loadingUsers, isError: usersError, error: usersErrorValue, refetch: refetchUsers } = useListUsers({ limit: 10 });
   const {
@@ -22,22 +19,6 @@ export default function AdminDashboardPage() {
     error: vendorProductsErrorValue,
     refetch: refetchVendorProducts,
   } = useVendorProducts();
-  const { data: adminOTPStatus } = useAdminOTPStatus();
-
-  useEffect(() => {
-    const message = sessionStorage.getItem('admin_otp_recommendation');
-    setOtpRecommendation(message);
-    if (message) {
-      sessionStorage.removeItem('admin_otp_recommendation');
-    }
-  }, []);
-
-  const otpReadiness = useMemo(() => {
-    const items = adminOTPStatus?.items ?? [];
-    const verified = items.filter((item) => item.otp_enabled && item.otp_verified).length;
-    const pending = items.filter((item) => !item.otp_verified).length;
-    return { total: items.length, verified, pending };
-  }, [adminOTPStatus]);
 
   const hasPartialOrdersPayload = ordersData !== undefined && !isPaginatedPayload(ordersData);
   const hasPartialUsersPayload = usersData !== undefined && !isPaginatedPayload(usersData);
@@ -146,13 +127,8 @@ export default function AdminDashboardPage() {
             <CardTitle>Security posture</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 text-sm opacity-80">
-            {otpRecommendation ? (
-              <div className="rounded-[22px] border border-amber-200 bg-amber-50/90 p-4 text-amber-900">
-                {otpRecommendation}
-              </div>
-            ) : null}
             <div className="rounded-[22px] border border-[rgba(128,128,128,0.2)] bg-[rgba(128,128,128,0.06)] p-4">
-              Admin OTP readiness: {otpReadiness.verified}/{otpReadiness.total} verified. {otpReadiness.pending} account(s) need setup or verification.
+              Admin OTP readiness is surfaced directly in the backend and should be reviewed regularly.
             </div>
             <div className="rounded-[22px] border border-[rgba(128,128,128,0.2)] bg-[rgba(128,128,128,0.06)] p-4">
               Role-aware navigation keeps privileged links out of sidebars for users who should not see them.

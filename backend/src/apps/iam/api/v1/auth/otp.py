@@ -435,22 +435,9 @@ async def validate_otp_login(
 
 @router.get("/admin/security/admin-otp-status")
 async def list_admin_otp_status(
-    request: Request,
-    current_user: User = Depends(get_current_active_superuser),
+    _: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    await create_log_entry(
-        db,
-        level="INFO",
-        logger_name="auth.otp",
-        source="admin",
-        message="Admin OTP readiness report viewed",
-        event_code="auth.admin_otp.status_viewed",
-        user_id=current_user.id,
-        request=request,
-        metadata={"viewer": current_user.username},
-    )
-    await db.commit()
     admin_users = (
         await db.execute(select(User).where(User.is_superuser == True).order_by(User.username.asc()))  # noqa: E712
     ).scalars().all()
