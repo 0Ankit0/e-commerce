@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -14,10 +15,12 @@ from src.apps.finance.models.payment import PaymentProvider, PaymentStatus, Paym
 from src.apps.commerce.models import Address, WishlistShareLink
 from src.apps.iam.models.token_tracking import TokenTracking
 from src.apps.iam.models.user import User, UserProfile
+from src.apps.iam.utils.hashid import decode_id_or_404
 from src.apps.logistics.models import CourierLocationPing, DeliveryException, RouteOptimizationPlan, ShipmentManifest
 from src.apps.messaging.models import ChatMessageEnvelope
 from src.apps.multitenancy.models.tenant import Tenant, TenantMember, TenantRole
 from src.apps.orders.models import Order, OrderStatus, ReturnRequest, Shipment, ShipmentTracking
+from src.apps.vendors.models import VendorDocument, VendorTimelineEvent
 
 
 async def _create_user_headers(
@@ -66,6 +69,25 @@ async def _create_tenant_for_owner(db_session: AsyncSession, owner: User, slug: 
     await db_session.commit()
     return tenant
 
+
+
+
+async def _advance_vendor_to_resubmission(client: AsyncClient, admin_headers: dict[str, str], vendor_id: str) -> None:
+    under_review_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/mark-under-review", headers=admin_headers)
+    assert under_review_resp.status_code == 200, under_review_resp.text
+    resubmission_resp = await client.post(
+        f"/api/v1/admin/vendors/{vendor_id}/request-resubmission",
+        headers=admin_headers,
+        json={"reason": "Verification details requested"},
+    )
+    assert resubmission_resp.status_code == 200, resubmission_resp.text
+
+
+async def _approve_vendor_for_tests(client: AsyncClient, admin_headers: dict[str, str], vendor_id: str):
+    await _advance_vendor_to_resubmission(client, admin_headers, vendor_id)
+    approve_vendor_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    assert approve_vendor_resp.status_code == 200, approve_vendor_resp.text
+    return approve_vendor_resp
 
 async def _create_delivery_zone(client: AsyncClient, admin_headers: dict[str, str], code: str = "ktm-zone") -> None:
     await client.post(
@@ -117,8 +139,7 @@ async def test_marketplace_checkout_and_recommendations(client: AsyncClient, db_
     assert vendor_create.status_code == 201, vendor_create.text
     vendor_id = vendor_create.json()["vendor"]["id"]
 
-    approve_vendor = await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
-    assert approve_vendor.status_code == 200, approve_vendor.text
+    approve_vendor = await _approve_vendor_for_tests(client, admin_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers)
 
     category_resp = await client.post(
@@ -296,8 +317,7 @@ async def test_route_optimization_and_courier_gps_ingestion(client: AsyncClient,
     assert vendor_create.status_code == 201, vendor_create.text
     vendor_id = vendor_create.json()["vendor"]["id"]
 
-    approve_vendor = await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
-    assert approve_vendor.status_code == 200, approve_vendor.text
+    approve_vendor = await _approve_vendor_for_tests(client, admin_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="route-zone")
 
     category_resp = await client.post(
@@ -519,7 +539,7 @@ async def test_vendor_delivery_and_customer_return_flow(client: AsyncClient, db_
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="lalitpur-zone")
     await client.post(
         "/api/v1/admin/categories",
@@ -652,7 +672,7 @@ async def test_wishlist_sharing_and_price_drop_notifications(client: AsyncClient
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="wishlist-zone")
     await client.post("/api/v1/admin/categories", headers=admin_headers, json={"name": "Accessories", "slug": "accessories", "level": 1})
     category_id = (await client.get("/api/v1/categories")).json()["items"][0]["id"]
@@ -757,7 +777,7 @@ async def test_internal_logistics_and_support_flow(client: AsyncClient, db_sessi
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="ops-zone")
     hub_resp = await client.post(
         "/api/v1/logistics/hubs",
@@ -969,7 +989,7 @@ async def test_shipment_transition_rules_and_idempotency(client: AsyncClient, db
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="transition-zone")
     hub_resp = await client.post(
         "/api/v1/logistics/hubs",
@@ -1207,10 +1227,12 @@ async def test_vendor_payout_content_and_reporting_flow(client: AsyncClient, db_
         json={"account_name": "Finance Vendor", "account_number": "1234567890", "ifsc_code": "NMBL0001", "bank_name": "NMB"},
     )
     assert bank_resp.status_code == 201, bank_resp.text
+    document_db = await db_session.get(VendorDocument, decode_id_or_404(document_resp.json()["document_id"]))
+    assert document_db is not None
     verify_doc_resp = await client.post(
         f"/api/v1/admin/vendor-documents/{document_resp.json()['document_id']}/verify",
         headers=admin_headers,
-        json={"remarks": "Looks good"},
+        json={"remarks": "Looks good", "expected_uploaded_at": document_db.uploaded_at.isoformat()},
     )
     assert verify_doc_resp.status_code == 200, verify_doc_resp.text
     verify_bank_resp = await client.post(
@@ -1313,7 +1335,7 @@ async def test_strict_e2ee_chat_device_and_envelope_flow(client: AsyncClient, db
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="chat-zone")
     await client.post("/api/v1/admin/categories", headers=admin_headers, json={"name": "Tech", "slug": "tech", "level": 1})
     category_id = (await client.get("/api/v1/categories")).json()["items"][0]["id"]
@@ -1480,7 +1502,7 @@ async def test_wallet_gift_card_and_payment_lifecycle_flow(client: AsyncClient, 
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="wallet-zone")
     await client.post("/api/v1/admin/categories", headers=admin_headers, json={"name": "Wallet Cat", "slug": "wallet-cat", "level": 1})
     category_id = (await client.get("/api/v1/categories")).json()["items"][0]["id"]
@@ -1606,7 +1628,7 @@ async def test_catalog_admin_settings_and_pod_extensions(client: AsyncClient, db
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="ext-zone")
     zone_id = (await client.get("/api/v1/logistics/zones", headers=admin_headers)).json()["items"][0]["id"]
     shipping_option_resp = await client.post(
@@ -1714,3 +1736,113 @@ async def test_catalog_admin_settings_and_pod_extensions(client: AsyncClient, db
         json={"db_value": "patched-value", "use_db_value": True},
     )
     assert patch_setting.status_code == 200, patch_setting.text
+
+
+@pytest.mark.asyncio
+async def test_vendor_onboarding_transitions_and_audit_consistency(client: AsyncClient, db_session: AsyncSession):
+    _, admin_headers = await _create_user_headers(
+        db_session,
+        username="workflow_admin",
+        email="workflow_admin@example.com",
+        is_superuser=True,
+    )
+    vendor_user, vendor_headers = await _create_user_headers(
+        db_session,
+        username="workflow_vendor",
+        email="workflow_vendor@example.com",
+    )
+    tenant = await _create_tenant_for_owner(db_session, vendor_user, "workflow-vendor-tenant")
+    encode_id = __import__("src.apps.iam.utils.hashid", fromlist=["encode_id"]).encode_id
+
+    vendor_resp = await client.post(
+        "/api/v1/vendor/profile",
+        headers=vendor_headers,
+        json={
+            "tenant_id": encode_id(tenant.id),
+            "business_name": "Workflow Vendor",
+            "display_name": "Workflow Vendor",
+            "slug": "workflow-vendor",
+        },
+    )
+    assert vendor_resp.status_code == 201, vendor_resp.text
+    vendor_id = vendor_resp.json()["vendor"]["id"]
+
+    invalid_approve_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    assert invalid_approve_resp.status_code == 409, invalid_approve_resp.text
+
+    under_review_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/mark-under-review", headers=admin_headers)
+    assert under_review_resp.status_code == 200, under_review_resp.text
+
+    invalid_reject_without_reason = await client.post(
+        f"/api/v1/admin/vendors/{vendor_id}/request-resubmission",
+        headers=admin_headers,
+        json={"reason": ""},
+    )
+    assert invalid_reject_without_reason.status_code == 422, invalid_reject_without_reason.text
+
+    resubmission_resp = await client.post(
+        f"/api/v1/admin/vendors/{vendor_id}/request-resubmission",
+        headers=admin_headers,
+        json={"reason": "Please re-submit PAN with clear image"},
+    )
+    assert resubmission_resp.status_code == 200, resubmission_resp.text
+
+    upload_1_resp = await client.post(
+        "/api/v1/vendor/documents",
+        headers=vendor_headers,
+        json={"doc_type": "pan", "doc_number": "PAN111", "file_url": "https://example.com/pan-v1.pdf"},
+    )
+    assert upload_1_resp.status_code == 201, upload_1_resp.text
+    document_id = upload_1_resp.json()["document_id"]
+    doc_v1 = await db_session.get(VendorDocument, decode_id_or_404(document_id))
+    assert doc_v1 is not None
+    stale_uploaded_at = doc_v1.uploaded_at.isoformat()
+
+    upload_2_resp = await client.post(
+        "/api/v1/vendor/documents",
+        headers=vendor_headers,
+        json={"doc_type": "pan", "doc_number": "PAN222", "file_url": "https://example.com/pan-v2.pdf"},
+    )
+    assert upload_2_resp.status_code == 201, upload_2_resp.text
+    assert upload_2_resp.json()["document_id"] == document_id
+
+    doc_v2 = await db_session.get(VendorDocument, decode_id_or_404(document_id))
+    assert doc_v2 is not None
+    assert doc_v2.doc_number == "PAN222"
+    assert doc_v2.uploaded_at.isoformat() != stale_uploaded_at
+
+    stale_verify_resp = await client.post(
+        f"/api/v1/admin/vendor-documents/{document_id}/verify",
+        headers=admin_headers,
+        json={"remarks": "approved", "expected_uploaded_at": stale_uploaded_at},
+    )
+    assert stale_verify_resp.status_code == 409, stale_verify_resp.text
+
+    verify_resp = await client.post(
+        f"/api/v1/admin/vendor-documents/{document_id}/verify",
+        headers=admin_headers,
+        json={"remarks": "approved", "expected_uploaded_at": doc_v2.uploaded_at.isoformat()},
+    )
+    assert verify_resp.status_code == 200, verify_resp.text
+
+    concurrent_approve, concurrent_reject = await asyncio.gather(
+        client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers),
+        client.post(
+            f"/api/v1/admin/vendors/{vendor_id}/reject",
+            headers=admin_headers,
+            json={"reason": "Concurrent reject should fail"},
+        ),
+    )
+    assert sorted([concurrent_approve.status_code, concurrent_reject.status_code]) == [200, 409]
+
+    timeline_events = (
+        await db_session.execute(
+            select(VendorTimelineEvent.event_type)
+            .where(VendorTimelineEvent.vendor_id == decode_id_or_404(vendor_id))
+            .order_by(VendorTimelineEvent.created_at.asc(), VendorTimelineEvent.id.asc())
+        )
+    ).scalars().all()
+    assert "vendor.under_review" in timeline_events
+    assert "vendor.resubmission_requested" in timeline_events
+    assert "vendor.document_reuploaded" in timeline_events
+    assert "vendor.approved" in timeline_events or "vendor.rejected" in timeline_events
