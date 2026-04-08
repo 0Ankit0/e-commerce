@@ -100,6 +100,22 @@ def mark_vendor_status(vendor: Vendor, status_value: VendorStatus, rejected_reas
     }[status_value]
 
 
+def assert_vendor_status_transition(vendor: Vendor, target_status: VendorStatus) -> None:
+    allowed_transitions: dict[VendorStatus, set[VendorStatus]] = {
+        VendorStatus.PENDING: {VendorStatus.UNDER_REVIEW},
+        VendorStatus.UNDER_REVIEW: {VendorStatus.NEEDS_RESUBMISSION},
+        VendorStatus.NEEDS_RESUBMISSION: {VendorStatus.APPROVED, VendorStatus.REJECTED, VendorStatus.SUSPENDED},
+        VendorStatus.APPROVED: set(),
+        VendorStatus.REJECTED: set(),
+        VendorStatus.SUSPENDED: set(),
+    }
+    if target_status not in allowed_transitions[vendor.status]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Invalid vendor status transition: {vendor.status.value} -> {target_status.value}",
+        )
+
+
 async def record_vendor_timeline_event(
     *,
     vendor: Vendor,

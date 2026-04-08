@@ -65,6 +65,21 @@ async def _create_tenant_for_owner(db_session: AsyncSession, owner: User, slug: 
     return tenant
 
 
+
+
+async def _approve_vendor_for_tests(client: AsyncClient, admin_headers: dict[str, str], vendor_id: str):
+    under_review_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/mark-under-review", headers=admin_headers)
+    assert under_review_resp.status_code == 200, under_review_resp.text
+    resubmission_resp = await client.post(
+        f"/api/v1/admin/vendors/{vendor_id}/request-resubmission",
+        headers=admin_headers,
+        json={"reason": "Verification details requested"},
+    )
+    assert resubmission_resp.status_code == 200, resubmission_resp.text
+    approve_vendor_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
+    assert approve_vendor_resp.status_code == 200, approve_vendor_resp.text
+    return approve_vendor_resp
+
 async def _create_delivery_zone(client: AsyncClient, admin_headers: dict[str, str], code: str) -> None:
     await client.post(
         "/api/v1/logistics/zones",
@@ -102,8 +117,7 @@ async def _bootstrap_catalog(client: AsyncClient, db_session: AsyncSession):
     )
     assert vendor_create.status_code == 201, vendor_create.text
     vendor_id = vendor_create.json()["vendor"]["id"]
-    approve_vendor = await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
-    assert approve_vendor.status_code == 200, approve_vendor.text
+    approve_vendor = await _approve_vendor_for_tests(client, admin_headers, vendor_id)
 
     await _create_delivery_zone(client, admin_headers, code="inv-zone")
 

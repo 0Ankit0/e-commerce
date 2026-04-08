@@ -32,6 +32,7 @@ from src.apps.vendors.models import (
     Warehouse,
 )
 from src.apps.vendors.services import (
+    assert_vendor_status_transition,
     ensure_vendor_active,
     get_vendor_for_user,
     get_vendor_or_404,
@@ -57,7 +58,7 @@ class VendorCreateRequest(BaseModel):
 
 
 class VendorDecisionRequest(BaseModel):
-    reason: str = ""
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class WarehouseCreateRequest(BaseModel):
@@ -88,7 +89,8 @@ class VendorStatusUpdateRequest(BaseModel):
 
 
 class VendorDocumentReviewRequest(BaseModel):
-    remarks: str = ""
+    remarks: str = Field(default="", max_length=500)
+    expected_uploaded_at: str = Field(min_length=1)
 
 
 class PayoutRequestCreateRequest(BaseModel):
@@ -234,16 +236,33 @@ async def upload_vendor_document(
     db: AsyncSession = Depends(get_db),
 ):
     vendor = await get_vendor_for_user(current_user, db)
-    document = VendorDocument(vendor_id=vendor.id, **payload.model_dump())
-    db.add(document)
+    repeated_upload = False
+    document = (
+        await db.execute(
+            select(VendorDocument)
+            .where(VendorDocument.vendor_id == vendor.id, VendorDocument.doc_type == payload.doc_type)
+            .order_by(VendorDocument.uploaded_at.desc(), VendorDocument.id.desc())
+        )
+    ).scalars().first()
+    if document:
+        repeated_upload = True
+        document.doc_number = payload.doc_number
+        document.file_url = payload.file_url
+        document.status = VendorDocumentStatus.PENDING
+        document.remarks = ""
+        document.verified_at = None
+        document.uploaded_at = utc_now()
+    else:
+        document = VendorDocument(vendor_id=vendor.id, **payload.model_dump())
+        db.add(document)
     await db.commit()
     await db.refresh(document)
     await record_vendor_timeline_event(
         vendor=vendor,
-        event_type="vendor.document_uploaded",
+        event_type="vendor.document_reuploaded" if repeated_upload else "vendor.document_uploaded",
         message=f"Document uploaded: {document.doc_type}",
         actor_user_id=current_user.id,
-        payload={"document_id": document.id, "doc_type": document.doc_type},
+        payload={"document_id": document.id, "doc_type": document.doc_type, "repeated_upload": repeated_upload},
         db=db,
     )
     await db.commit()
@@ -455,15 +474,17 @@ async def list_vendors(
 @router.post("/admin/vendors/{vendor_id}/approve")
 async def approve_vendor(
     vendor_id: str,
-    _: User = Depends(get_current_active_superuser),
+    admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
+    assert_vendor_status_transition(vendor, VendorStatus.APPROVED)
     mark_vendor_status(vendor, VendorStatus.APPROVED)
     await record_vendor_timeline_event(
         vendor=vendor,
         event_type="vendor.approved",
         message="Vendor approved",
+        actor_user_id=admin_user.id,
         db=db,
     )
     await db.commit()
@@ -475,16 +496,18 @@ async def approve_vendor(
 async def reject_vendor(
     vendor_id: str,
     payload: VendorDecisionRequest,
-    _: User = Depends(get_current_active_superuser),
+    admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
+    assert_vendor_status_transition(vendor, VendorStatus.REJECTED)
     mark_vendor_status(vendor, VendorStatus.REJECTED, payload.reason)
     await record_vendor_timeline_event(
         vendor=vendor,
         event_type="vendor.rejected",
         message="Vendor rejected",
         payload={"reason": payload.reason},
+        actor_user_id=admin_user.id,
         db=db,
     )
     await db.commit()
@@ -496,16 +519,18 @@ async def reject_vendor(
 async def suspend_vendor(
     vendor_id: str,
     payload: VendorStatusUpdateRequest,
-    _: User = Depends(get_current_active_superuser),
+    admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
+    assert_vendor_status_transition(vendor, VendorStatus.SUSPENDED)
     mark_vendor_status(vendor, VendorStatus.SUSPENDED, payload.reason)
     await record_vendor_timeline_event(
         vendor=vendor,
         event_type="vendor.suspended",
         message="Vendor suspended",
         payload={"reason": payload.reason},
+        actor_user_id=admin_user.id,
         db=db,
     )
     await db.commit()
@@ -516,15 +541,17 @@ async def suspend_vendor(
 @router.post("/admin/vendors/{vendor_id}/mark-under-review")
 async def mark_vendor_under_review(
     vendor_id: str,
-    _: User = Depends(get_current_active_superuser),
+    admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
+    assert_vendor_status_transition(vendor, VendorStatus.UNDER_REVIEW)
     mark_vendor_status(vendor, VendorStatus.UNDER_REVIEW)
     await record_vendor_timeline_event(
         vendor=vendor,
         event_type="vendor.under_review",
         message="Vendor moved to under review",
+        actor_user_id=admin_user.id,
         db=db,
     )
     await db.commit()
@@ -535,16 +562,18 @@ async def mark_vendor_under_review(
 async def request_vendor_resubmission(
     vendor_id: str,
     payload: VendorDecisionRequest,
-    _: User = Depends(get_current_active_superuser),
+    admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
+    assert_vendor_status_transition(vendor, VendorStatus.NEEDS_RESUBMISSION)
     mark_vendor_status(vendor, VendorStatus.NEEDS_RESUBMISSION, payload.reason)
     await record_vendor_timeline_event(
         vendor=vendor,
         event_type="vendor.resubmission_requested",
         message="Vendor asked to resubmit verification details",
         payload={"reason": payload.reason},
+        actor_user_id=admin_user.id,
         db=db,
     )
     await db.commit()
@@ -554,15 +583,19 @@ async def request_vendor_resubmission(
 @router.post("/admin/vendor-documents/{document_id}/verify")
 async def verify_vendor_document(
     document_id: str,
-    payload: VendorDocumentReviewRequest | None = None,
-    _: User = Depends(get_current_active_superuser),
+    payload: VendorDocumentReviewRequest,
+    admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
     document = await db.get(VendorDocument, decode_id_or_404(document_id))
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor document not found")
+    if document.uploaded_at.isoformat() != payload.expected_uploaded_at:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stale document review action")
+    if document.status != VendorDocumentStatus.PENDING:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Document is not pending review")
     document.status = VendorDocumentStatus.VERIFIED
-    document.remarks = payload.remarks if payload else ""
+    document.remarks = payload.remarks
     document.verified_at = utc_now()
     vendor = await db.get(Vendor, document.vendor_id)
     if vendor:
@@ -571,6 +604,7 @@ async def verify_vendor_document(
             event_type="vendor.document_verified",
             message=f"Document verified: {document.doc_type}",
             payload={"document_id": document.id},
+            actor_user_id=admin_user.id,
             db=db,
         )
     await db.commit()
@@ -581,12 +615,16 @@ async def verify_vendor_document(
 async def reject_vendor_document(
     document_id: str,
     payload: VendorDocumentReviewRequest,
-    _: User = Depends(get_current_active_superuser),
+    admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
     document = await db.get(VendorDocument, decode_id_or_404(document_id))
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor document not found")
+    if document.uploaded_at.isoformat() != payload.expected_uploaded_at:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stale document review action")
+    if document.status != VendorDocumentStatus.PENDING:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Document is not pending review")
     document.status = VendorDocumentStatus.REJECTED
     document.remarks = payload.remarks
     vendor = await db.get(Vendor, document.vendor_id)
@@ -597,6 +635,7 @@ async def reject_vendor_document(
             event_type="vendor.document_rejected",
             message=f"Document rejected: {document.doc_type}",
             payload={"document_id": document.id, "remarks": payload.remarks},
+            actor_user_id=admin_user.id,
             db=db,
         )
     await db.commit()
