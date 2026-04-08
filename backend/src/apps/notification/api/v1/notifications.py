@@ -15,16 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import decode_id_or_404
-from src.apps.notification.models.notification_delivery import (
-    NotificationDeliveryChannel,
-    NotificationDeliveryStatus,
-)
 from src.apps.notification.schemas.notification import (
     NotificationCreate,
     NotificationList,
     NotificationRead,
 )
-from src.apps.notification.schemas.notification_delivery import NotificationDeliveryList, NotificationDeliveryRead
 from src.apps.notification.services.notification import (
     create_notification,
     delete_notification,
@@ -32,8 +27,6 @@ from src.apps.notification.services.notification import (
     get_user_notifications,
     mark_all_read,
     mark_as_read,
-    get_failed_deliveries,
-    retry_delivery,
 )
 
 router = APIRouter()
@@ -139,47 +132,3 @@ async def delete_notification_endpoint(
     deleted = await delete_notification(db, decode_id_or_404(notification_id), current_user.id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
-
-
-@router.get(
-    "/admin/deliveries/failed/",
-    response_model=NotificationDeliveryList,
-    summary="List failed/retrying notification deliveries (superuser)",
-)
-async def list_failed_notification_deliveries(
-    channel: NotificationDeliveryChannel | None = Query(default=None),
-    status_filter: NotificationDeliveryStatus | None = Query(default=None, alias="status"),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
-    current_user: User = Depends(get_current_active_superuser),
-    db: AsyncSession = Depends(get_db),
-) -> NotificationDeliveryList:
-    _ = current_user
-    items, total = await get_failed_deliveries(
-        db,
-        channel=channel,
-        status=status_filter,
-        skip=skip,
-        limit=limit,
-    )
-    return NotificationDeliveryList(
-        items=[NotificationDeliveryRead.model_validate(item) for item in items],
-        total=total,
-    )
-
-
-@router.post(
-    "/admin/deliveries/{delivery_id}/retry/",
-    response_model=NotificationDeliveryRead,
-    summary="Retry a failed notification delivery (superuser)",
-)
-async def retry_notification_delivery(
-    delivery_id: str,
-    current_user: User = Depends(get_current_active_superuser),
-    db: AsyncSession = Depends(get_db),
-) -> NotificationDeliveryRead:
-    _ = current_user
-    delivery = await retry_delivery(db, decode_id_or_404(delivery_id))
-    if not delivery:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found")
-    return NotificationDeliveryRead.model_validate(delivery)
