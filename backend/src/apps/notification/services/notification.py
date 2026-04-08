@@ -1,4 +1,5 @@
 """Notification service — persistence plus multi-channel delivery."""
+import hashlib
 import logging
 from typing import Optional
 
@@ -8,6 +9,11 @@ from sqlmodel import col
 
 from src.apps.core.time import utc_now
 from src.apps.notification.models.notification import Notification
+from src.apps.notification.models.notification_delivery import (
+    NotificationDelivery,
+    NotificationDeliveryChannel,
+    NotificationDeliveryStatus,
+)
 from src.apps.notification.models.notification_device import (
     NotificationDevice,
     NotificationDeviceProvider,
@@ -16,11 +22,7 @@ from src.apps.notification.models.notification_preference import NotificationPre
 from src.apps.notification.schemas.notification import NotificationCreate, NotificationList, NotificationRead
 from src.apps.notification.schemas.notification_device import NotificationDeviceCreate
 from src.apps.notification.schemas.notification_preference import NotificationPreferenceRead
-from src.apps.notification.tasks import (
-    send_notification_email_task,
-    send_push_notification_task,
-    send_sms_notification_task,
-)
+from src.apps.notification.tasks import dispatch_notification_delivery_task
 
 log = logging.getLogger(__name__)
 
@@ -176,18 +178,77 @@ async def create_notification(
     pref = await get_or_create_preference(db, data.user_id)
 
     if push_ws and pref.websocket_enabled:
-        await _push_to_ws(notification)
+        await _push_to_ws(db, notification)
     if pref.email_enabled:
-        await _push_to_email(db, notification)
+        await _enqueue_channel_delivery(db, notification, NotificationDeliveryChannel.EMAIL)
     if pref.push_enabled:
-        await _push_to_devices(db, notification)
+        await _enqueue_push_device_deliveries(db, notification)
     if pref.sms_enabled:
-        await _push_to_sms(db, notification)
+        await _enqueue_channel_delivery(db, notification, NotificationDeliveryChannel.SMS)
 
     return notification
 
 
-async def _push_to_ws(notification: Notification) -> None:
+def _event_fanout_key(notification: Notification) -> str:
+    if isinstance(notification.extra_data, dict):
+        for key in ("fanout_key", "event_id", "event"):
+            value = notification.extra_data.get(key)
+            if value:
+                return str(value)
+    return f"notification:{notification.id}"
+
+
+def _dedup_key(notification: Notification, channel: NotificationDeliveryChannel, target: str) -> str:
+    raw = f"{notification.user_id}:{_event_fanout_key(notification)}:{channel.value}:{target}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+async def _enqueue_channel_delivery(
+    db: AsyncSession,
+    notification: Notification,
+    channel: NotificationDeliveryChannel,
+    *,
+    target: str | None = None,
+    max_attempts: int = 4,
+) -> NotificationDelivery:
+    stable_target = target or f"user:{notification.user_id}"
+    key = _dedup_key(notification, channel, stable_target)
+
+    existing = (
+        await db.execute(select(NotificationDelivery).where(NotificationDelivery.dedup_key == key))
+    ).scalars().first()
+    if existing:
+        return existing
+
+    delivery = NotificationDelivery(
+        notification_id=notification.id,
+        user_id=notification.user_id,
+        channel=channel,
+        status=NotificationDeliveryStatus.PENDING,
+        target=stable_target,
+        dedup_key=key,
+        max_attempts=max_attempts,
+    )
+    db.add(delivery)
+    await db.commit()
+    await db.refresh(delivery)
+    dispatch_notification_delivery_task.delay(delivery.id)
+    return delivery
+
+
+async def _enqueue_push_device_deliveries(db: AsyncSession, notification: Notification) -> None:
+    devices = await list_devices(db, notification.user_id)
+    for device in devices:
+        await _enqueue_channel_delivery(
+            db,
+            notification,
+            NotificationDeliveryChannel.PUSH,
+            target=f"device:{device.id}",
+            max_attempts=5,
+        )
+
+
+async def _push_to_ws(db: AsyncSession, notification: Notification) -> None:
     try:
         from src.apps.websocket.manager import manager
 
@@ -204,76 +265,92 @@ async def _push_to_ws(notification: Notification) -> None:
                 "created_at": notification.created_at.isoformat(),
             },
         )
+        await _record_ws_delivery(db, notification, success=True)
     except Exception as exc:
         log.warning("WS push failed for notification id=%s: %s", notification.id, exc)
+        await _record_ws_delivery(db, notification, success=False, reason=str(exc))
 
 
-async def _push_to_email(db: AsyncSession, notification: Notification) -> None:
-    try:
-        from src.apps.iam.models.user import User
+async def _record_ws_delivery(
+    db: AsyncSession,
+    notification: Notification,
+    *,
+    success: bool,
+    reason: str | None = None,
+) -> None:
+    target = f"user:{notification.user_id}"
+    key = _dedup_key(notification, NotificationDeliveryChannel.WEBSOCKET, target)
+    existing = (
+        await db.execute(select(NotificationDelivery).where(NotificationDelivery.dedup_key == key))
+    ).scalars().first()
+    if existing:
+        return
 
-        result = await db.execute(select(User).where(col(User.id) == notification.user_id))
-        user = result.scalars().first()
-        if not user:
-            return
-        send_notification_email_task.delay(
-            recipients=[{"name": user.username, "email": user.email}],
-            subject=notification.title,
-            context={
-                "user": {"email": user.email, "first_name": user.username},
-                "notification": {
-                    "title": notification.title,
-                    "body": notification.body,
-                    "type": notification.type,
-                },
-            },
+    delivery = NotificationDelivery(
+        notification_id=notification.id,
+        user_id=notification.user_id,
+        channel=NotificationDeliveryChannel.WEBSOCKET,
+        status=NotificationDeliveryStatus.DELIVERED if success else NotificationDeliveryStatus.FAILED,
+        target=target,
+        dedup_key=key,
+        attempt_count=1,
+        last_attempt_at=utc_now(),
+        delivered_at=utc_now() if success else None,
+        last_error_reason=(reason or "")[:1024] if not success else None,
+        last_error_code="websocket_push_failed" if not success else None,
+    )
+    db.add(delivery)
+    await db.commit()
+
+
+async def get_failed_deliveries(
+    db: AsyncSession,
+    *,
+    channel: NotificationDeliveryChannel | None = None,
+    status: NotificationDeliveryStatus | None = None,
+    skip: int = 0,
+    limit: int = 100,
+) -> tuple[list[NotificationDelivery], int]:
+    base = select(NotificationDelivery).where(
+        NotificationDelivery.status.in_(
+            [NotificationDeliveryStatus.FAILED, NotificationDeliveryStatus.DEAD_LETTER, NotificationDeliveryStatus.RETRYING]
         )
-    except Exception as exc:
-        log.warning("Email push failed for notification id=%s: %s", notification.id, exc)
+    )
+    if channel is not None:
+        base = base.where(NotificationDelivery.channel == channel)
+    if status is not None:
+        base = base.where(NotificationDelivery.status == status)
 
-
-async def _push_to_devices(db: AsyncSession, notification: Notification) -> None:
-    devices = await list_devices(db, notification.user_id)
-    for device in devices:
-        try:
-            payload = {
-                "provider": device.provider.value,
-                "platform": device.platform.value,
-                "title": notification.title,
-                "body": notification.body,
-                "data": notification.extra_data if isinstance(notification.extra_data, dict) else None,
-                "token": device.token,
-                "endpoint": device.endpoint,
-                "p256dh": device.p256dh,
-                "auth": device.auth,
-                "subscription_id": device.subscription_id,
-            }
-            send_push_notification_task.delay(payload)
-        except Exception as exc:
-            log.warning(
-                "Push task enqueue failed for notification id=%s device=%s: %s",
-                notification.id,
-                device.id,
-                exc,
-            )
-
-
-async def _push_to_sms(db: AsyncSession, notification: Notification) -> None:
-    try:
-        from src.apps.iam.models.user import UserProfile
-
-        result = await db.execute(
-            select(UserProfile).where(col(UserProfile.user_id) == notification.user_id)
+    total = (
+        await db.execute(select(func.count()).select_from(base.subquery()))
+    ).scalar_one()
+    items = (
+        await db.execute(
+            base.order_by(col(NotificationDelivery.updated_at).desc()).offset(skip).limit(limit)
         )
-        profile = result.scalars().first()
-        if not profile or not profile.phone:
-            return
-        send_sms_notification_task.delay(
-            to_number=profile.phone,
-            body=f"{notification.title}: {notification.body}",
-        )
-    except Exception as exc:
-        log.warning("SMS task enqueue failed for notification id=%s: %s", notification.id, exc)
+    ).scalars().all()
+    return list(items), total
+
+
+async def retry_delivery(db: AsyncSession, delivery_id: int) -> Optional[NotificationDelivery]:
+    delivery = await db.get(NotificationDelivery, delivery_id)
+    if not delivery:
+        return None
+
+    if delivery.status == NotificationDeliveryStatus.DELIVERED:
+        return delivery
+
+    delivery.status = NotificationDeliveryStatus.PENDING
+    delivery.last_error_reason = None
+    delivery.last_error_code = None
+    delivery.dead_lettered_at = None
+    delivery.next_attempt_at = None
+    delivery.updated_at = utc_now()
+    db.add(delivery)
+    await db.commit()
+    await db.refresh(delivery)
+    dispatch_notification_delivery_task.delay(delivery.id)
+    return delivery
 
 
 async def get_user_notifications(
