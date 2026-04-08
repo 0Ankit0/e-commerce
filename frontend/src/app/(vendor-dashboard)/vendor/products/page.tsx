@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useVendorProducts } from '@/hooks/use-catalog';
 import { StorefrontState } from '@/components/storefront/storefront-state';
 import { formatCurrency } from '@/lib/commerce-format';
+import { getRuntimeErrorState, isPaginatedPayload } from '@/lib/runtime-route';
 
 export default function VendorProductsPage() {
   const { data, isLoading, isError, error, refetch } = useVendorProducts();
@@ -27,21 +28,27 @@ export default function VendorProductsPage() {
     );
   }
 
-  if (isError) {
+  const hasPartialPayload = data !== undefined && !isPaginatedPayload(data);
+
+  if (isError || hasPartialPayload) {
     const status = axios.isAxiosError(error) ? error.response?.status : undefined;
-    const description =
-      status === 401
-        ? 'Sign in again to load your catalog.'
-        : status === 403
-          ? 'Your account does not currently have vendor catalog access.'
-          : 'We could not load your live vendor inventory from the API.';
+    const runtimeError = getRuntimeErrorState(error, 'Inventory unavailable');
 
     return (
       <StorefrontState
-        eyebrow="Vendor inventory"
-        title="Inventory unavailable"
-        description={description}
-        actionLabel="Retry"
+        eyebrow={status === 403 ? 'Vendor access blocked' : 'Vendor inventory'}
+        title={hasPartialPayload ? 'Inventory payload incomplete' : runtimeError.title}
+        description={
+          hasPartialPayload
+            ? 'Vendor inventory response is missing required fields. No hidden fallback list is rendered for this route.'
+            : runtimeError.description
+        }
+        details={
+          hasPartialPayload
+            ? 'Payload validation failed: expected { items: [], total: number } from /vendor/products.'
+            : runtimeError.details
+        }
+        actionLabel={runtimeError.actionLabel}
         onAction={() => {
           void refetch();
         }}

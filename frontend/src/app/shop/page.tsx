@@ -1,7 +1,7 @@
 'use client';
 
 import axios from 'axios';
-import { useDeferredValue, useMemo, useState } from 'react';
+import { useDeferredValue, useState } from 'react';
 import { Search } from 'lucide-react';
 import { useCatalogBrands, useCatalogCategories, useCatalogProducts } from '@/hooks/use-catalog';
 import { ProductCard } from '@/components/storefront/product-card';
@@ -9,6 +9,7 @@ import { SiteHeader } from '@/components/storefront/site-header';
 import { SiteFooter } from '@/components/storefront/site-footer';
 import { StorefrontState } from '@/components/storefront/storefront-state';
 import { formatCurrency } from '@/lib/commerce-format';
+import { getRuntimeErrorState, isPaginatedPayload } from '@/lib/runtime-route';
 
 export default function ShopPage() {
   const [query, setQuery] = useState('');
@@ -33,14 +34,20 @@ export default function ShopPage() {
     data: categoriesData,
     isLoading: areCategoriesLoading,
     isError: areCategoriesError,
+    error: categoriesError,
+    refetch: refetchCategories,
   } = useCatalogCategories();
   const { data: brandsData } = useCatalogBrands();
 
   const products = productsData?.items ?? [];
   const categories = categoriesData?.items ?? [];
   const brands = brandsData?.items ?? [];
-  const groupedCategories = useMemo(() => categories.slice(0, 6), [categories]);
+  const groupedCategories = categories.slice(0, 6);
   const productsErrorStatus = axios.isAxiosError(productsError) ? productsError.response?.status : undefined;
+  const hasPartialProductsPayload = productsData !== undefined && !isPaginatedPayload(productsData);
+  const hasPartialCategoriesPayload = categoriesData !== undefined && !isPaginatedPayload(categoriesData);
+  const productsRuntimeError = getRuntimeErrorState(productsError, 'Products unavailable');
+  const categoriesRuntimeError = getRuntimeErrorState(categoriesError, 'Collections unavailable');
 
   return (
     <div className="min-h-screen bg-[var(--background)]">
@@ -128,8 +135,25 @@ export default function ShopPage() {
                     <div key={item} className="h-7 w-28 animate-pulse rounded-full bg-[var(--surface-muted)]" />
                   ))}
                 </div>
-              ) : areCategoriesError ? (
-                <p className="text-sm text-[var(--text-secondary)]">Category chips are unavailable right now, but product search is still live.</p>
+              ) : areCategoriesError || hasPartialCategoriesPayload ? (
+                <StorefrontState
+                  eyebrow="Collections"
+                  title="Collections unavailable"
+                  description={
+                    hasPartialCategoriesPayload
+                      ? 'The collections API returned an incomplete payload, so category chips are hidden until a complete response is available.'
+                      : categoriesRuntimeError.description
+                  }
+                  details={
+                    hasPartialCategoriesPayload
+                      ? 'Payload validation failed: expected { items: [], total: number } from /categories.'
+                      : categoriesRuntimeError.details
+                  }
+                  actionLabel="Retry"
+                  onAction={() => {
+                    void refetchCategories();
+                  }}
+                />
               ) : (
                 <div className="flex flex-wrap gap-2">
                   {groupedCategories.map((item) => (
@@ -149,17 +173,22 @@ export default function ShopPage() {
               <div key={item} className="h-[420px] animate-pulse rounded-[28px] bg-white" />
             ))}
           </div>
-        ) : isProductsError ? (
+        ) : isProductsError || hasPartialProductsPayload ? (
           <div className="mt-10">
             <StorefrontState
               eyebrow={productsErrorStatus === 404 ? 'Catalog not found' : 'Catalog unavailable'}
-              title={productsErrorStatus === 404 ? 'Catalog endpoint not found' : 'Products unavailable'}
+              title={hasPartialProductsPayload ? 'Catalog response incomplete' : productsRuntimeError.title}
               description={
-                productsErrorStatus === 404
-                  ? 'The live products endpoint did not return a catalog response for this storefront request.'
-                  : 'The storefront could not load products from the live API. No placeholder products are shown when the catalog request fails.'
+                hasPartialProductsPayload
+                  ? 'The products API returned a partial payload. This route avoids hidden fallback behavior and is blocking render until complete data is available.'
+                  : productsRuntimeError.description
               }
-              actionLabel="Retry"
+              details={
+                hasPartialProductsPayload
+                  ? 'Payload validation failed: expected { items: [], total: number } from /products.'
+                  : productsRuntimeError.details
+              }
+              actionLabel={productsRuntimeError.actionLabel}
               onAction={() => {
                 void refetchProducts();
               }}

@@ -196,6 +196,8 @@ export function useChangePassword() {
 }
 
 export function useVerifyEmail() {
+  const queryClient = useQueryClient();
+
   return useMutation({
     mutationFn: async (t: string) => {
       const response = await apiClient.post('/auth/verify-email/', null, { params: { t } });
@@ -203,6 +205,7 @@ export function useVerifyEmail() {
     },
     onSuccess: () => {
       analytics.capture(AuthEvents.EMAIL_VERIFIED);
+      queryClient.invalidateQueries({ queryKey: ['currentUser'] });
     },
   });
 }
