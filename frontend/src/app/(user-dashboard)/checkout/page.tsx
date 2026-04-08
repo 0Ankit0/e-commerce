@@ -28,10 +28,17 @@ const CORE_PAYMENT_METHODS = [
   { value: 'wallet', label: 'Wallet', help: 'Uses your in-platform balance if available.' },
 ];
 
-const GATEWAY_PAYMENT_METHODS: Record<
-  'khalti' | 'esewa' | 'razorpay',
-  { value: PaymentProvider; label: string; help: string }
-> = {
+const SUPPORTED_GATEWAY_PROVIDERS = ['khalti', 'esewa', 'razorpay', 'stripe', 'paypal'] as const;
+type SupportedGatewayProvider = (typeof SUPPORTED_GATEWAY_PROVIDERS)[number];
+
+const REDIRECT_GATEWAY_LABELS: Record<Exclude<SupportedGatewayProvider, 'esewa'>, string> = {
+  khalti: 'Khalti',
+  razorpay: 'Razorpay',
+  stripe: 'Stripe',
+  paypal: 'PayPal',
+};
+
+const GATEWAY_PAYMENT_METHODS: Record<SupportedGatewayProvider, { value: PaymentProvider; label: string; help: string }> = {
   khalti: {
     value: 'khalti',
     label: 'Khalti',
@@ -47,7 +54,21 @@ const GATEWAY_PAYMENT_METHODS: Record<
     label: 'Razorpay',
     help: 'Shown only when Razorpay is enabled in the backend.',
   },
+  stripe: {
+    value: 'stripe',
+    label: 'Stripe',
+    help: 'Shown only when Stripe is enabled in the backend.',
+  },
+  paypal: {
+    value: 'paypal',
+    label: 'PayPal',
+    help: 'Shown only when PayPal is enabled in the backend.',
+  },
 };
+
+function isSupportedGatewayProvider(provider: string): provider is SupportedGatewayProvider {
+  return SUPPORTED_GATEWAY_PROVIDERS.includes(provider as SupportedGatewayProvider);
+}
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -81,10 +102,7 @@ export default function CheckoutPage() {
   const enabledGatewayMethods = useMemo(
     () =>
       (enabledProviders ?? [])
-        .filter(
-          (provider): provider is 'khalti' | 'esewa' | 'razorpay' =>
-            provider === 'khalti' || provider === 'esewa' || provider === 'razorpay'
-        )
+        .filter(isSupportedGatewayProvider)
         .map((provider) => GATEWAY_PAYMENT_METHODS[provider]),
     [enabledProviders]
   );
@@ -161,8 +179,8 @@ export default function CheckoutPage() {
     }
 
     try {
-      if (paymentMethod === 'khalti' || paymentMethod === 'esewa' || paymentMethod === 'razorpay') {
-        const gatewayProvider = paymentMethod as Extract<PaymentProvider, 'khalti' | 'esewa' | 'razorpay'>;
+      if (isSupportedGatewayProvider(paymentMethod)) {
+        const gatewayProvider = paymentMethod;
         const purchaseOrderId = `CHK-${Date.now()}`;
         const customerName =
           [user?.first_name, user?.last_name].filter(Boolean).join(' ').trim() ||
@@ -171,10 +189,7 @@ export default function CheckoutPage() {
         const callbackUrl = buildPaymentCallbackUrl(gatewayProvider);
         const initiated = await initiatePayment.mutateAsync({
           provider: gatewayProvider,
-          amount:
-            gatewayProvider === 'khalti' || gatewayProvider === 'razorpay'
-              ? Math.round(quoteQuery.data.total * 100)
-              : Math.round(quoteQuery.data.total),
+          amount: gatewayProvider === 'esewa' ? Math.round(quoteQuery.data.total) : Math.round(quoteQuery.data.total * 100),
           purchase_order_id: purchaseOrderId,
           purchase_order_name: `Checkout ${purchaseOrderId}`,
           return_url: callbackUrl,
@@ -220,7 +235,8 @@ export default function CheckoutPage() {
           throw new Error(`The backend did not return a ${gatewayProvider} payment URL.`);
         }
 
-        setMessage(`Redirecting to ${gatewayProvider === 'razorpay' ? 'Razorpay' : 'Khalti'} to complete payment...`);
+        const providerLabel = REDIRECT_GATEWAY_LABELS[gatewayProvider];
+        setMessage(`Redirecting to ${providerLabel} to complete payment...`);
         window.location.assign(initiated.payment_url);
         return;
       }
