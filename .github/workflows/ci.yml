@@ -16,6 +16,8 @@ jobs:
           python-version: "3.14"
       - name: Validate documentation
         run: python3 scripts/validate_documentation.py
+      - name: Validate requirements traceability
+        run: python3 scripts/validate_requirements_traceability.py
 
   backend:
     runs-on: ubuntu-latest
