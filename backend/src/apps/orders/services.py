@@ -46,6 +46,16 @@ from src.apps.promotions.models import Coupon
 from src.apps.promotions.services import record_coupon_usage
 from src.apps.vendors.models import CommissionTier, Vendor
 
+RETURN_WINDOW_DAYS = 7
+RETURN_TERMINAL_STATUSES = {ReturnStatus.REJECTED, ReturnStatus.REFUNDED}
+RETURN_ACTIVE_STATUSES = {
+    ReturnStatus.REQUESTED,
+    ReturnStatus.APPROVED,
+    ReturnStatus.REVERSE_PICKUP_ASSIGNED,
+    ReturnStatus.PICKED_UP,
+    ReturnStatus.RECEIVED,
+}
+
 
 def generate_reference(prefix: str, size: int = 10) -> str:
     suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=size))
@@ -459,6 +469,7 @@ async def create_return_request(
     order_item_id: int | None,
     reason: str,
     details: str,
+    quantity: int,
     refund_method: str,
     db: AsyncSession,
 ) -> ReturnRequest:
@@ -469,9 +480,62 @@ async def create_return_request(
     delivered_at = order.delivered_at or order.created_at
     if delivered_at.tzinfo is None:
         delivered_at = delivered_at.replace(tzinfo=utc_now().tzinfo)
-    eligible_until = delivered_at + timedelta(days=7)
+    eligible_until = delivered_at + timedelta(days=RETURN_WINDOW_DAYS)
     if utc_now() > eligible_until:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Return window has expired")
+    if quantity < 1:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Return quantity must be at least 1")
+
+    order_items = (await db.execute(select(OrderItem).where(OrderItem.order_id == order.id))).scalars().all()
+    if not order_items:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Order has no items to return")
+
+    target_item: OrderItem | None = None
+    return_quantity = quantity
+    if order_item_id is not None:
+        target_item = await db.get(OrderItem, order_item_id)
+        if target_item is None or target_item.order_id != order.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order item not found")
+        if target_item.status != VendorOrderStatus.DELIVERED:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only delivered items can be returned")
+        if quantity > target_item.quantity:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Return quantity exceeds ordered quantity")
+        existing_returns = (
+            await db.execute(
+                select(ReturnRequest).where(
+                    ReturnRequest.order_item_id == target_item.id,
+                    ReturnRequest.status.in_(RETURN_ACTIVE_STATUSES),
+                )
+            )
+        ).scalars().all()
+        pending_quantity = sum(req.quantity for req in existing_returns)
+        remaining_quantity = max(target_item.quantity - target_item.returned_quantity - pending_quantity, 0)
+        if quantity > remaining_quantity:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Return quantity exceeds eligible quantity")
+    else:
+        eligible_items = [item for item in order_items if item.status == VendorOrderStatus.DELIVERED]
+        if len(eligible_items) != len(order_items):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Order has mixed return eligibility; submit item-level returns for delivered items",
+            )
+        pending_returns = (
+            await db.execute(
+                select(ReturnRequest).where(
+                    ReturnRequest.order_id == order.id,
+                    ReturnRequest.order_item_id.is_not(None),
+                    ReturnRequest.status.in_(RETURN_ACTIVE_STATUSES),
+                )
+            )
+        ).scalars().all()
+        pending_by_item_id = defaultdict(int)
+        for req in pending_returns:
+            if req.order_item_id:
+                pending_by_item_id[req.order_item_id] += req.quantity
+        remaining_totals = [max(item.quantity - item.returned_quantity - pending_by_item_id[item.id or 0], 0) for item in eligible_items]
+        return_quantity = sum(remaining_totals)
+        if return_quantity <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No eligible quantity for return")
 
     return_request = ReturnRequest(
         order_id=order.id,
@@ -479,16 +543,16 @@ async def create_return_request(
         user_id=user_id,
         reason=reason,
         details=details,
+        quantity=return_quantity,
         refund_method=refund_method,
-        return_window_days=7,
+        return_window_days=RETURN_WINDOW_DAYS,
         eligible_until=eligible_until,
     )
     db.add(return_request)
     await db.flush()
     refund_amount = order.total if order_item_id is None else 0.0
-    if order_item_id is not None:
-        item = await db.get(OrderItem, order_item_id)
-        refund_amount = item.total_price if item else 0.0
+    if target_item is not None:
+        refund_amount = round(target_item.unit_price * return_quantity, 2)
     db.add(
         RefundRecord(
             return_request_id=return_request.id,
@@ -497,22 +561,12 @@ async def create_return_request(
             status=RefundStatus.PENDING,
         )
     )
-    if refund_method == "wallet":
-        await create_wallet_entry(
-            user_id=user_id,
-            amount=int(round(refund_amount * 100)),
-            entry_type=WalletLedgerType.REFUND,
-            reference_type="return_request",
-            reference_id=return_request.id,
-            notes=f"Wallet refund for order {order.order_number}",
-            db=db,
-        )
     await record_return_event(
         return_request_id=return_request.id or 0,
         actor_user_id=user_id,
         event_type="return.requested",
         message="Return request created",
-        payload={"refund_method": refund_method},
+        payload={"refund_method": refund_method, "quantity": return_quantity},
         db=db,
     )
     return return_request
@@ -668,6 +722,68 @@ async def update_return_request_status(
     message: str = "",
     payload: dict[str, object] | None = None,
 ) -> ReturnRequest:
+    transition_map: dict[ReturnStatus, set[ReturnStatus]] = {
+        ReturnStatus.REQUESTED: {ReturnStatus.APPROVED, ReturnStatus.REJECTED},
+        ReturnStatus.APPROVED: {ReturnStatus.REVERSE_PICKUP_ASSIGNED, ReturnStatus.PICKED_UP, ReturnStatus.REJECTED},
+        ReturnStatus.REVERSE_PICKUP_ASSIGNED: {ReturnStatus.PICKED_UP, ReturnStatus.REJECTED},
+        ReturnStatus.PICKED_UP: {ReturnStatus.RECEIVED, ReturnStatus.REJECTED},
+        ReturnStatus.RECEIVED: {ReturnStatus.REFUNDED, ReturnStatus.REJECTED},
+    }
+    if return_request.status in RETURN_TERMINAL_STATUSES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Return request is already closed")
+    allowed_statuses = transition_map.get(return_request.status, set())
+    if status_value != return_request.status and status_value not in allowed_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot transition return from {return_request.status.value} to {status_value.value}",
+        )
+
+    refund = (
+        await db.execute(select(RefundRecord).where(RefundRecord.return_request_id == return_request.id))
+    ).scalars().first()
+    order = await db.get(Order, return_request.order_id)
+    order_item = await db.get(OrderItem, return_request.order_item_id) if return_request.order_item_id else None
+
+    if status_value == ReturnStatus.RECEIVED and refund is not None:
+        refund.status = RefundStatus.PENDING
+        await record_return_event(
+            return_request_id=return_request.id or 0,
+            actor_user_id=actor_user_id,
+            event_type="return.refund_initiated",
+            message="Refund initiated after return inspection",
+            payload={"amount": refund.amount},
+            db=db,
+        )
+    if status_value == ReturnStatus.REJECTED and refund is not None:
+        refund.status = RefundStatus.FAILED
+    if status_value == ReturnStatus.REFUNDED:
+        if return_request.status != ReturnStatus.RECEIVED:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Return must be received before refund settlement")
+        if refund is not None:
+            refund.status = RefundStatus.COMPLETED
+        if return_request.refund_method == "wallet" and refund is not None and refund.amount > 0:
+            await create_wallet_entry(
+                user_id=return_request.user_id,
+                amount=int(round(refund.amount * 100)),
+                entry_type=WalletLedgerType.REFUND,
+                reference_type="return_request",
+                reference_id=return_request.id,
+                notes=f"Wallet refund for return {return_request.id}",
+                db=db,
+            )
+        if order_item is not None:
+            order_item.returned_quantity = min(order_item.quantity, order_item.returned_quantity + return_request.quantity)
+            if order_item.returned_quantity >= order_item.quantity:
+                order_item.status = VendorOrderStatus.RETURNED
+        if order is not None:
+            order.payment_status = OrderPaymentStatus.REFUNDED
+            if order_item is None:
+                order.status = OrderStatus.RETURNED
+            else:
+                order_items = (await db.execute(select(OrderItem).where(OrderItem.order_id == order.id))).scalars().all()
+                if order_items and all(item.returned_quantity >= item.quantity for item in order_items):
+                    order.status = OrderStatus.RETURNED
+
     return_request.status = status_value
     if status_value in {ReturnStatus.REJECTED, ReturnStatus.REFUNDED}:
         return_request.resolved_at = utc_now()
