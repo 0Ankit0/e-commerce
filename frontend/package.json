@@ -13,7 +13,10 @@
     "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md,yml,yaml}\"",
     "typecheck": "tsc --noEmit",
-    "prepare": "husky"
+    "prepare": "husky",
+    "contracts:export": "cd ../backend && uv run python scripts/export_openapi.py --output ../frontend/contracts/openapi.current.json",
+    "contracts:check": "node scripts/check-openapi-drift.mjs",
+    "contracts:sync": "cd ../backend && uv run python scripts/export_openapi.py --output ../frontend/contracts/openapi.snapshot.json"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
