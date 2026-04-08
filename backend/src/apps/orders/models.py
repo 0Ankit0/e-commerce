@@ -95,6 +95,7 @@ class Order(SQLModel, table=True):
         default=None,
         foreign_key="payment_transactions.id",
         index=True,
+        unique=True,
     )
     created_at: datetime = Field(default_factory=utc_now)
     confirmed_at: Optional[datetime] = Field(default=None)
@@ -227,6 +228,22 @@ class CheckoutIdempotency(SQLModel, table=True):
     idempotency_key: str = Field(max_length=255, index=True)
     request_fingerprint: str = Field(default="", max_length=255)
     order_id: int = Field(foreign_key="orders.id", index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class CheckoutFinalization(SQLModel, table=True):
+    __tablename__ = "checkout_finalizations"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    payment_transaction_id: int = Field(
+        foreign_key="payment_transactions.id",
+        index=True,
+        unique=True,
+    )
+    quote_fingerprint: str = Field(default="", max_length=255)
+    boundary_key: str = Field(max_length=255, index=True, unique=True)
+    order_id: int = Field(foreign_key="orders.id", index=True, unique=True)
     created_at: datetime = Field(default_factory=utc_now)
 
 

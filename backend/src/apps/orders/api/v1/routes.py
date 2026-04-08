@@ -128,6 +128,19 @@ async def checkout(
     db: AsyncSession = Depends(get_db),
     analytics: AnalyticsService = Depends(get_analytics),
 ):
+    decoded_payment_transaction_id = decode_id_or_404(payload.payment_transaction_id) if payload.payment_transaction_id else None
+    if decoded_payment_transaction_id is not None:
+        existing_order_for_tx = (
+            await db.execute(
+                select(Order).where(
+                    Order.user_id == current_user.id,
+                    Order.payment_transaction_id == decoded_payment_transaction_id,
+                )
+            )
+        ).scalars().first()
+        if existing_order_for_tx is not None:
+            return {"order": await serialize_order(existing_order_for_tx, db)}
+
     idempotency_key = request.headers.get("Idempotency-Key")
     if idempotency_key:
         existing_key = (
@@ -179,7 +192,7 @@ async def checkout(
         user_id=current_user.id,
         address_id=decode_id_or_404(payload.address_id),
         payment_method=payload.payment_method,
-        payment_transaction_id=decode_id_or_404(payload.payment_transaction_id) if payload.payment_transaction_id else None,
+        payment_transaction_id=decoded_payment_transaction_id,
         notes=payload.notes,
         db=db,
         idempotency_key=idempotency_key,

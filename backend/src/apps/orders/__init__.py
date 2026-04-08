@@ -1,4 +1,5 @@
 from .models import (
+    CheckoutFinalization,
     CheckoutIdempotency,
     InventoryReservation,
     InventoryReservationStatus,
@@ -23,6 +24,7 @@ from .models import (
 
 __all__ = [
     "Order",
+    "CheckoutFinalization",
     "CheckoutIdempotency",
     "InventoryReservation",
     "InventoryReservationStatus",
