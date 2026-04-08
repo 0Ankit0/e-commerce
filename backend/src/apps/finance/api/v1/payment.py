@@ -163,8 +163,13 @@ async def _sync_order_after_transaction(
     tx: PaymentTransaction,
     db: AsyncSession,
 ) -> None:
-    from src.apps.orders.models import Order, OrderPaymentStatus, OrderStatus
-    from src.apps.orders.services import cancel_order, confirm_order_payment, release_expired_inventory_reservations
+    from src.apps.orders.models import Order, OrderPaymentStatus, OrderStatus, ReturnRequest, ReturnStatus
+    from src.apps.orders.services import (
+        cancel_order,
+        confirm_order_payment,
+        release_expired_inventory_reservations,
+        update_return_request_status,
+    )
 
     await release_expired_inventory_reservations(db)
     order = (
@@ -184,6 +189,23 @@ async def _sync_order_after_transaction(
         order.payment_status = OrderPaymentStatus.FAILED
     elif tx.status == PaymentStatus.REFUNDED:
         order.payment_status = OrderPaymentStatus.REFUNDED
+        return_requests = (
+            await db.execute(
+                select(ReturnRequest).where(
+                    ReturnRequest.order_id == order.id,
+                    ReturnRequest.status == ReturnStatus.RECEIVED,
+                )
+            )
+        ).scalars().all()
+        for return_request in return_requests:
+            await update_return_request_status(
+                return_request=return_request,
+                status_value=ReturnStatus.REFUNDED,
+                db=db,
+                actor_user_id=tx.user_id,
+                message="Refund settled via payment gateway",
+                payload={"transaction_id": tx.id},
+            )
 
 
 async def _notify_order_transaction_state(tx: PaymentTransaction, db: AsyncSession) -> None:

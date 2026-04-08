@@ -119,6 +119,7 @@ class OrderItem(SQLModel, table=True):
     quantity: int = Field(ge=1)
     unit_price: float = Field(ge=0)
     total_price: float = Field(ge=0)
+    returned_quantity: int = Field(default=0, ge=0)
     status: VendorOrderStatus = Field(default=VendorOrderStatus.PENDING)
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -157,6 +158,7 @@ class ReturnRequest(SQLModel, table=True):
     user_id: int = Field(foreign_key="user.id", index=True)
     reason: str = Field(max_length=255)
     details: str = Field(default="", max_length=1000)
+    quantity: int = Field(default=1, ge=1)
     refund_method: str = Field(default="original", max_length=30)
     status: ReturnStatus = Field(default=ReturnStatus.REQUESTED)
     return_window_days: int = Field(default=7, ge=0)

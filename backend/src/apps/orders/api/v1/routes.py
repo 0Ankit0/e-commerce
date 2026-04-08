@@ -68,6 +68,7 @@ class CheckoutRequest(BaseModel):
 class ReturnRequestPayload(BaseModel):
     order_id: str
     order_item_id: str | None = None
+    quantity: int = Field(default=1, ge=1)
     reason: str = Field(min_length=3, max_length=255)
     details: str = ""
     refund_method: str = "original"
@@ -426,6 +427,7 @@ async def request_return(
         order_item_id=decode_id_or_404(payload.order_item_id) if payload.order_item_id else None,
         reason=payload.reason,
         details=payload.details,
+        quantity=payload.quantity,
         refund_method=payload.refund_method,
         db=db,
     )
@@ -875,13 +877,14 @@ async def export_admin_report(
     writer = csv.writer(buffer)
     if report_type == "returns":
         returns = (await db.execute(select(ReturnRequest).order_by(ReturnRequest.created_at.desc()))).scalars().all()
-        writer.writerow(["return_id", "order_id", "status", "refund_method", "eligible_until", "created_at"])
+        writer.writerow(["return_id", "order_id", "status", "quantity", "refund_method", "eligible_until", "created_at"])
         for return_request in returns:
             writer.writerow(
                 [
                     encode_id(return_request.id or 0),
                     encode_id(return_request.order_id),
                     return_request.status.value,
+                    return_request.quantity,
                     return_request.refund_method,
                     return_request.eligible_until.isoformat() if return_request.eligible_until else "",
                     return_request.created_at.isoformat(),
@@ -961,6 +964,7 @@ def _serialize_return_request(return_request: ReturnRequest) -> dict[str, object
         "user_id": encode_id(return_request.user_id),
         "reason": return_request.reason,
         "details": return_request.details,
+        "quantity": return_request.quantity,
         "refund_method": return_request.refund_method,
         "status": return_request.status.value,
         "return_window_days": return_request.return_window_days,
