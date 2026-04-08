@@ -21,6 +21,7 @@ from src.apps.analytics.service import AnalyticsService
 from src.apps.analytics.events import UserEvents
 from src.apps.iam.models.user import UserProfile
 from src.apps.observability.service import record_admin_privilege_change
+from src.apps.iam.security import PrivilegedAction, enforce_privileged_action
 
 router = APIRouter(prefix="/users")
 
@@ -328,6 +329,13 @@ async def update_user(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
+        )
+    if user_update.is_active is not None or user_update.is_superuser is not None:
+        await enforce_privileged_action(
+            db=db,
+            request=request,
+            current_user=current_user,
+            action=PrivilegedAction.USER_STATUS_EDIT,
         )
     
     # Update fields

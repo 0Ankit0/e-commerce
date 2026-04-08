@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -14,6 +14,7 @@ from src.apps.core.settings_store import (
 from src.apps.iam.api.deps import get_current_active_superuser, get_db
 from src.apps.iam.models.user import User
 from src.apps.system.schemas import GeneralSettingRead
+from src.apps.iam.security import PrivilegedAction, enforce_privileged_action
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -62,9 +63,16 @@ async def get_admin_settings(
 async def update_admin_setting(
     key: str,
     payload: GeneralSettingUpdateRequest,
-    _: User = Depends(get_current_active_superuser),
+    request: Request,
+    current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    await enforce_privileged_action(
+        db=db,
+        request=request,
+        current_user=current_user,
+        action=PrivilegedAction.SECURITY_SETTINGS_EDIT,
+    )
     setting = (await db.execute(select(GeneralSetting).where(GeneralSetting.key == key))).scalars().first()
     env_snapshot = get_environment_settings_snapshot()
     if setting is None and key not in env_snapshot:

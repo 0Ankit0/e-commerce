@@ -17,10 +17,11 @@ from src.apps.iam.models.user import User
 from src.apps.iam.models.login_attempt import LoginAttempt
 from src.apps.iam.models.token_tracking import TokenTracking
 from src.apps.iam.schemas.token import Token
-from src.apps.iam.schemas.user import VerifyOTPRequest, DisableOTPRequest
+from src.apps.iam.schemas.user import VerifyOTPRequest, DisableOTPRequest, StepUpOTPRequest
 from src.apps.core.cache import RedisCache
 from src.apps.iam.utils.ip_access import revoke_tokens_for_ip, get_client_ip
 from src.apps.iam.utils.hashid import encode_id
+from src.apps.iam.security import PrivilegedAction, issue_step_up_token
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
 from src.apps.analytics.events import AuthEvents
@@ -28,6 +29,7 @@ from src.apps.observability.models import ObservabilityLogEntry
 from src.apps.observability.service import (
     create_log_entry,
     record_failed_login_event,
+    record_privileged_action_audit,
     record_successful_login_event,
     record_token_event,
 )
@@ -431,6 +433,65 @@ async def validate_otp_login(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred during OTP validation"
         )
+
+
+@router.post("/otp/step-up/verify")
+async def verify_otp_step_up(
+    payload: StepUpOTPRequest,
+    request: Request,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        action = PrivilegedAction(payload.action)
+    except ValueError:
+        await record_privileged_action_audit(
+            db,
+            actor_user_id=current_user.id,
+            action=payload.action,
+            outcome="failure",
+            request=request,
+            metadata={"reason": "invalid_action"},
+        )
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported privileged action")
+
+    if not current_user.otp_enabled or not current_user.otp_verified:
+        await record_privileged_action_audit(
+            db,
+            actor_user_id=current_user.id,
+            action=action.value,
+            outcome="failure",
+            request=request,
+            metadata={"reason": "otp_not_enabled"},
+        )
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="OTP must be enabled for this account")
+
+    totp = pyotp.TOTP(current_user.otp_base32)
+    if not totp.verify(payload.otp_code):
+        await record_privileged_action_audit(
+            db,
+            actor_user_id=current_user.id,
+            action=action.value,
+            outcome="failure",
+            request=request,
+            metadata={"reason": "invalid_otp"},
+        )
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OTP code")
+
+    token_payload = await issue_step_up_token(user_id=current_user.id, action=action)
+    await record_privileged_action_audit(
+        db,
+        actor_user_id=current_user.id,
+        action=action.value,
+        outcome="success",
+        request=request,
+        metadata={"expires_at": token_payload["expires_at"]},
+    )
+    await db.commit()
+    return token_payload
 
 
 @router.get("/admin/security/admin-otp-status")

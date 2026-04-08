@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import io
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, func
@@ -44,6 +44,7 @@ from src.apps.vendors.services import (
     serialize_vendor_payout,
     serialize_vendor_payout_request,
 )
+from src.apps.iam.security import PrivilegedAction, enforce_privileged_action
 
 router = APIRouter()
 
@@ -564,9 +565,16 @@ async def reject_vendor(
 async def suspend_vendor(
     vendor_id: str,
     payload: VendorStatusUpdateRequest,
+    request: Request,
     admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
+    await enforce_privileged_action(
+        db=db,
+        request=request,
+        current_user=admin_user,
+        action=PrivilegedAction.USER_STATUS_EDIT,
+    )
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
     assert_vendor_status_transition(vendor, VendorStatus.SUSPENDED)
     mark_vendor_status(vendor, VendorStatus.SUSPENDED, payload.reason)
@@ -875,9 +883,16 @@ async def list_admin_vendor_payout_requests(
 @router.post("/admin/vendor-payout-requests/{request_id}/approve")
 async def approve_vendor_payout_request(
     request_id: str,
-    _: User = Depends(get_current_active_superuser),
+    request: Request,
+    admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
+    await enforce_privileged_action(
+        db=db,
+        request=request,
+        current_user=admin_user,
+        action=PrivilegedAction.PAYOUT_APPROVE,
+    )
     payout_request = await db.get(VendorPayoutRequest, decode_id_or_404(request_id))
     if payout_request is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payout request not found")
@@ -920,9 +935,16 @@ async def approve_vendor_payout_request(
 @router.post("/admin/vendor-payouts/batches", status_code=status.HTTP_201_CREATED)
 async def create_vendor_payout_batch(
     payload: PayoutBatchCreateRequest,
-    _: User = Depends(get_current_active_superuser),
+    request: Request,
+    admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
+    await enforce_privileged_action(
+        db=db,
+        request=request,
+        current_user=admin_user,
+        action=PrivilegedAction.PAYOUT_APPROVE,
+    )
     decoded_ids = [decode_id_or_404(request_id) for request_id in payload.payout_request_ids]
     payout_requests = (
         await db.execute(select(VendorPayoutRequest).where(VendorPayoutRequest.id.in_(decoded_ids)))

@@ -1,7 +1,7 @@
 """
 RBAC API endpoints — roles, permissions, assignments and Casbin integration.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, func, col
 from src.db.session import get_session
@@ -37,6 +37,7 @@ from src.apps.iam.utils.hashid import decode_id_or_404
 from src.apps.core.schemas import PaginatedResponse
 from src.apps.core.cache import RedisCache
 from src.apps.observability.service import record_admin_role_change
+from src.apps.iam.security import PrivilegedAction, enforce_privileged_action
 
 
 router = APIRouter()
@@ -214,10 +215,17 @@ async def list_permissions(
 @router.post("/users/assign-role", status_code=status.HTTP_200_OK, response_model=RoleAssignmentResponse)
 async def assign_role(
     assignment: RoleAssignment,
+    request: Request,
     current_user: User = Depends(get_current_active_superuser),
     session: AsyncSession = Depends(get_session),
 ):
     """Assign a role to a user."""
+    await enforce_privileged_action(
+        db=session,
+        request=request,
+        current_user=current_user,
+        action=PrivilegedAction.ROLE_ASSIGN,
+    )
     user_db_id = decode_id_or_404(assignment.user_id)
     role_db_id = decode_id_or_404(assignment.role_id)
     user_role = await assign_role_to_user(
@@ -240,10 +248,17 @@ async def assign_role(
 @router.delete("/users/remove-role", status_code=status.HTTP_200_OK)
 async def remove_role(
     assignment: RoleAssignment,
+    request: Request,
     current_user: User = Depends(get_current_active_superuser),
     session: AsyncSession = Depends(get_session),
 ):
     """Remove a role from a user."""
+    await enforce_privileged_action(
+        db=session,
+        request=request,
+        current_user=current_user,
+        action=PrivilegedAction.ROLE_REMOVE,
+    )
     user_db_id = decode_id_or_404(assignment.user_id)
     role_db_id = decode_id_or_404(assignment.role_id)
     result = await remove_role_from_user(

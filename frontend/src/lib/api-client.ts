@@ -1,4 +1,6 @@
 import axios from 'axios';
+import type { AxiosError } from 'axios';
+import type { PrivilegedActionChallengeDetail, StepUpVerificationResponse } from '@/types';
 
 const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
@@ -88,6 +90,31 @@ apiClient.interceptors.response.use(
         return Promise.reject(refreshError);
       } finally {
         isRefreshing = false;
+      }
+    }
+
+    const challenge = (error as AxiosError<{ detail?: PrivilegedActionChallengeDetail }>)?.response?.data?.detail;
+    if (
+      error.response?.status === 403 &&
+      challenge?.code === 'OTP_CHALLENGE_REQUIRED' &&
+      !originalRequest?._stepUpRetry &&
+      typeof window !== 'undefined'
+    ) {
+      originalRequest._stepUpRetry = true;
+      const otpCode = window.prompt('Enter your 6-digit OTP code to continue this admin action:');
+      if (!otpCode) {
+        return Promise.reject(error);
+      }
+      try {
+        const verifyResponse = await apiClient.post<StepUpVerificationResponse>('/auth/otp/step-up/verify', {
+          otp_code: otpCode.trim(),
+          action: challenge.action,
+        });
+        originalRequest.headers = originalRequest.headers ?? {};
+        originalRequest.headers['X-Privileged-Auth'] = verifyResponse.data.step_up_token;
+        return apiClient(originalRequest);
+      } catch (stepUpError) {
+        return Promise.reject(stepUpError);
       }
     }
 

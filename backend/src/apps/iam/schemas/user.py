@@ -88,6 +88,11 @@ class VerifyOTPRequest(BaseModel):
     temp_token: str
 
 
+class StepUpOTPRequest(BaseModel):
+    otp_code: str
+    action: str
+
+
 class DisableOTPRequest(BaseModel):
     password: str
 

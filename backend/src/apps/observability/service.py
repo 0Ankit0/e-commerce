@@ -528,6 +528,29 @@ async def record_admin_role_change(
     return entry
 
 
+async def record_privileged_action_audit(
+    db: AsyncSession,
+    *,
+    actor_user_id: int,
+    action: str,
+    outcome: str,
+    request: Request | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> ObservabilityLogEntry:
+    event_code = f"admin.privileged_action.{outcome}"
+    return await create_log_entry(
+        db,
+        level="WARNING" if outcome == "failure" else "INFO",
+        logger_name="admin.privileged_action",
+        source="admin",
+        message=f"Privileged action {outcome}",
+        event_code=event_code,
+        metadata={"action": action, **(metadata or {})},
+        request=request,
+        user_id=actor_user_id,
+    )
+
+
 async def record_rate_limit_event(
     db: AsyncSession,
     *,
