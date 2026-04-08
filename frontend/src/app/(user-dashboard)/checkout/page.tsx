@@ -18,9 +18,15 @@ import { formatCurrency, titleCaseStatus } from '@/lib/commerce-format';
 import {
   buildPaymentCallbackUrl,
   clearPendingCheckoutPayment,
+  getPendingCheckoutPayment,
   savePendingCheckoutPayment,
   submitEsewaPaymentForm,
 } from '@/lib/checkout-payment';
+import {
+  createPaymentInitiationPayload,
+  extractGatewayHandoff,
+  isGatewayCheckoutMethod,
+} from '@/lib/checkout-orchestration';
 import { useAuthStore } from '@/store/auth-store';
 
 const CORE_PAYMENT_METHODS = [
@@ -138,6 +144,14 @@ export default function CheckoutPage() {
     }
   }, [paymentMethod, paymentMethods]);
 
+  useEffect(() => {
+    const pending = getPendingCheckoutPayment();
+    if (!pending) return;
+    setMessage(
+      `You have a pending ${pending.paymentMethod.toUpperCase()} payment. If you closed the provider tab, finish callback verification or retry checkout.`
+    );
+  }, []);
+
   async function handleCreateAddress(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -179,7 +193,7 @@ export default function CheckoutPage() {
     }
 
     try {
-      if (isSupportedGatewayProvider(paymentMethod)) {
+      if (isGatewayCheckoutMethod(paymentMethod) && isSupportedGatewayProvider(paymentMethod)) {
         const gatewayProvider = paymentMethod;
         const purchaseOrderId = `CHK-${Date.now()}`;
         const customerName =
@@ -187,17 +201,18 @@ export default function CheckoutPage() {
           user?.username ||
           undefined;
         const callbackUrl = buildPaymentCallbackUrl(gatewayProvider);
-        const initiated = await initiatePayment.mutateAsync({
-          provider: gatewayProvider,
-          amount: gatewayProvider === 'esewa' ? Math.round(quoteQuery.data.total) : Math.round(quoteQuery.data.total * 100),
-          purchase_order_id: purchaseOrderId,
-          purchase_order_name: `Checkout ${purchaseOrderId}`,
-          return_url: callbackUrl,
-          website_url: window.location.origin,
-          customer_name: customerName,
-          customer_email: user?.email,
-          customer_phone: user?.phone,
-        });
+        const initiated = await initiatePayment.mutateAsync(
+          createPaymentInitiationPayload({
+            method: gatewayProvider,
+            total: quoteQuery.data.total,
+            callbackUrl,
+            websiteUrl: window.location.origin,
+            purchaseOrderId,
+            customerName,
+            customerEmail: user?.email,
+            customerPhone: user?.phone,
+          })
+        );
 
         savePendingCheckoutPayment({
           addressId: effectiveAddressId,
@@ -209,35 +224,23 @@ export default function CheckoutPage() {
           createdAt: new Date().toISOString(),
         });
 
-        if (gatewayProvider === 'esewa') {
-          const esewaPayload = initiated.extra ?? {};
-          const formAction =
-            typeof esewaPayload.form_action === 'string' ? esewaPayload.form_action : null;
-          const formFields =
-            esewaPayload.form_fields &&
-            typeof esewaPayload.form_fields === 'object' &&
-            !Array.isArray(esewaPayload.form_fields)
-              ? (esewaPayload.form_fields as Record<string, unknown>)
-              : null;
+        let handoff: ReturnType<typeof extractGatewayHandoff>;
+        try {
+          handoff = extractGatewayHandoff(initiated);
+        } catch (error) {
+          clearPendingCheckoutPayment();
+          throw error;
+        }
 
-          if (!formAction || !formFields) {
-            clearPendingCheckoutPayment();
-            throw new Error('The backend did not return the eSewa handoff form.');
-          }
-
+        if (handoff.type === 'form') {
           setMessage('Redirecting to eSewa to complete payment...');
-          submitEsewaPaymentForm(formAction, formFields);
+          submitEsewaPaymentForm(handoff.action, handoff.fields);
           return;
         }
 
-        if (!initiated.payment_url) {
-          clearPendingCheckoutPayment();
-          throw new Error(`The backend did not return a ${gatewayProvider} payment URL.`);
-        }
-
-        const providerLabel = REDIRECT_GATEWAY_LABELS[gatewayProvider];
+        const providerLabel = REDIRECT_GATEWAY_LABELS[gatewayProvider as Exclude<SupportedGatewayProvider, 'esewa'>] ?? gatewayProvider;
         setMessage(`Redirecting to ${providerLabel} to complete payment...`);
-        window.location.assign(initiated.payment_url);
+        window.location.assign(handoff.url);
         return;
       }
 
