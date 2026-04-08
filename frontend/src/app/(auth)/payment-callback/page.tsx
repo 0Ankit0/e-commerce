@@ -6,7 +6,7 @@ import { useVerifyPayment } from '@/hooks/use-finances';
 import { useCreateOrder } from '@/hooks/use-commerce';
 import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import Link from 'next/link';
-import type { PaymentProvider } from '@/types';
+import type { PaymentProvider, VerifyPaymentRequest } from '@/types';
 import { clearPendingCheckoutPayment, getPendingCheckoutPayment } from '@/lib/checkout-payment';
 
 /**
@@ -35,31 +35,84 @@ function PaymentCallbackInner() {
 
     async function finalizePayment() {
       const provider = (searchParams.get('provider') || 'khalti') as PaymentProvider;
-      const pidx =
-        searchParams.get('pidx') ??
-        searchParams.get('razorpay_payment_id') ??
-        undefined;
+      const khaltiPidx = searchParams.get('pidx') ?? undefined;
+      const razorpayPaymentId = searchParams.get('razorpay_payment_id') ?? undefined;
+      const razorpayOrderId = searchParams.get('razorpay_order_id') ?? undefined;
+      const razorpaySignature = searchParams.get('razorpay_signature') ?? undefined;
       const data = searchParams.get('data') ?? undefined;
-      const oid = searchParams.get('oid') ?? searchParams.get('razorpay_order_id') ?? undefined;
-      const refId =
-        searchParams.get('refId') ?? searchParams.get('razorpay_signature') ?? undefined;
+      const oid = searchParams.get('oid') ?? undefined;
+      const refId = searchParams.get('refId') ?? undefined;
+      const queryTransactionId = searchParams.get('transaction_id') ?? undefined;
       const pendingCheckout = getPendingCheckoutPayment();
+      const transactionId = queryTransactionId ?? pendingCheckout?.transactionId;
 
-      if (!pidx && !data) {
+      const verifyPayload: VerifyPaymentRequest = { provider };
+      const missingFields: string[] = [];
+
+      switch (provider) {
+        case 'khalti': {
+          const khaltiToken = khaltiPidx ?? searchParams.get('token') ?? undefined;
+          if (!khaltiToken) {
+            missingFields.push('pidx');
+            break;
+          }
+          verifyPayload.pidx = khaltiToken;
+          if (transactionId) {
+            verifyPayload.transaction_id = transactionId;
+          }
+          break;
+        }
+        case 'esewa': {
+          if (data) {
+            verifyPayload.data = data;
+          } else if (oid && refId) {
+            verifyPayload.oid = oid;
+            verifyPayload.refId = refId;
+          } else {
+            missingFields.push('data or legacy pair: oid + refId');
+          }
+          if (transactionId) {
+            verifyPayload.transaction_id = transactionId;
+          }
+          break;
+        }
+        case 'razorpay': {
+          if (!razorpayPaymentId) missingFields.push('razorpay_payment_id');
+          if (!razorpayOrderId) missingFields.push('razorpay_order_id');
+          if (!razorpaySignature) missingFields.push('razorpay_signature');
+          if (missingFields.length === 0) {
+            verifyPayload.pidx = razorpayPaymentId;
+            verifyPayload.oid = razorpayOrderId;
+            verifyPayload.refId = razorpaySignature;
+          }
+          if (transactionId) {
+            verifyPayload.transaction_id = transactionId;
+          }
+          break;
+        }
+        case 'stripe':
+        case 'paypal': {
+          if (!transactionId) {
+            missingFields.push('transaction_id (query or pending checkout)');
+            break;
+          }
+          verifyPayload.transaction_id = transactionId;
+          break;
+        }
+        default:
+          missingFields.push('provider');
+      }
+
+      if (missingFields.length > 0) {
         setStatus('error');
-        setMessage('Missing payment verification data in URL.');
+        setMessage(
+          `Missing required callback field(s) for ${provider}: ${missingFields.join(', ')}.`
+        );
         return;
       }
 
       try {
-        const result = await verifyPayment.mutateAsync({
-          provider,
-          pidx,
-          data,
-          transaction_id: pendingCheckout?.transactionId,
-          oid,
-          refId,
-        });
+        const result = await verifyPayment.mutateAsync(verifyPayload);
 
         if (result.status !== 'completed') {
           if (result.status === 'failed' || result.status === 'cancelled') {
