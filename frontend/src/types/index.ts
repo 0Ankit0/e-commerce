@@ -10,3 +10,4 @@ export * from './websocket';
 export * from './system';
 export * from './observability';
 export * from './commerce';
+export * from './contracts';
