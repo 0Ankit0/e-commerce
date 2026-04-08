@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import timedelta
+import hashlib
 import json
 import random
 import string
@@ -20,6 +21,7 @@ from src.apps.finance.services.stored_value import create_wallet_entry, create_w
 from src.apps.logistics.services import quote_shipping
 from src.apps.orders.models import (
     CheckoutIdempotency,
+    CheckoutFinalization,
     InventoryReservation,
     InventoryReservationStatus,
     Order,
@@ -58,6 +60,11 @@ def commission_rate(tier: CommissionTier) -> float:
     }[tier]
 
 
+def build_checkout_boundary_key(*, user_id: int, quote_fingerprint: str, payment_transaction_id: int) -> str:
+    raw = f"{user_id}:{quote_fingerprint}:{payment_transaction_id}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 async def create_order_from_cart(
     *,
     user_id: int,
@@ -70,6 +77,41 @@ async def create_order_from_cart(
     request_fingerprint: str = "",
     shipping_option_code: str | None = None,
 ) -> Order:
+    transaction = None
+    boundary_key: str | None = None
+    if payment_transaction_id:
+        transaction = (
+            await db.execute(
+                select(PaymentTransaction).where(PaymentTransaction.id == payment_transaction_id).with_for_update()
+            )
+        ).scalars().first()
+        if transaction is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment transaction not found")
+        if transaction.user_id and transaction.user_id != user_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Payment transaction does not belong to user")
+        existing_order_for_tx = (
+            await db.execute(select(Order).where(Order.payment_transaction_id == payment_transaction_id))
+        ).scalars().first()
+        if existing_order_for_tx is not None:
+            if existing_order_for_tx.user_id != user_id:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Payment transaction already finalized")
+            return existing_order_for_tx
+        if request_fingerprint:
+            boundary_key = build_checkout_boundary_key(
+                user_id=user_id,
+                quote_fingerprint=request_fingerprint,
+                payment_transaction_id=payment_transaction_id,
+            )
+            existing_finalization = (
+                await db.execute(
+                    select(CheckoutFinalization).where(CheckoutFinalization.boundary_key == boundary_key)
+                )
+            ).scalars().first()
+            if existing_finalization:
+                existing_order = await db.get(Order, existing_finalization.order_id)
+                if existing_order is not None:
+                    return existing_order
+
     address = await db.get(Address, address_id)
     if address is None or address.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Address not found")
@@ -109,9 +151,6 @@ async def create_order_from_cart(
         payment_status = OrderPaymentStatus.PAID
         order_status = OrderStatus.CONFIRMED
     elif payment_transaction_id:
-        transaction = await db.get(PaymentTransaction, payment_transaction_id)
-        if transaction is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment transaction not found")
         if transaction.status == PaymentStatus.COMPLETED:
             payment_status = OrderPaymentStatus.PAID
             order_status = OrderStatus.CONFIRMED
@@ -340,6 +379,16 @@ async def create_order_from_cart(
                 idempotency_key=idempotency_key,
                 request_fingerprint=request_fingerprint,
                 order_id=order.id,
+            )
+        )
+    if payment_transaction_id and boundary_key:
+        db.add(
+            CheckoutFinalization(
+                user_id=user_id,
+                payment_transaction_id=payment_transaction_id,
+                quote_fingerprint=request_fingerprint,
+                boundary_key=boundary_key,
+                order_id=order.id or 0,
             )
         )
     await db.flush()

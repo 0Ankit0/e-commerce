@@ -218,6 +218,29 @@ async def _notify_order_transaction_state(tx: PaymentTransaction, db: AsyncSessi
     )
 
 
+def _apply_transaction_status_from_event(
+    *,
+    tx: PaymentTransaction,
+    event_type: str,
+) -> bool:
+    normalized = (event_type or "").lower()
+    next_status = PaymentStatus.COMPLETED
+    if "refund" in normalized:
+        next_status = PaymentStatus.REFUNDED
+    elif "cancel" in normalized:
+        next_status = PaymentStatus.CANCELLED
+
+    if tx.status == next_status:
+        return False
+
+    tx.status = next_status
+    if next_status == PaymentStatus.COMPLETED:
+        tx.captured_amount = tx.amount
+    elif next_status == PaymentStatus.REFUNDED:
+        tx.refunded_amount = tx.amount
+    return True
+
+
 # ---------------------------------------------------------------------------
 # List enabled providers
 # ---------------------------------------------------------------------------
@@ -360,6 +383,7 @@ async def ingest_payment_webhook(
         payload = {}
     provider_pidx = str(payload.get("provider_pidx") or payload.get("pidx") or payload.get("session_id") or "")
     tx = None
+    is_state_change = False
     if provider_pidx:
         tx = (
             await db.execute(
@@ -370,26 +394,19 @@ async def ingest_payment_webhook(
             )
         ).scalars().first()
     if tx:
-        event_type = webhook.event_type.lower()
-        if "refund" in event_type:
-            tx.status = PaymentStatus.REFUNDED
-            tx.refunded_amount = tx.amount
-        elif "cancel" in event_type:
-            tx.status = PaymentStatus.CANCELLED
-        else:
-            tx.status = PaymentStatus.COMPLETED
-            tx.captured_amount = tx.amount
+        is_state_change = _apply_transaction_status_from_event(tx=tx, event_type=webhook.event_type)
         webhook.transaction_id = tx.id
-        await _sync_order_after_transaction(tx, db)
+        if is_state_change:
+            await _sync_order_after_transaction(tx, db)
         await _log_payment_audit(
             event_type="webhook.received",
             transaction_id=tx.id,
             actor_user_id=None,
-            payload=payload,
+            payload={**payload, "state_changed": is_state_change},
             db=db,
         )
     await db.commit()
-    if tx:
+    if tx and is_state_change:
         await _notify_order_transaction_state(tx, db)
     return {"received": True, "verified": True}
 
