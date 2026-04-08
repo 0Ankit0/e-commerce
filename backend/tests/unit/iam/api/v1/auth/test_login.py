@@ -166,3 +166,39 @@ class TestLogin:
         item = status_resp.json()["items"][0]
         assert item["username"] == "otpstatusadmin"
         assert item["last_verified_state"] == "pending_verification"
+        await db_session.refresh(admin)
+        view_logs = (
+            await db_session.execute(
+                select(ObservabilityLogEntry).where(
+                    ObservabilityLogEntry.user_id == admin.id,
+                    ObservabilityLogEntry.event_code == "auth.admin_otp.status_viewed",
+                )
+            )
+        ).scalars().all()
+        assert view_logs
+
+    @pytest.mark.asyncio
+    async def test_admin_otp_status_endpoint_rejects_non_admin(self, client: AsyncClient, db_session: AsyncSession):
+        hashed_pw = security.get_password_hash("TestPass123")
+        user = UserFactory.build(
+            username="otpstatususer",
+            email="otpstatususer@example.com",
+            hashed_password=hashed_pw,
+            is_active=True,
+            is_superuser=False,
+            is_confirmed=True,
+        )
+        db_session.add(user)
+        await db_session.commit()
+
+        login_resp = await client.post(
+            "/api/v1/auth/login/?set_cookie=false",
+            json={"username": "otpstatususer", "password": "TestPass123"},
+        )
+        token = login_resp.json()["access"]
+
+        status_resp = await client.get(
+            "/api/v1/auth/admin/security/admin-otp-status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert status_resp.status_code == 403

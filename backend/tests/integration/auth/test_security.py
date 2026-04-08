@@ -1,8 +1,11 @@
+import asyncio
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from src.apps.core import security
+from src.apps.iam.models.token_tracking import TokenTracking
 from src.apps.iam.models.user import User
 
 
@@ -131,3 +134,120 @@ class TestAuthenticationSecurity:
         )
         assert response.status_code == 200
         assert "access" in response.json()
+
+    @pytest.mark.asyncio
+    async def test_lockout_threshold_boundary_blocks_on_next_attempt(self, client: AsyncClient, monkeypatch):
+        monkeypatch.setattr("src.apps.core.config.settings.MAX_LOGIN_ATTEMPTS", 3)
+        monkeypatch.setattr("src.apps.core.config.settings.ACCOUNT_LOCKOUT_DURATION_MINUTES", 5)
+
+        await client.post(
+            "/api/v1/auth/signup/?set_cookie=false",
+            json={
+                "username": "lockout_boundary",
+                "email": "lockout-boundary@example.com",
+                "password": "ValidPass123",
+                "confirm_password": "ValidPass123",
+            },
+        )
+
+        for _ in range(3):
+            bad_login = await client.post(
+                "/api/v1/auth/login/?set_cookie=false",
+                json={"username": "lockout_boundary", "password": "WrongPass"},
+            )
+            assert bad_login.status_code == 400
+
+        blocked = await client.post(
+            "/api/v1/auth/login/?set_cookie=false",
+            json={"username": "lockout_boundary", "password": "WrongPass"},
+        )
+        assert blocked.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_role_change_during_active_session_revokes_privileged_access(self, client: AsyncClient, db_session: AsyncSession):
+        admin = User(
+            username="active_session_admin",
+            email="active-session-admin@example.com",
+            hashed_password=security.get_password_hash("ValidPass123"),
+            is_active=True,
+            is_superuser=True,
+            is_confirmed=True,
+        )
+        db_session.add(admin)
+        await db_session.commit()
+
+        login_resp = await client.post(
+            "/api/v1/auth/login/?set_cookie=false",
+            json={"username": "active_session_admin", "password": "ValidPass123"},
+        )
+        token = login_resp.json()["access"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        allowed = await client.get("/api/v1/users/", headers=headers)
+        assert allowed.status_code == 200
+
+        db_admin = (await db_session.execute(select(User).where(User.username == "active_session_admin"))).scalars().one()
+        db_admin.is_superuser = False
+        await db_session.commit()
+
+        forbidden = await client.get("/api/v1/users/", headers=headers)
+        assert forbidden.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_disabled_user_token_is_rejected(self, client: AsyncClient, db_session: AsyncSession):
+        user = User(
+            username="disabled_token_user",
+            email="disabled-token@example.com",
+            hashed_password=security.get_password_hash("ValidPass123"),
+            is_active=True,
+            is_superuser=False,
+            is_confirmed=True,
+        )
+        db_session.add(user)
+        await db_session.commit()
+
+        login_resp = await client.post(
+            "/api/v1/auth/login/?set_cookie=false",
+            json={"username": "disabled_token_user", "password": "ValidPass123"},
+        )
+        token = login_resp.json()["access"]
+
+        db_user = (await db_session.execute(select(User).where(User.username == "disabled_token_user"))).scalars().one()
+        db_user.is_active = False
+        await db_session.commit()
+
+        me_resp = await client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {token}"})
+        assert me_resp.status_code == 400
+        assert "inactive" in me_resp.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_token_churn_spike_keeps_only_latest_ip_tokens_active(self, client: AsyncClient, db_session: AsyncSession):
+        username = "token_churn_user"
+        await client.post(
+            "/api/v1/auth/signup/?set_cookie=false",
+            json={
+                "username": username,
+                "email": "token-churn@example.com",
+                "password": "ValidPass123",
+                "confirm_password": "ValidPass123",
+            },
+        )
+
+        for _ in range(6):
+            login_resp = await client.post(
+                "/api/v1/auth/login/?set_cookie=false",
+                json={"username": username, "password": "ValidPass123"},
+            )
+            if login_resp.status_code == 429:
+                await asyncio.sleep(1)
+                login_resp = await client.post(
+                    "/api/v1/auth/login/?set_cookie=false",
+                    json={"username": username, "password": "ValidPass123"},
+                )
+            assert login_resp.status_code == 200, login_resp.text
+
+        db_user = (await db_session.execute(select(User).where(User.username == username))).scalars().one()
+        tokens = (await db_session.execute(select(TokenTracking).where(TokenTracking.user_id == db_user.id))).scalars().all()
+        active_tokens = [token for token in tokens if token.is_active]
+        assert len(active_tokens) == 2
+        assert len(tokens) >= 12
