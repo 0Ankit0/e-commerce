@@ -3,6 +3,8 @@ import type {
   BranchAgent,
   BranchException,
   BranchKpiResult,
+  BranchInventoryItem,
+  BranchInventoryMovement,
   BranchOperationsSnapshot,
   BranchSupervisorRole,
   ReportingBoundary,
@@ -164,4 +166,61 @@ export function triageException(exception: BranchException): BranchException {
     status: 'triaged',
     triagedAt: new Date().toISOString(),
   };
+}
+
+export function getBranchInventorySummary(branchId: string, inventory: BranchInventoryItem[]) {
+  const items = inventory.filter((item) => item.branchId === branchId);
+  const skuCount = items.length;
+  const lowStockCount = items.filter((item) => item.onHand <= item.reorderPoint).length;
+  const totalOnHand = items.reduce((total, item) => total + item.onHand, 0);
+  const totalReserved = items.reduce((total, item) => total + item.reserved, 0);
+  return { skuCount, lowStockCount, totalOnHand, totalReserved };
+}
+
+export function getAgentPerformance(branchId: string, agents: BranchAgent[], shipments: ShipmentHistoryEvent[]) {
+  return agents
+    .filter((agent) => agent.branchId === branchId)
+    .map((agent) => {
+      const agentShipments = shipments.filter((event) => event.branchId === branchId && event.agentId === agent.id);
+      const delivered = agentShipments.filter((event) => event.status === 'delivered').length;
+      const failed = agentShipments.filter((event) => event.status === 'failed').length;
+      const openAssignments = agentShipments.filter((event) => event.status === 'assigned' || event.status === 'in_transit').length;
+      const successRate = delivered + failed > 0 ? Number(((delivered / (delivered + failed)) * 100).toFixed(2)) : 0;
+      return {
+        agentId: agent.id,
+        name: agent.name,
+        shift: agent.shift,
+        active: agent.active,
+        delivered,
+        failed,
+        openAssignments,
+        successRate,
+      };
+    })
+    .sort((a, b) => b.delivered - a.delivered);
+}
+
+export function getSlaBreachTrend(branchId: string, exceptions: BranchException[], boundary: ReportingBoundary) {
+  const openBreaches = exceptions.filter(
+    (exception) => exception.branchId === branchId && exception.status === 'open' && hoursSince(exception.createdAt) > 4,
+  );
+  const breachesByDay = new Map<string, number>();
+  for (const breach of openBreaches) {
+    const dayKey = resolveOperationalDate(breach.createdAt, boundary);
+    breachesByDay.set(dayKey, (breachesByDay.get(dayKey) ?? 0) + 1);
+  }
+  return [...breachesByDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({ date, breaches: count }));
+}
+
+export function getInventoryMovementTrend(branchId: string, movements: BranchInventoryMovement[], boundary: ReportingBoundary) {
+  const byDay = new Map<string, { inbound: number; outbound: number }>();
+  for (const movement of movements.filter((item) => item.branchId === branchId)) {
+    const dayKey = resolveOperationalDate(movement.timestamp, boundary);
+    const current = byDay.get(dayKey) ?? { inbound: 0, outbound: 0 };
+    if (movement.direction === 'in') current.inbound += movement.quantity;
+    if (movement.direction === 'out') current.outbound += movement.quantity;
+    byDay.set(dayKey, current);
+  }
+
+  return [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, totals]) => ({ date, ...totals }));
 }

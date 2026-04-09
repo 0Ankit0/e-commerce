@@ -38,11 +38,33 @@ export interface BranchException {
   reason: string;
 }
 
+export interface BranchInventoryItem {
+  id: string;
+  branchId: string;
+  sku: string;
+  name: string;
+  onHand: number;
+  reserved: number;
+  reorderPoint: number;
+}
+
+export interface BranchInventoryMovement {
+  id: string;
+  branchId: string;
+  sku: string;
+  quantity: number;
+  direction: 'in' | 'out';
+  timestamp: string;
+  reason: string;
+}
+
 export interface BranchOperationsSnapshot {
   shipments: ShipmentHistoryEvent[];
   agentHistory: AgentActivity[];
   exceptions: BranchException[];
   agents: BranchAgent[];
+  inventory?: BranchInventoryItem[];
+  inventoryMovements?: BranchInventoryMovement[];
 }
 
 export interface BranchKpi {

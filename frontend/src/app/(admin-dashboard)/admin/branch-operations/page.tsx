@@ -9,6 +9,10 @@ import {
   canPerformSupervisorAction,
   computeBranchKpis,
   deactivateAgentWithGuardrails,
+  getAgentPerformance,
+  getBranchInventorySummary,
+  getInventoryMovementTrend,
+  getSlaBreachTrend,
   rebalanceShift,
   transferShipmentBranch,
   triageException,
@@ -46,6 +50,27 @@ const INITIAL_SNAPSHOT: BranchOperationsSnapshot = {
       status: 'open',
       reason: 'Customer unavailable',
     },
+    {
+      id: 'ex-2',
+      shipmentId: 'SHP-2002',
+      branchId: 'branch-bkt',
+      agentId: 'agent-b1',
+      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      status: 'open',
+      reason: 'Building access delayed',
+    },
+  ],
+  inventory: [
+    { id: 'inv-1', branchId: 'branch-ktm', sku: 'SKU-HEADPHONE', name: 'Wireless Headphone', onHand: 14, reserved: 5, reorderPoint: 8 },
+    { id: 'inv-2', branchId: 'branch-ktm', sku: 'SKU-ADAPTER', name: 'USB-C Adapter', onHand: 5, reserved: 4, reorderPoint: 6 },
+    { id: 'inv-3', branchId: 'branch-bkt', sku: 'SKU-MOUSE', name: 'Ergo Mouse', onHand: 18, reserved: 3, reorderPoint: 5 },
+  ],
+  inventoryMovements: [
+    { id: 'mv-1', branchId: 'branch-ktm', sku: 'SKU-HEADPHONE', quantity: 10, direction: 'in', timestamp: '2026-04-07T03:00:00Z', reason: 'Hub replenishment' },
+    { id: 'mv-2', branchId: 'branch-ktm', sku: 'SKU-HEADPHONE', quantity: 7, direction: 'out', timestamp: '2026-04-07T12:00:00Z', reason: 'Shipment allocation' },
+    { id: 'mv-3', branchId: 'branch-ktm', sku: 'SKU-ADAPTER', quantity: 12, direction: 'in', timestamp: '2026-04-08T02:30:00Z', reason: 'Vendor inbound' },
+    { id: 'mv-4', branchId: 'branch-ktm', sku: 'SKU-ADAPTER', quantity: 9, direction: 'out', timestamp: '2026-04-08T08:30:00Z', reason: 'Shipment allocation' },
+    { id: 'mv-5', branchId: 'branch-bkt', sku: 'SKU-MOUSE', quantity: 5, direction: 'out', timestamp: '2026-04-08T09:10:00Z', reason: 'Shipment allocation' },
   ],
 };
 
@@ -78,6 +103,18 @@ export default function BranchOperationsPage() {
   const selectedBranchAgents = snapshot.agents.filter((agent) => agent.branchId === selectedBranchId);
   const selectedBranchHistory = snapshot.agentHistory.filter((event) => event.branchId === selectedBranchId);
   const selectedBranchExceptions = snapshot.exceptions.filter((exception) => exception.branchId === selectedBranchId);
+  const inventorySummary = getBranchInventorySummary(selectedBranchId, snapshot.inventory ?? []);
+  const agentPerformance = getAgentPerformance(selectedBranchId, snapshot.agents, snapshot.shipments);
+  const inventoryTrend = getInventoryMovementTrend(selectedBranchId, snapshot.inventoryMovements ?? [], {
+    timezone: 'Asia/Kathmandu',
+    cutoffHourLocal: 6,
+    asOfDate: '2026-04-08',
+  });
+  const slaTrend = getSlaBreachTrend(selectedBranchId, snapshot.exceptions, {
+    timezone: 'Asia/Kathmandu',
+    cutoffHourLocal: 6,
+    asOfDate: '2026-04-08',
+  });
 
   const canManage = canPerformSupervisorAction(userRole, userBranchId, selectedBranchId);
 
@@ -165,6 +202,22 @@ export default function BranchOperationsPage() {
         ))}
       </div>
 
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {[
+          { label: 'Inventory SKUs', value: inventorySummary.skuCount },
+          { label: 'Low-stock SKUs', value: inventorySummary.lowStockCount },
+          { label: 'On-hand units', value: inventorySummary.totalOnHand },
+          { label: 'Reserved units', value: inventorySummary.totalReserved },
+        ].map((item) => (
+          <Card key={item.label} className="rounded-[22px]">
+            <CardContent className="pt-4">
+              <p className="text-xs uppercase tracking-[0.16em] text-[var(--text-muted)]">{item.label}</p>
+              <p className="mt-1 text-3xl font-semibold text-[var(--text-primary)]">{item.value}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
       {kpi.alerts.length > 0 && (
         <Card className="rounded-[24px] border-amber-200 bg-amber-50">
           <CardHeader>
@@ -228,7 +281,7 @@ export default function BranchOperationsPage() {
 
         <Card className="rounded-[24px]">
           <CardHeader>
-            <CardTitle>Agent history & supervisor actions</CardTitle>
+            <CardTitle>Agent controls & exception triage</CardTitle>
             <CardDescription>Shift balancing, deactivation guardrails, and exception triage.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -258,6 +311,78 @@ export default function BranchOperationsPage() {
                   </Button>
                 </div>
               ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-3">
+        <Card className="rounded-[24px] xl:col-span-2">
+          <CardHeader>
+            <CardTitle>Agent performance leaderboard</CardTitle>
+            <CardDescription>Per-branch delivery output and success rate by agent.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--border-color)] text-xs uppercase tracking-[0.12em] text-[var(--text-muted)]">
+                    <th className="px-2 py-2">Agent</th>
+                    <th className="px-2 py-2">Shift</th>
+                    <th className="px-2 py-2">Delivered</th>
+                    <th className="px-2 py-2">Failed</th>
+                    <th className="px-2 py-2">Open assignments</th>
+                    <th className="px-2 py-2">Success</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {agentPerformance.map((agent) => (
+                    <tr key={agent.agentId} className="border-b border-[var(--border-color)]">
+                      <td className="px-2 py-2 font-medium">{agent.name}</td>
+                      <td className="px-2 py-2">{agent.shift}</td>
+                      <td className="px-2 py-2">{agent.delivered}</td>
+                      <td className="px-2 py-2">{agent.failed}</td>
+                      <td className="px-2 py-2">{agent.openAssignments}</td>
+                      <td className="px-2 py-2">{agent.successRate}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-[24px]">
+          <CardHeader>
+            <CardTitle>Branch report snapshot</CardTitle>
+            <CardDescription>Daily trend drill-downs for inventory flow and SLA breaches.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">Inventory movement trend</p>
+              <ul className="mt-2 space-y-1">
+                {inventoryTrend.map((point) => (
+                  <li key={point.date} className="flex items-center justify-between rounded-lg border border-[var(--border-color)] px-2 py-1.5">
+                    <span>{point.date}</span>
+                    <span>IN {point.inbound} / OUT {point.outbound}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">SLA breach trend</p>
+              <ul className="mt-2 space-y-1">
+                {slaTrend.length === 0 ? (
+                  <li className="rounded-lg border border-[var(--border-color)] px-2 py-1.5 text-[var(--text-muted)]">No breaches in the selected operational window.</li>
+                ) : (
+                  slaTrend.map((point) => (
+                    <li key={point.date} className="flex items-center justify-between rounded-lg border border-[var(--border-color)] px-2 py-1.5">
+                      <span>{point.date}</span>
+                      <span>{point.breaches} breach(es)</span>
+                    </li>
+                  ))
+                )}
+              </ul>
             </div>
           </CardContent>
         </Card>
