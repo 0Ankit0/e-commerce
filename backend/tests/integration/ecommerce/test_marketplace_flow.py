@@ -1803,6 +1803,7 @@ async def test_vendor_onboarding_transitions_and_audit_consistency(client: Async
     doc_v1 = await db_session.get(VendorDocument, decode_id_or_404(document_id))
     assert doc_v1 is not None
     stale_uploaded_at = doc_v1.uploaded_at.isoformat()
+    stale_document_id = document_id
 
     upload_2_resp = await client.post(
         "/api/v1/vendor/documents",
@@ -1885,6 +1886,29 @@ async def test_vendor_onboarding_transitions_and_audit_consistency(client: Async
     assert pan_docs[0]["version"] >= pan_docs[1]["version"]
     assert pan_docs[0]["remarks"] == "approved"
     assert pan_docs[0]["is_current"] is True
+    assert [entry["status"] for entry in pan_docs[0]["review_reason_history"]] == [
+        "submitted",
+        "under_review",
+        "needs_resubmission",
+        "submitted",
+        "under_review",
+        "verified",
+    ]
+
+    stale_non_current_approval = await client.post(
+        f"/api/v1/admin/vendor-documents/{stale_document_id}/verify",
+        headers=admin_headers,
+        json={"remarks": "stale", "expected_uploaded_at": stale_uploaded_at, "expected_version": 1},
+    )
+    assert stale_non_current_approval.status_code == 409, stale_non_current_approval.text
+
+    admin_timeline_resp = await client.get(f"/api/v1/admin/vendors/{vendor_id}/timeline", headers=admin_headers)
+    assert admin_timeline_resp.status_code == 200, admin_timeline_resp.text
+    admin_resubmission_entries = [
+        item for item in admin_timeline_resp.json()["items"] if item["event_type"] == "vendor.document_resubmission_requested"
+    ]
+    assert admin_resubmission_entries
+    assert "remarks" in admin_resubmission_entries[0]["payload"]
 
     unauthorized_doc_action = await client.post(
         f"/api/v1/admin/vendor-documents/{document_id}/request-resubmission",
@@ -1914,3 +1938,68 @@ async def test_vendor_onboarding_transitions_and_audit_consistency(client: Async
     assert "vendor.resubmission_requested" in timeline_events
     assert "vendor.document_reuploaded" in timeline_events
     assert "vendor.approved" in timeline_events or "vendor.rejected" in timeline_events
+
+
+@pytest.mark.asyncio
+async def test_vendor_document_concurrent_admin_review_actions(client: AsyncClient, db_session: AsyncSession):
+    _, admin_headers = await _create_user_headers(
+        db_session,
+        username="workflow_admin_concurrent",
+        email="workflow_admin_concurrent@example.com",
+        is_superuser=True,
+    )
+    vendor_user, vendor_headers = await _create_user_headers(
+        db_session,
+        username="workflow_vendor_concurrent",
+        email="workflow_vendor_concurrent@example.com",
+    )
+    tenant = await _create_tenant_for_owner(db_session, vendor_user, "workflow-vendor-concurrent-tenant")
+    encode_id = __import__("src.apps.iam.utils.hashid", fromlist=["encode_id"]).encode_id
+
+    vendor_resp = await client.post(
+        "/api/v1/vendor/profile",
+        headers=vendor_headers,
+        json={
+            "tenant_id": encode_id(tenant.id),
+            "business_name": "Concurrent Vendor",
+            "display_name": "Concurrent Vendor",
+            "slug": "concurrent-vendor",
+        },
+    )
+    assert vendor_resp.status_code == 201, vendor_resp.text
+
+    upload_resp = await client.post(
+        "/api/v1/vendor/documents",
+        headers=vendor_headers,
+        json={"doc_type": "pan", "doc_number": "PANC111", "file_url": "https://example.com/panc-v1.pdf"},
+    )
+    assert upload_resp.status_code == 201, upload_resp.text
+    document_id = upload_resp.json()["document_id"]
+    document = await db_session.get(VendorDocument, decode_id_or_404(document_id))
+    assert document is not None
+
+    review_resp = await client.post(
+        f"/api/v1/admin/vendor-documents/{document_id}/mark-under-review",
+        headers=admin_headers,
+        json={"remarks": "triage", "expected_uploaded_at": document.uploaded_at.isoformat(), "expected_version": document.version},
+    )
+    assert review_resp.status_code == 200, review_resp.text
+
+    concurrent_verify, concurrent_resubmit = await asyncio.gather(
+        client.post(
+            f"/api/v1/admin/vendor-documents/{document_id}/verify",
+            headers=admin_headers,
+            json={"remarks": "looks good", "expected_uploaded_at": document.uploaded_at.isoformat(), "expected_version": document.version},
+        ),
+        client.post(
+            f"/api/v1/admin/vendor-documents/{document_id}/request-resubmission",
+            headers=admin_headers,
+            json={"remarks": "image corners cropped", "expected_uploaded_at": document.uploaded_at.isoformat(), "expected_version": document.version},
+        ),
+    )
+
+    assert sorted([concurrent_verify.status_code, concurrent_resubmit.status_code]) == [200, 409]
+
+    updated_document = await db_session.get(VendorDocument, decode_id_or_404(document_id))
+    assert updated_document is not None
+    assert updated_document.status.value in {"verified", "needs_resubmission"}
