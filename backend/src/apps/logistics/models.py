@@ -61,6 +61,18 @@ class DeliveryExceptionStatus(str, Enum):
     RESOLVED = "resolved"
 
 
+class HubSortQueueStatus(str, Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+class HubSortItemStatus(str, Enum):
+    SCANNED = "scanned"
+    ASSIGNED = "assigned"
+    MOVED_TO_NEXT_LEG = "moved_to_next_leg"
+    EXCEPTION = "exception"
+
+
 class ShippingOption(SQLModel, table=True):
     __tablename__ = "shipping_options"  # type: ignore[assignment]
 
@@ -282,4 +294,51 @@ class CourierLocationPing(SQLModel, table=True):
     source: str = Field(default="device", max_length=40)
     label: str = Field(default="", max_length=120)
     recorded_at: datetime = Field(default_factory=utc_now, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class HubSortQueue(SQLModel, table=True):
+    __tablename__ = "hub_sort_queues"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    hub_id: int = Field(foreign_key="logistics_hubs.id", index=True)
+    manifest_id: Optional[int] = Field(default=None, foreign_key="shipment_manifests.id", index=True)
+    code: str = Field(max_length=64, unique=True, index=True)
+    status: HubSortQueueStatus = Field(default=HubSortQueueStatus.OPEN)
+    created_at: datetime = Field(default_factory=utc_now)
+    closed_at: Optional[datetime] = Field(default=None)
+
+
+class HubSortQueueItem(SQLModel, table=True):
+    __tablename__ = "hub_sort_queue_items"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    queue_id: int = Field(foreign_key="hub_sort_queues.id", index=True)
+    shipment_id: int = Field(foreign_key="shipments.id", index=True)
+    status: HubSortItemStatus = Field(default=HubSortItemStatus.SCANNED)
+    scan_count: int = Field(default=1, ge=0)
+    assigned_next_hub_id: Optional[int] = Field(default=None, foreign_key="logistics_hubs.id", index=True)
+    assigned_carrier: str = Field(default="", max_length=80)
+    assigned_vehicle_number: str = Field(default="", max_length=64)
+    exception_code: str = Field(default="", max_length=80)
+    exception_notes: str = Field(default="", max_length=500)
+    scanned_at: datetime = Field(default_factory=utc_now)
+    assigned_at: Optional[datetime] = Field(default=None)
+    moved_at: Optional[datetime] = Field(default=None)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class HubOperationEvent(SQLModel, table=True):
+    __tablename__ = "hub_operation_events"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    hub_id: int = Field(foreign_key="logistics_hubs.id", index=True)
+    queue_id: Optional[int] = Field(default=None, foreign_key="hub_sort_queues.id", index=True)
+    queue_item_id: Optional[int] = Field(default=None, foreign_key="hub_sort_queue_items.id", index=True)
+    shipment_id: Optional[int] = Field(default=None, foreign_key="shipments.id", index=True)
+    manifest_id: Optional[int] = Field(default=None, foreign_key="shipment_manifests.id", index=True)
+    operation_type: str = Field(max_length=80, index=True)
+    actor_type: str = Field(default="system", max_length=40)
+    actor_id: Optional[int] = Field(default=None, index=True)
+    payload_json: str = Field(default="{}")
     created_at: datetime = Field(default_factory=utc_now)
