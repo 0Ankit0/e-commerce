@@ -9,6 +9,9 @@ import type {
   ChannelQuotaAudit,
   ChannelQuotaPolicy,
   ChannelQuotaUsage,
+  EmailDeliveryAnalytics,
+  EmailDeliveryDeadLetter,
+  EmailDeliveryMessage,
   ProviderStatusResponse,
   PushConfigResponse,
 } from '@/types';
@@ -129,6 +132,36 @@ export function useOverrideChannelQuotaPolicy() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['channel-quota-policies'] });
       queryClient.invalidateQueries({ queryKey: ['channel-quota-audit'] });
+    },
+  });
+}
+
+export function useEmailDeliveryAnalytics() {
+  return useQuery({
+    queryKey: ['email-delivery-analytics'],
+    queryFn: async () => {
+      const response = await apiClient.get<EmailDeliveryAnalytics>('/system/admin/communications/delivery/analytics/');
+      return response.data;
+    },
+  });
+}
+
+export function useEmailDeliveryMessages() {
+  return useQuery({
+    queryKey: ['email-delivery-messages'],
+    queryFn: async () => {
+      const response = await apiClient.get<{ items: EmailDeliveryMessage[] }>('/system/admin/communications/delivery/messages/');
+      return response.data.items;
+    },
+  });
+}
+
+export function useEmailDeliveryDeadLetters() {
+  return useQuery({
+    queryKey: ['email-delivery-dead-letters'],
+    queryFn: async () => {
+      const response = await apiClient.get<{ items: EmailDeliveryDeadLetter[] }>('/system/admin/communications/delivery/dead-letters/');
+      return response.data.items;
     },
   });
 }
