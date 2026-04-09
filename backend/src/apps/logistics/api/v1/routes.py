@@ -17,6 +17,13 @@ from src.apps.core.time import utc_now
 from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import decode_id_or_404, encode_id
+from src.apps.logistics.planner import (
+    LockedAssignment,
+    PlannerInput,
+    RouteDefinition,
+    VehicleCapacity,
+    run_line_haul_optimizer,
+)
 from src.apps.logistics.models import (
     Branch,
     BranchInventoryMovement,
@@ -170,6 +177,34 @@ class BranchInventoryMovementCreateRequest(BaseModel):
 class RouteOptimizationRequest(BaseModel):
     average_speed_kph: float = Field(default=28, gt=0)
     service_minutes_per_stop: int = Field(default=8, ge=1)
+
+
+class PlannerRouteInput(BaseModel):
+    route_id: str = Field(min_length=2, max_length=80)
+    origin_hub: str = Field(min_length=2, max_length=40)
+    destination_hub: str = Field(min_length=2, max_length=40)
+    demand_units: int = Field(ge=0)
+
+
+class PlannerVehicleInput(BaseModel):
+    vehicle_id: str = Field(min_length=2, max_length=80)
+    hub_code: str = Field(min_length=2, max_length=40)
+    capacity_units: int = Field(ge=0)
+
+
+class PlannerLockedAssignmentInput(BaseModel):
+    route_id: str
+    vehicle_id: str
+    lock_units: int | None = Field(default=None, ge=0)
+    override_units: int | None = Field(default=None, ge=0)
+
+
+class LineHaulPlannerRunRequest(BaseModel):
+    routes: list[PlannerRouteInput]
+    vehicles: list[PlannerVehicleInput]
+    connectivity: dict[str, list[str]] = Field(default_factory=dict)
+    locked_assignments: list[PlannerLockedAssignmentInput] = Field(default_factory=list)
+    random_seed: int = Field(default=7, ge=0)
 
 
 class CourierGpsIngestionRequest(BaseModel):
@@ -626,6 +661,59 @@ async def get_trip_route_plan(
     if plan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route plan not found")
     return _serialize_route_plan(plan)
+
+
+@router.post("/logistics/line-haul-planner/run")
+async def run_line_haul_planner(
+    payload: LineHaulPlannerRunRequest,
+    _: User = Depends(get_current_active_superuser),
+):
+    result = run_line_haul_optimizer(
+        PlannerInput(
+            routes=[
+                RouteDefinition(
+                    route_id=route.route_id,
+                    origin_hub=route.origin_hub,
+                    destination_hub=route.destination_hub,
+                    demand_units=route.demand_units,
+                )
+                for route in payload.routes
+            ],
+            vehicles=[
+                VehicleCapacity(
+                    vehicle_id=vehicle.vehicle_id,
+                    hub_code=vehicle.hub_code,
+                    capacity_units=vehicle.capacity_units,
+                )
+                for vehicle in payload.vehicles
+            ],
+            connectivity=payload.connectivity,
+            locked_assignments=[
+                LockedAssignment(
+                    route_id=assignment.route_id,
+                    vehicle_id=assignment.vehicle_id,
+                    lock_units=assignment.lock_units,
+                    override_units=assignment.override_units,
+                )
+                for assignment in payload.locked_assignments
+            ],
+            random_seed=payload.random_seed,
+        )
+    )
+    return {
+        "assignments": [
+            {
+                "route_id": assignment.route_id,
+                "vehicle_id": assignment.vehicle_id,
+                "assigned_units": assignment.assigned_units,
+                "locked": assignment.locked,
+                "overridden": assignment.overridden,
+            }
+            for assignment in result.assignments
+        ],
+        "unassigned_routes": result.unassigned_routes,
+        "metadata": result.metadata,
+    }
 
 
 @router.post("/logistics/trips/{trip_id}/gps", status_code=status.HTTP_201_CREATED)
