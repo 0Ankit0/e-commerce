@@ -96,3 +96,43 @@ export interface ChannelQuotaAudit {
   metadata_json: Record<string, unknown>;
   created_at: string;
 }
+
+export type EmailLifecycleStatus = 'queued' | 'sent' | 'delivered' | 'bounced' | 'failed' | 'complained';
+
+export interface EmailDeliveryMessage {
+  id: number;
+  subject: string;
+  template_name: string;
+  status: EmailLifecycleStatus;
+  provider: string | null;
+  provider_message_id: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  failure_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  queued_at: string;
+  sent_at: string | null;
+  delivered_at: string | null;
+}
+
+export interface EmailDeliveryDeadLetter {
+  id: number;
+  message_id: number;
+  reason: string;
+  created_at: string;
+}
+
+export interface DeliveryFailureReason {
+  reason: string;
+  count: number;
+}
+
+export interface EmailDeliveryAnalytics {
+  total: number;
+  status_counts: Partial<Record<EmailLifecycleStatus, number>>;
+  delivery_rate: number;
+  bounce_rate: number;
+  failure_rate: number;
+  failure_reasons: DeliveryFailureReason[];
+}

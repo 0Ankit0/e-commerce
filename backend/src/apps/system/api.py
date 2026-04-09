@@ -63,10 +63,40 @@ class ChannelQuotaCheckPayload(BaseModel):
 class EmailWebhookPayload(BaseModel):
     event_id: str = Field(min_length=1, max_length=255)
     message_id: str = Field(min_length=1, max_length=255)
-    status: EmailMessageLifecycleStatus
+    status: str = Field(min_length=1, max_length=64)
     occurred_at: datetime | None = None
     failure_reason: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+_WEBHOOK_STATUS_MAP: dict[str, EmailMessageLifecycleStatus] = {
+    "queued": EmailMessageLifecycleStatus.QUEUED,
+    "accepted": EmailMessageLifecycleStatus.QUEUED,
+    "processing": EmailMessageLifecycleStatus.SENT,
+    "sending": EmailMessageLifecycleStatus.SENT,
+    "sent": EmailMessageLifecycleStatus.SENT,
+    "delivered": EmailMessageLifecycleStatus.DELIVERED,
+    "hard_bounced": EmailMessageLifecycleStatus.BOUNCED,
+    "soft_bounced": EmailMessageLifecycleStatus.BOUNCED,
+    "bounced": EmailMessageLifecycleStatus.BOUNCED,
+    "blocked": EmailMessageLifecycleStatus.FAILED,
+    "dropped": EmailMessageLifecycleStatus.FAILED,
+    "rejected": EmailMessageLifecycleStatus.FAILED,
+    "failed": EmailMessageLifecycleStatus.FAILED,
+    "spam": EmailMessageLifecycleStatus.COMPLAINED,
+    "complained": EmailMessageLifecycleStatus.COMPLAINED,
+    "complaint": EmailMessageLifecycleStatus.COMPLAINED,
+}
+
+
+def _normalize_webhook_status(raw_status: str) -> EmailMessageLifecycleStatus:
+    normalized = raw_status.strip().lower()
+    if normalized in _WEBHOOK_STATUS_MAP:
+        return _WEBHOOK_STATUS_MAP[normalized]
+    try:
+        return EmailMessageLifecycleStatus(normalized)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Unsupported webhook status: {raw_status}") from exc
 
 
 @router.get("/capabilities/")
@@ -144,12 +174,13 @@ async def ingest_email_delivery_webhook(
     webhook: EmailWebhookPayload,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
+    status = _normalize_webhook_status(webhook.status)
     event, duplicate = await reconcile_webhook_event(
         db,
         provider=provider,
         provider_event_id=webhook.event_id,
         provider_message_id=webhook.message_id,
-        status=webhook.status,
+        status=status,
         occurred_at=webhook.occurred_at,
         payload=webhook.payload,
         failure_reason=webhook.failure_reason,
