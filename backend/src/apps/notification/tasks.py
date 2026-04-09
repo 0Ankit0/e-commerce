@@ -1,6 +1,7 @@
 """Notification-specific Celery tasks (email copy, push, SMS)."""
 import asyncio
 import logging
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -199,9 +200,10 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
                     delivery.status = NotificationDeliveryStatus.FAILED
                     delivery.last_error_code = "quota_exceeded"
                     delivery.last_error_reason = (
-                        f"SMS quota exceeded. Retry after {quota_exc.retry_after_seconds} seconds."
+                        f"SMS quota exceeded. Retry after {quota_exc.retry_after_seconds} seconds "
+                        f"(policies: {quota_exc.violated_policy_ids})."
                     )
-                    delivery.next_attempt_at = utc_now()
+                    delivery.next_attempt_at = utc_now() + timedelta(seconds=quota_exc.retry_after_seconds)
                     delivery.updated_at = utc_now()
                     db.add(delivery)
                     await db.commit()

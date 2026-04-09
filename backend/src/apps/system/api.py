@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -16,7 +16,13 @@ from src.apps.communications.models import (
     EmailDeliveryMessage,
     EmailMessageLifecycleStatus,
 )
-from src.apps.communications.quota import QuotaContext, derive_scope, list_matching_policies
+from src.apps.communications.quota import (
+    QuotaContext,
+    QuotaExceededError,
+    derive_scope,
+    evaluate_quota,
+    list_matching_policies,
+)
 from src.apps.core.config import NON_RUNTIME_EDITABLE_SETTING_KEYS, settings
 from src.apps.core.models import GeneralSetting
 from src.apps.core.settings_store import (
@@ -59,6 +65,7 @@ class ChannelQuotaCheckPayload(BaseModel):
     channel: str = Field(default="sms", max_length=32)
     tenant_id: int | None = None
     user_id: int | None = None
+    increment: int = Field(default=1, ge=1)
 
 class EmailWebhookPayload(BaseModel):
     event_id: str = Field(min_length=1, max_length=255)
@@ -352,6 +359,71 @@ async def list_quota_usage(
     return {"items": [row.model_dump() for row in usage_rows], "count": len(usage_rows)}
 
 
+@router.get("/admin/communications/quotas/dashboard/")
+async def get_quota_dashboard(
+    channel: str = "sms",
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    policy_rows = (
+        await db.execute(
+            select(ChannelQuotaPolicy)
+            .where(ChannelQuotaPolicy.channel == channel)
+            .order_by(ChannelQuotaPolicy.window_seconds.asc())
+        )
+    ).scalars().all()
+    if not policy_rows:
+        return {"channel": channel, "totals": {"policies": 0, "active_policies": 0, "usage_rows": 0, "at_risk": 0}, "items": []}
+
+    policy_ids = [int(item.id) for item in policy_rows if item.id is not None]
+    usage_rows = (
+        await db.execute(
+            select(ChannelQuotaUsage)
+            .where(ChannelQuotaUsage.policy_id.in_(policy_ids))
+            .order_by(ChannelQuotaUsage.window_end.desc())
+        )
+    ).scalars().all()
+    latest_usage: dict[int, ChannelQuotaUsage] = {}
+    for row in usage_rows:
+        if row.policy_id not in latest_usage:
+            latest_usage[row.policy_id] = row
+
+    now = datetime.now(UTC)
+    dashboard_items: list[dict[str, Any]] = []
+    at_risk = 0
+    for policy in policy_rows:
+        usage = latest_usage.get(int(policy.id))
+        usage_count = usage.usage_count if usage else 0
+        utilization = (usage_count / policy.limit_count) if policy.limit_count else 0.0
+        if utilization >= 0.8:
+            at_risk += 1
+        dashboard_items.append(
+            {
+                "policy_id": policy.id,
+                "scope": policy.scope,
+                "tenant_id": policy.tenant_id,
+                "user_id": policy.user_id,
+                "enabled": policy.enabled,
+                "limit_count": policy.limit_count,
+                "window_seconds": policy.window_seconds,
+                "usage_count": usage_count,
+                "utilization": round(utilization, 4),
+                "window_end": usage.window_end if usage else None,
+                "seconds_until_reset": max(0, int((usage.window_end - now).total_seconds())) if usage else None,
+            }
+        )
+    return {
+        "channel": channel,
+        "totals": {
+            "policies": len(policy_rows),
+            "active_policies": sum(1 for item in policy_rows if item.enabled),
+            "usage_rows": len(usage_rows),
+            "at_risk": at_risk,
+        },
+        "items": dashboard_items,
+    }
+
+
 @router.get("/admin/communications/quotas/audit/")
 async def list_quota_override_audit(
     policy_id: int | None = None,
@@ -363,3 +435,41 @@ async def list_quota_override_audit(
         query = query.where(ChannelQuotaOverrideAudit.policy_id == policy_id)
     rows = (await db.execute(query.limit(200))).scalars().all()
     return {"items": [row.model_dump() for row in rows], "count": len(rows)}
+
+
+@router.post("/communications/quotas/check/")
+async def check_quota_before_send(
+    payload: ChannelQuotaCheckPayload,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    evaluation = await evaluate_quota(
+        db,
+        context=QuotaContext(
+            channel=payload.channel,
+            tenant_id=payload.tenant_id,
+            user_id=payload.user_id,
+        ),
+        increment=payload.increment,
+    )
+    if evaluation.violations:
+        exc = QuotaExceededError(
+            retry_after_seconds=max(1, min(int((item.window_end - evaluation.now).total_seconds()) for item in evaluation.violations)),
+            violated_policy_ids=[item.policy_id for item in evaluation.violations],
+            detail="SMS quota exceeded",
+        )
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": exc.detail,
+                "retry_after_seconds": exc.retry_after_seconds,
+                "violated_policy_ids": exc.violated_policy_ids,
+            },
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+
+    return {
+        "allowed": True,
+        "channel": payload.channel,
+        "policies_evaluated": len(evaluation.snapshots),
+        "snapshots": [item.__dict__ for item in evaluation.snapshots],
+    }

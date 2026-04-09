@@ -7,6 +7,7 @@ import type {
   CapabilitySummary,
   MapConfigResponse,
   ChannelQuotaAudit,
+  ChannelQuotaDashboardResponse,
   ChannelQuotaPolicy,
   ChannelQuotaUsage,
   EmailDeliveryAnalytics,
@@ -101,6 +102,16 @@ export function useChannelQuotaAudit() {
     queryFn: async () => {
       const response = await apiClient.get<{ items: ChannelQuotaAudit[] }>('/system/admin/communications/quotas/audit/');
       return response.data.items;
+    },
+  });
+}
+
+export function useChannelQuotaDashboard() {
+  return useQuery({
+    queryKey: ['channel-quota-dashboard'],
+    queryFn: async () => {
+      const response = await apiClient.get<ChannelQuotaDashboardResponse>('/system/admin/communications/quotas/dashboard/');
+      return response.data;
     },
   });
 }

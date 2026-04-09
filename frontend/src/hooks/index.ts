@@ -29,6 +29,7 @@ export {
 
 export {
   useChannelQuotaAudit,
+  useChannelQuotaDashboard,
   useChannelQuotaPolicies,
   useChannelQuotaUsage,
   useCreateChannelQuotaPolicy,
