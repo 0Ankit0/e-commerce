@@ -63,6 +63,26 @@ class CategoryDeleteRequest(BaseModel):
     migrate_to_category_id: str | None = None
 
 
+class CategoryAttributeSchemaRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    type: str = Field(default="text", min_length=1, max_length=60)
+    required: bool = False
+    options: list[str] = []
+    description: str = ""
+
+
+class CategoryAttributeSchemaUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    type: str | None = Field(default=None, min_length=1, max_length=60)
+    required: bool | None = None
+    options: list[str] | None = None
+    description: str | None = None
+
+
+class CategoryAttributeSchemaReplaceRequest(BaseModel):
+    attributes: list[CategoryAttributeSchemaRequest]
+
+
 class CategoryReorderItem(BaseModel):
     id: str
     parent_id: str | None = None
@@ -184,10 +204,39 @@ def _build_depth(category_id: int | None, category_by_id: dict[int, Category]) -
         seen.add(current)
         parent = category_by_id.get(current)
         if parent is None:
-            break
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Parent category not found")
         depth += 1
         current = parent.parent_id
     return depth
+
+
+def _normalize_category_attributes(attributes: list[dict[str, object]]) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    seen_names: set[str] = set()
+    for item in attributes:
+        name = str(item.get("name", "")).strip()
+        if not name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Category attribute name is required",
+            )
+        key = name.lower()
+        if key in seen_names:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Duplicate category attribute: {name}",
+            )
+        seen_names.add(key)
+        normalized.append(
+            {
+                "name": name,
+                "type": str(item.get("type", "text")).strip() or "text",
+                "required": bool(item.get("required", False)),
+                "options": [str(option).strip() for option in (item.get("options", []) or []) if str(option).strip()],
+                "description": str(item.get("description", "")).strip(),
+            }
+        )
+    return normalized
 
 
 async def _validate_category_assignment(
@@ -403,7 +452,7 @@ async def create_category(
         level=payload.level,
         description=payload.description,
         sort_order=payload.sort_order,
-        attributes_json=json.dumps(payload.attributes),
+        attributes_json=json.dumps(_normalize_category_attributes(payload.attributes)),
     )
     db.add(category)
     try:
@@ -443,7 +492,7 @@ async def update_category(
     category.level = payload.level
     category.description = payload.description
     category.sort_order = payload.sort_order
-    category.attributes_json = json.dumps(payload.attributes)
+    category.attributes_json = json.dumps(_normalize_category_attributes(payload.attributes))
     category.updated_at = utc_now()
     try:
         await db.commit()
@@ -513,6 +562,8 @@ async def reorder_categories(
     for item in payload.items:
         category = category_by_id[decode_id_or_404(item.id)]
         parent_id = decode_id_or_404(item.parent_id) if item.parent_id else None
+        if parent_id is not None and parent_id not in category_by_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Parent category not found")
         category.parent_id = parent_id
         category.sort_order = item.sort_order
 
@@ -524,6 +575,100 @@ async def reorder_categories(
 
     await db.commit()
     return {"success": True}
+
+
+@router.get("/admin/categories/{category_id}/attributes")
+async def list_category_attributes(
+    category_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    category = await db.get(Category, decode_id_or_404(category_id))
+    if category is None or not category.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    return {"category_id": category_id, "attributes": json.loads(category.attributes_json or "[]")}
+
+
+@router.put("/admin/categories/{category_id}/attributes")
+async def replace_category_attributes(
+    category_id: str,
+    payload: CategoryAttributeSchemaReplaceRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    category = await db.get(Category, decode_id_or_404(category_id))
+    if category is None or not category.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    category.attributes_json = json.dumps(_normalize_category_attributes([item.model_dump() for item in payload.attributes]))
+    category.updated_at = utc_now()
+    await db.commit()
+    return {"success": True, "attributes": json.loads(category.attributes_json or "[]")}
+
+
+@router.post("/admin/categories/{category_id}/attributes", status_code=status.HTTP_201_CREATED)
+async def add_category_attribute(
+    category_id: str,
+    payload: CategoryAttributeSchemaRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    category = await db.get(Category, decode_id_or_404(category_id))
+    if category is None or not category.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+
+    attributes = json.loads(category.attributes_json or "[]")
+    attributes.append(payload.model_dump())
+    category.attributes_json = json.dumps(_normalize_category_attributes(attributes))
+    category.updated_at = utc_now()
+    await db.commit()
+    return {"success": True, "attributes": json.loads(category.attributes_json or "[]")}
+
+
+@router.patch("/admin/categories/{category_id}/attributes/{attribute_name}")
+async def update_category_attribute(
+    category_id: str,
+    attribute_name: str,
+    payload: CategoryAttributeSchemaUpdateRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    category = await db.get(Category, decode_id_or_404(category_id))
+    if category is None or not category.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    attributes = json.loads(category.attributes_json or "[]")
+    target_idx = next((idx for idx, item in enumerate(attributes) if str(item.get("name", "")).lower() == attribute_name.lower()), None)
+    if target_idx is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category attribute not found")
+
+    existing = attributes[target_idx]
+    for key, value in payload.model_dump(exclude_none=True).items():
+        existing[key] = value
+    attributes[target_idx] = existing
+    category.attributes_json = json.dumps(_normalize_category_attributes(attributes))
+    category.updated_at = utc_now()
+    await db.commit()
+    return {"success": True, "attributes": json.loads(category.attributes_json or "[]")}
+
+
+@router.delete("/admin/categories/{category_id}/attributes/{attribute_name}")
+async def delete_category_attribute(
+    category_id: str,
+    attribute_name: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    category = await db.get(Category, decode_id_or_404(category_id))
+    if category is None or not category.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    attributes = json.loads(category.attributes_json or "[]")
+    next_attributes = [item for item in attributes if str(item.get("name", "")).lower() != attribute_name.lower()]
+    if len(next_attributes) == len(attributes):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category attribute not found")
+
+    category.attributes_json = json.dumps(_normalize_category_attributes(next_attributes))
+    category.updated_at = utc_now()
+    await db.commit()
+    return {"success": True, "attributes": next_attributes}
 
 
 @router.get("/brands")
