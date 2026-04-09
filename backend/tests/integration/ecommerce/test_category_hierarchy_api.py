@@ -109,6 +109,20 @@ async def test_category_hierarchy_constraints_and_concurrency(client: AsyncClien
 
     slug_collision = await client.post('/api/v1/admin/categories', headers=headers, json={'name': 'Root Copy', 'slug': 'root', 'level': 1})
     assert slug_collision.status_code == 409
+    slug_collision_on_update = await client.patch(
+        f"/api/v1/admin/categories/{child_category['id']}",
+        headers=headers,
+        json={
+            'name': 'Child',
+            'slug': 'root',
+            'parent_id': root_category['id'],
+            'level': 2,
+            'description': '',
+            'attributes': [],
+            'sort_order': 0,
+        },
+    )
+    assert slug_collision_on_update.status_code == 409
 
     delete_without_migration = await client.delete(f"/api/v1/admin/categories/{root_category['id']}", headers=headers)
     assert delete_without_migration.status_code == 400
@@ -141,3 +155,72 @@ async def test_category_hierarchy_constraints_and_concurrency(client: AsyncClien
     }
     reorder = await client.post('/api/v1/admin/categories/reorder', headers=headers, json=reorder_payload)
     assert reorder.status_code == 200, reorder.text
+
+    invalid_parent_reorder = await client.post(
+        '/api/v1/admin/categories/reorder',
+        headers=headers,
+        json={
+            'items': [
+                {
+                    **item,
+                    'parent_id': 'OQ',  # arbitrary encoded id that does not exist
+                }
+                if item['id'] == merge_target.json()['category']['id']
+                else item
+                for item in reorder_payload['items']
+            ]
+        },
+    )
+    assert invalid_parent_reorder.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_category_attribute_schema_crud(client: AsyncClient, db_session: AsyncSession):
+    headers = await _create_admin_headers(db_session)
+
+    category_resp = await client.post(
+        '/api/v1/admin/categories',
+        headers=headers,
+        json={'name': 'Wearables', 'slug': 'wearables', 'level': 1, 'attributes': [{'name': 'size'}]},
+    )
+    assert category_resp.status_code == 201, category_resp.text
+    category_id = category_resp.json()['category']['id']
+
+    initial_attrs = await client.get(f'/api/v1/admin/categories/{category_id}/attributes', headers=headers)
+    assert initial_attrs.status_code == 200, initial_attrs.text
+    assert [item['name'] for item in initial_attrs.json()['attributes']] == ['size']
+
+    add_attr = await client.post(
+        f'/api/v1/admin/categories/{category_id}/attributes',
+        headers=headers,
+        json={'name': 'color', 'type': 'select', 'required': True, 'options': ['red', 'blue']},
+    )
+    assert add_attr.status_code == 201, add_attr.text
+    assert [item['name'] for item in add_attr.json()['attributes']] == ['size', 'color']
+
+    duplicate_attr = await client.post(
+        f'/api/v1/admin/categories/{category_id}/attributes',
+        headers=headers,
+        json={'name': 'Color'},
+    )
+    assert duplicate_attr.status_code == 400
+
+    patch_attr = await client.patch(
+        f'/api/v1/admin/categories/{category_id}/attributes/color',
+        headers=headers,
+        json={'name': 'finish', 'options': ['matte', 'glossy']},
+    )
+    assert patch_attr.status_code == 200, patch_attr.text
+    assert sorted(item['name'] for item in patch_attr.json()['attributes']) == ['finish', 'size']
+
+    replace_attrs = await client.put(
+        f'/api/v1/admin/categories/{category_id}/attributes',
+        headers=headers,
+        json={'attributes': [{'name': 'material', 'type': 'text'}, {'name': 'origin', 'type': 'text'}]},
+    )
+    assert replace_attrs.status_code == 200, replace_attrs.text
+    assert sorted(item['name'] for item in replace_attrs.json()['attributes']) == ['material', 'origin']
+
+    delete_attr = await client.delete(f'/api/v1/admin/categories/{category_id}/attributes/material', headers=headers)
+    assert delete_attr.status_code == 200, delete_attr.text
+    assert [item['name'] for item in delete_attr.json()['attributes']] == ['origin']
