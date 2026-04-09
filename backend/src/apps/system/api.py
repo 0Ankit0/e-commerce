@@ -1,20 +1,25 @@
+from datetime import datetime
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from src.apps.communications import get_communications_service
+from src.apps.communications.delivery_observability import get_delivery_analytics, reconcile_webhook_event
+from src.apps.communications.models import EmailDeliveryDeadLetter, EmailDeliveryMessage, EmailMessageLifecycleStatus
 from src.apps.core.config import NON_RUNTIME_EDITABLE_SETTING_KEYS, settings
 from src.apps.core.models import GeneralSetting
 from src.apps.core.settings_store import (
     build_general_setting_payload,
-    get_general_settings,
     get_environment_settings_snapshot,
+    get_general_settings,
 )
 from src.apps.iam.api.deps import get_current_active_superuser, get_db
 from src.apps.iam.models.user import User
-from src.apps.system.schemas import GeneralSettingRead
 from src.apps.iam.security import PrivilegedAction, enforce_privileged_action
+from src.apps.system.schemas import GeneralSettingRead
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -22,6 +27,15 @@ router = APIRouter(prefix="/system", tags=["system"])
 class GeneralSettingUpdateRequest(BaseModel):
     db_value: str | None = None
     use_db_value: bool = True
+
+
+class EmailWebhookPayload(BaseModel):
+    event_id: str = Field(min_length=1, max_length=255)
+    message_id: str = Field(min_length=1, max_length=255)
+    status: EmailMessageLifecycleStatus
+    occurred_at: datetime | None = None
+    failure_reason: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.get("/capabilities/")
@@ -33,8 +47,7 @@ async def get_capabilities() -> dict:
 async def get_providers() -> dict:
     return {
         "providers": [
-            status.model_dump()
-            for status in get_communications_service().get_provider_statuses()
+            status.model_dump() for status in get_communications_service().get_provider_statuses()
         ]
     }
 
@@ -92,6 +105,74 @@ async def update_admin_setting(
     db.add(setting)
     await db.commit()
     return {"key": key, "db_value": setting.db_value, "use_db_value": setting.use_db_value}
+
+
+@router.post("/webhooks/email/{provider}/")
+async def ingest_email_delivery_webhook(
+    provider: str,
+    webhook: EmailWebhookPayload,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    event, duplicate = await reconcile_webhook_event(
+        db,
+        provider=provider,
+        provider_event_id=webhook.event_id,
+        provider_message_id=webhook.message_id,
+        status=webhook.status,
+        occurred_at=webhook.occurred_at,
+        payload=webhook.payload,
+        failure_reason=webhook.failure_reason,
+    )
+    return {
+        "accepted": True,
+        "duplicate": duplicate,
+        "out_of_order": event.out_of_order,
+        "event_id": event.id,
+    }
+
+
+@router.get("/admin/communications/delivery/analytics/")
+async def get_admin_delivery_analytics(
+    from_dt: datetime | None = None,
+    to_dt: datetime | None = None,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    return await get_delivery_analytics(db, from_dt=from_dt, to_dt=to_dt)
+
+
+@router.get("/admin/communications/delivery/messages/")
+async def list_delivery_messages(
+    status: EmailMessageLifecycleStatus | None = None,
+    skip: int = 0,
+    limit: int = 50,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    query = select(EmailDeliveryMessage)
+    if status:
+        query = query.where(EmailDeliveryMessage.status == status)
+    query = query.order_by(EmailDeliveryMessage.updated_at.desc()).offset(skip).limit(limit)
+    items = (await db.execute(query)).scalars().all()
+    return {
+        "items": [item.model_dump() for item in items],
+        "count": len(items),
+    }
+
+
+@router.get("/admin/communications/delivery/dead-letters/")
+async def list_dead_letters(
+    skip: int = 0,
+    limit: int = 50,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    query = select(EmailDeliveryDeadLetter).order_by(EmailDeliveryDeadLetter.created_at.desc()).offset(skip).limit(limit)
+    items = (await db.execute(query)).scalars().all()
+    return {
+        "items": [item.model_dump() for item in items],
+        "count": len(items),
+    }
 
 
 @router.get("/maps/config/")

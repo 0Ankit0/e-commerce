@@ -251,6 +251,7 @@ class Settings(BaseSettings):
     EMAIL_HOST_USER: str = "user@example.com"
     EMAIL_HOST_PASSWORD: SecretStr = SecretStr("password")
     EMAIL_FROM_ADDRESS: str = "noreply@example.com"
+    EMAIL_MAX_RETRIES: int = 3
     RESEND_API_KEY: str = ""
     RESEND_FROM_ADDRESS: str = "noreply@example.com"
     AWS_REGION: str = "us-east-1"

@@ -49,6 +49,7 @@ async def init_db():
     import src.apps.logistics.models  # noqa: F401
     import src.apps.messaging.models  # noqa: F401
     import src.apps.support.models  # noqa: F401
+    import src.apps.communications.models  # noqa: F401
 
     if settings.TESTING:
         async with engine.begin() as conn:
