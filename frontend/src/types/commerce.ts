@@ -5,7 +5,17 @@ export interface CatalogCategory {
   slug: string;
   level: number;
   description: string;
-  attributes: Array<Record<string, unknown>>;
+  sort_order?: number;
+  attributes: CategoryAttributeSchema[];
+  updated_at?: string;
+}
+
+export interface CategoryAttributeSchema {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'boolean' | 'select';
+  required: boolean;
+  options?: string[];
 }
 
 export interface CatalogBrand {

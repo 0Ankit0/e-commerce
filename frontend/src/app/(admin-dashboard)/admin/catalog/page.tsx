@@ -1,207 +1,248 @@
 'use client';
 
-import { useState } from 'react';
-import { Plus, Package, CheckCircle2, AlertCircle, X } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { useMemo, useState } from 'react';
+import { AlertTriangle, ArrowDown, ArrowUp, Plus, Save, Trash2 } from 'lucide-react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useAdminCategoryMutations, useCatalogCategories } from '@/hooks/use-catalog';
+import type { CatalogCategory, CategoryAttributeSchema } from '@/types';
+import { deriveCategoryLevel, wouldCreateCycle } from '@/lib/category-hierarchy';
 
-type ProductStatus = 'approved' | 'pending' | 'rejected';
+type AttributeType = CategoryAttributeSchema['type'];
 
-interface CatalogProduct {
-  id: string;
-  name: string;
-  vendor: string;
-  category: string;
-  price: string;
-  status: ProductStatus;
-}
+const EMPTY_ATTRIBUTE: CategoryAttributeSchema = { key: '', label: '', type: 'text', required: false, options: [] };
 
-const INITIAL_PRODUCTS: CatalogProduct[] = [
-  { id: '1', name: 'Handcrafted Ceramic Mug', vendor: 'Artisan Crafts Co.', category: 'Home & Kitchen', price: '$28.00', status: 'approved' },
-  { id: '2', name: 'Wireless Earbuds Pro', vendor: 'Tech Gadgets Ltd.', category: 'Electronics', price: '$79.99', status: 'pending' },
-  { id: '3', name: 'Organic Bamboo Cutting Board', vendor: 'Green Living Store', category: 'Kitchen', price: '$34.50', status: 'approved' },
-  { id: '4', name: '1980s Denim Jacket', vendor: 'Vintage Finds', category: 'Clothing', price: '$120.00', status: 'pending' },
-  { id: '5', name: 'Scented Soy Candle Set', vendor: 'Artisan Crafts Co.', category: 'Home', price: '$45.00', status: 'rejected' },
-];
+function CategoryForm({
+  category,
+  categories,
+  onSubmit,
+  submitLabel,
+}: {
+  category?: CatalogCategory;
+  categories: CatalogCategory[];
+  onSubmit: (payload: {
+    name: string;
+    slug: string;
+    parent_id?: string;
+    level: number;
+    description: string;
+    attributes: CategoryAttributeSchema[];
+    sort_order: number;
+    expected_updated_at?: string;
+  }) => void;
+  submitLabel: string;
+}) {
+  const [name, setName] = useState(category?.name ?? '');
+  const [slug, setSlug] = useState(category?.slug ?? '');
+  const [parentId, setParentId] = useState(category?.parent_id ?? '');
+  const [description, setDescription] = useState(category?.description ?? '');
+  const [sortOrder, setSortOrder] = useState(String(category?.sort_order ?? 0));
+  const [attributes, setAttributes] = useState<CategoryAttributeSchema[]>(category?.attributes ?? []);
+  const [error, setError] = useState('');
 
-const STATUS_STYLES: Record<ProductStatus, string> = {
-  approved: 'bg-[var(--success-soft)] text-emerald-700',
-  pending: 'bg-[var(--warning-soft)] text-[var(--text-secondary)]',
-  rejected: 'bg-[var(--danger-soft)] text-red-700',
-};
+  const level = useMemo(() => {
+    return deriveCategoryLevel(parentId, categories);
+  }, [categories, parentId]);
 
-function AddProductModal({ onClose, onAdd }: { onClose: () => void; onAdd: (p: Omit<CatalogProduct, 'id'>) => void }) {
-  const [name, setName] = useState('');
-  const [vendor, setVendor] = useState('');
-  const [category, setCategory] = useState('');
-  const [price, setPrice] = useState('');
+  const potentialParents = categories.filter((item) => item.id !== category?.id && item.level < 3);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) return;
-    onAdd({ name: name.trim(), vendor: vendor.trim() || 'Unknown', category: category.trim() || 'General', price: price.trim() || '$0.00', status: 'pending' });
-    onClose();
+  const addAttribute = () => setAttributes((prev) => [...prev, { ...EMPTY_ATTRIBUTE }]);
+  const updateAttribute = (index: number, next: Partial<CategoryAttributeSchema>) => {
+    setAttributes((prev) => prev.map((item, i) => (i === index ? { ...item, ...next } : item)));
+  };
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    setError('');
+    if (category?.id && wouldCreateCycle(category.id, parentId, categories)) {
+      setError('Cannot move a category inside its own descendants.');
+      return;
+    }
+    if (level > 3) {
+      setError('Category depth cannot exceed 3 levels.');
+      return;
+    }
+    const cleanedAttributes = attributes
+      .filter((item) => item.key.trim() && item.label.trim())
+      .map((item) => ({
+        ...item,
+        key: item.key.trim(),
+        label: item.label.trim(),
+        options: (item.options ?? []).filter(Boolean),
+      }));
+    onSubmit({
+      name: name.trim(),
+      slug: slug.trim(),
+      parent_id: parentId || undefined,
+      level,
+      description: description.trim(),
+      attributes: cleanedAttributes,
+      sort_order: Number(sortOrder || 0),
+      expected_updated_at: category?.updated_at,
+    });
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-[28px] border border-[var(--border-color)] bg-[var(--surface)] p-6 shadow-[0_16px_40px_rgba(0,0,0,0.16)]">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-[var(--text-primary)]">Add catalog product</h2>
-          <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close"><X className="h-4 w-4" /></Button>
-        </div>
-        <form onSubmit={handleSubmit} className="mt-5 space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">Product name</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Handcrafted Ceramic Mug" required />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">Vendor</label>
-              <Input value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="Vendor name" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">Category</label>
-              <Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Electronics" />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">Price</label>
-            <Input value={price} onChange={(e) => setPrice(e.target.value)} placeholder="$0.00" />
-          </div>
-          <div className="flex justify-end gap-3 pt-2">
-            <Button variant="outline" type="button" onClick={onClose}>Cancel</Button>
-            <Button type="submit">Add product</Button>
-          </div>
-        </form>
+    <form className="space-y-4" onSubmit={submit}>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Category name" required />
+        <Input value={slug} onChange={(event) => setSlug(event.target.value)} placeholder="category-slug" required />
       </div>
-    </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        <select className="h-10 rounded-md border px-3 text-sm" value={parentId} onChange={(e) => setParentId(e.target.value)}>
+          <option value="">No parent (L1)</option>
+          {potentialParents.map((item) => (
+            <option key={item.id} value={item.id}>{item.name} (L{item.level})</option>
+          ))}
+        </select>
+        <Input value={String(level)} readOnly aria-label="category-level" />
+        <Input value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} placeholder="Sort order" type="number" />
+      </div>
+      <Input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Description" />
+
+      <div className="space-y-2 rounded-lg border p-3">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold">Attribute schema</p>
+          <Button type="button" variant="outline" size="sm" onClick={addAttribute}><Plus className="mr-1 h-3 w-3" /> Add</Button>
+        </div>
+        {attributes.map((attr, index) => (
+          <div key={`${attr.key}-${index}`} className="grid gap-2 md:grid-cols-5">
+            <Input value={attr.key} onChange={(e) => updateAttribute(index, { key: e.target.value })} placeholder="key" />
+            <Input value={attr.label} onChange={(e) => updateAttribute(index, { label: e.target.value })} placeholder="label" />
+            <select
+              className="h-10 rounded-md border px-3 text-sm"
+              value={attr.type}
+              onChange={(e) => updateAttribute(index, { type: e.target.value as AttributeType })}
+            >
+              <option value="text">text</option>
+              <option value="number">number</option>
+              <option value="boolean">boolean</option>
+              <option value="select">select</option>
+            </select>
+            <Input
+              value={(attr.options ?? []).join(',')}
+              onChange={(e) => updateAttribute(index, { options: e.target.value.split(',').map((item) => item.trim()) })}
+              placeholder="option1,option2"
+            />
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={attr.required} onChange={(e) => updateAttribute(index, { required: e.target.checked })} />
+              Required
+            </label>
+          </div>
+        ))}
+      </div>
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <Button type="submit"><Save className="mr-2 h-4 w-4" /> {submitLabel}</Button>
+    </form>
   );
 }
 
 export default function AdminCatalogPage() {
-  const [products, setProducts] = useState<CatalogProduct[]>(INITIAL_PRODUCTS);
-  const [showAdd, setShowAdd] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<'all' | ProductStatus>('all');
+  const { data } = useCatalogCategories();
+  const categories = data?.items ?? [];
+  const { createCategory, updateCategory, deleteCategory, reorderCategories } = useAdminCategoryMutations();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [deleteTargetId, setDeleteTargetId] = useState('');
+  const [globalError, setGlobalError] = useState('');
 
-  const filtered = statusFilter === 'all' ? products : products.filter((p) => p.status === statusFilter);
-
-  const handleAdd = (p: Omit<CatalogProduct, 'id'>) => {
-    setProducts((prev) => [...prev, { ...p, id: String(Date.now()) }]);
+  const saveCategory = async (payload: {
+    name: string;
+    slug: string;
+    parent_id?: string;
+    level: number;
+    description: string;
+    attributes: CategoryAttributeSchema[];
+    sort_order: number;
+    expected_updated_at?: string;
+  }) => {
+    try {
+      setGlobalError('');
+      if (editingId) {
+        await updateCategory.mutateAsync({ id: editingId, payload });
+      } else {
+        await createCategory.mutateAsync(payload);
+      }
+      setEditingId(null);
+    } catch {
+      setGlobalError('Save failed. Check slug uniqueness and stale updates.');
+    }
   };
 
-  const setStatus = (id: string, status: ProductStatus) => {
-    setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, status } : p)));
+  const move = async (category: CatalogCategory, delta: number) => {
+    const siblings = categories
+      .filter((item) => item.parent_id === category.parent_id)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    const index = siblings.findIndex((item) => item.id === category.id);
+    const target = siblings[index + delta];
+    if (!target) return;
+    const payload = categories.map((item) => {
+      if (item.id === category.id) return { id: item.id, parent_id: item.parent_id, sort_order: target.sort_order ?? 0 };
+      if (item.id === target.id) return { id: item.id, parent_id: item.parent_id, sort_order: category.sort_order ?? 0 };
+      return { id: item.id, parent_id: item.parent_id, sort_order: item.sort_order ?? 0 };
+    });
+    await reorderCategories.mutateAsync(payload);
   };
-
-  const pendingCount = products.filter((p) => p.status === 'pending').length;
-  const approvedCount = products.filter((p) => p.status === 'approved').length;
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">Admin Console</p>
-          <h1 className="mt-2 text-3xl font-semibold text-[var(--text-primary)]">Catalog Moderation</h1>
-          <p className="mt-1 max-w-2xl text-sm text-[var(--text-secondary)]">
-            Approve products, inspect category and brand structure, and moderate the public catalog.
-          </p>
-        </div>
-        <Button onClick={() => setShowAdd(true)} className="shrink-0">
-          <Plus className="mr-2 h-4 w-4" />
-          Add product
-        </Button>
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-3">
-        {[
-          { label: 'Total products', value: products.length },
-          { label: 'Pending review', value: pendingCount },
-          { label: 'Approved', value: approvedCount },
-        ].map((stat) => (
-          <Card key={stat.label} className="rounded-[24px]">
-            <CardContent className="pt-5">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">{stat.label}</p>
-              <p className="mt-1 text-3xl font-semibold text-[var(--text-primary)]">{stat.value}</p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <Card className="rounded-[28px]">
-        <CardHeader className="border-b border-[var(--border-color)]">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle>Product queue</CardTitle>
-              <CardDescription className="mt-1">Review and approve or reject submitted products.</CardDescription>
-            </div>
-            <div className="flex rounded-xl border border-[var(--border-color)] bg-white p-1">
-              {(['all', 'pending', 'approved', 'rejected'] as const).map((f) => (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() => setStatusFilter(f)}
-                  className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                    statusFilter === f
-                      ? 'bg-[var(--foreground)] text-[var(--background)]'
-                      : 'text-[var(--text-secondary)] hover:bg-[var(--surface-subtle)]'
-                  }`}
-                >
-                  {f[0].toUpperCase() + f.slice(1)}
-                </button>
-              ))}
-            </div>
-          </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Category management</CardTitle>
+          <CardDescription>Create, edit, reorder, merge, and model custom attributes with max depth 3.</CardDescription>
         </CardHeader>
-        <CardContent className="p-0">
-          {filtered.length === 0 ? (
-            <div className="px-6 py-14 text-center">
-              <p className="text-sm font-medium text-[var(--text-primary)]">No products found.</p>
-              <p className="mt-1 text-xs text-[var(--text-muted)]">Try a different filter or add a product.</p>
-            </div>
-          ) : (
-            <ul className="divide-y divide-[var(--border-color)]">
-              {filtered.map((product) => (
-                <li key={product.id} className="flex flex-col gap-3 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[var(--surface-muted)] text-[var(--text-muted)]">
-                      <Package className="h-5 w-5" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-[var(--text-primary)]">{product.name}</p>
-                      <p className="truncate text-xs text-[var(--text-muted)]">{product.vendor} · {product.category} · {product.price}</p>
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_STYLES[product.status]}`}>
-                      {product.status}
-                    </span>
-                    {product.status === 'pending' && (
-                      <>
-                        <Button size="sm" onClick={() => setStatus(product.id, 'approved')}>
-                          <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
-                          Approve
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => setStatus(product.id, 'rejected')}>
-                          <AlertCircle className="mr-1.5 h-3.5 w-3.5" />
-                          Reject
-                        </Button>
-                      </>
-                    )}
-                    {product.status === 'rejected' && (
-                      <Button size="sm" variant="outline" onClick={() => setStatus(product.id, 'pending')}>Re-review</Button>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
+        <CardContent>
+          <CategoryForm
+            category={categories.find((item) => item.id === editingId)}
+            categories={categories}
+            submitLabel={editingId ? 'Update category' : 'Create category'}
+            onSubmit={saveCategory}
+          />
+          {globalError && (
+            <p className="mt-3 flex items-center gap-2 text-sm text-red-600"><AlertTriangle className="h-4 w-4" /> {globalError}</p>
           )}
         </CardContent>
       </Card>
 
-      {showAdd && <AddProductModal onClose={() => setShowAdd(false)} onAdd={handleAdd} />}
+      <Card>
+        <CardHeader>
+          <CardTitle>Hierarchy</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {categories
+            .sort((a, b) => a.level - b.level || (a.sort_order ?? 0) - (b.sort_order ?? 0))
+            .map((category) => (
+              <div key={category.id} className="flex flex-wrap items-center gap-2 rounded-md border p-3">
+                <p className="min-w-60 text-sm" style={{ marginLeft: `${(category.level - 1) * 16}px` }}>
+                  {category.name} <span className="text-xs text-muted-foreground">({category.slug})</span>
+                </p>
+                <Button variant="outline" size="sm" onClick={() => move(category, -1)}><ArrowUp className="h-3 w-3" /></Button>
+                <Button variant="outline" size="sm" onClick={() => move(category, 1)}><ArrowDown className="h-3 w-3" /></Button>
+                <Button variant="outline" size="sm" onClick={() => setEditingId(category.id)}>Edit</Button>
+                <select className="h-9 rounded-md border px-2 text-xs" value={deleteTargetId} onChange={(e) => setDeleteTargetId(e.target.value)}>
+                  <option value="">Delete without migration</option>
+                  {categories.filter((item) => item.id !== category.id).map((item) => (
+                    <option key={item.id} value={item.id}>Migrate to {item.name}</option>
+                  ))}
+                </select>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      setGlobalError('');
+                      await deleteCategory.mutateAsync({ id: category.id, migrateToCategoryId: deleteTargetId || undefined });
+                    } catch {
+                      setGlobalError('Delete failed. Descendants require a migration target and hierarchy must remain valid.');
+                    }
+                  }}
+                >
+                  <Trash2 className="mr-1 h-3 w-3" /> Delete
+                </Button>
+              </div>
+            ))}
+        </CardContent>
+      </Card>
     </div>
   );
 }
-

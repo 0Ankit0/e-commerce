@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -55,6 +56,21 @@ class CategoryCreateRequest(BaseModel):
     description: str = ""
     attributes: list[dict[str, object]] = []
     sort_order: int = 0
+    expected_updated_at: str | None = None
+
+
+class CategoryDeleteRequest(BaseModel):
+    migrate_to_category_id: str | None = None
+
+
+class CategoryReorderItem(BaseModel):
+    id: str
+    parent_id: str | None = None
+    sort_order: int = 0
+
+
+class CategoryReorderRequest(BaseModel):
+    items: list[CategoryReorderItem]
 
 
 class BrandCreateRequest(BaseModel):
@@ -136,6 +152,66 @@ def _read_import_rows(csv_content: str) -> list[dict[str, str]]:
     if missing:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"CSV is missing required columns: {', '.join(missing)}")
     return [{key: (value or "").strip() for key, value in row.items()} for row in reader]
+
+
+async def _active_categories(db: AsyncSession) -> list[Category]:
+    return (await db.execute(select(Category).where(Category.is_active == True))).scalars().all()
+
+
+def _collect_descendant_ids(root_id: int, categories: list[Category]) -> set[int]:
+    children_by_parent: dict[int | None, list[Category]] = {}
+    for category in categories:
+        children_by_parent.setdefault(category.parent_id, []).append(category)
+    descendants: set[int] = set()
+    queue = [root_id]
+    while queue:
+        current = queue.pop(0)
+        for child in children_by_parent.get(current, []):
+            if child.id is None:
+                continue
+            descendants.add(child.id)
+            queue.append(child.id)
+    return descendants
+
+
+def _build_depth(category_id: int | None, category_by_id: dict[int, Category]) -> int:
+    depth = 1
+    seen: set[int] = set()
+    current = category_id
+    while current is not None:
+        if current in seen:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category hierarchy contains a cycle")
+        seen.add(current)
+        parent = category_by_id.get(current)
+        if parent is None:
+            break
+        depth += 1
+        current = parent.parent_id
+    return depth
+
+
+async def _validate_category_assignment(
+    *,
+    db: AsyncSession,
+    category: Category | None,
+    parent_id: int | None,
+    level: int,
+) -> None:
+    categories = await _active_categories(db)
+    category_by_id = {item.id: item for item in categories if item.id is not None}
+    if parent_id is not None and parent_id not in category_by_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Parent category not found")
+
+    if category and category.id is not None and parent_id is not None:
+        descendants = _collect_descendant_ids(category.id, categories)
+        if parent_id == category.id or parent_id in descendants:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot move category into itself or its descendants")
+
+    derived_level = _build_depth(parent_id, category_by_id)
+    if derived_level > 3:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category depth cannot exceed 3 levels")
+    if level != derived_level:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Category level must be {derived_level} for selected parent")
 
 
 async def _snapshot_variant_price(
@@ -298,7 +374,9 @@ async def list_categories(db: AsyncSession = Depends(get_db)):
                 "slug": category.slug,
                 "level": category.level,
                 "description": category.description,
+                "sort_order": category.sort_order,
                 "attributes": json.loads(category.attributes_json or "[]"),
+                "updated_at": category.updated_at.isoformat(),
             }
             for category in categories
         ],
@@ -312,6 +390,12 @@ async def create_category(
     _: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
+    await _validate_category_assignment(
+        db=db,
+        category=None,
+        parent_id=decode_id_or_404(payload.parent_id) if payload.parent_id else None,
+        level=payload.level,
+    )
     category = Category(
         name=payload.name,
         slug=payload.slug,
@@ -322,7 +406,13 @@ async def create_category(
         attributes_json=json.dumps(payload.attributes),
     )
     db.add(category)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        if "slug" in str(exc).lower():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Category slug already exists") from exc
+        raise
     await db.refresh(category)
     return {"category": {"id": encode_id(category.id or 0), "name": category.name, "slug": category.slug}}
 
@@ -337,27 +427,101 @@ async def update_category(
     category = await db.get(Category, decode_id_or_404(category_id))
     if category is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    if payload.expected_updated_at and category.updated_at.isoformat() != payload.expected_updated_at:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Category has been updated by another admin")
+
+    next_parent_id = decode_id_or_404(payload.parent_id) if payload.parent_id else None
+    await _validate_category_assignment(
+        db=db,
+        category=category,
+        parent_id=next_parent_id,
+        level=payload.level,
+    )
     category.name = payload.name
     category.slug = payload.slug
-    category.parent_id = decode_id_or_404(payload.parent_id) if payload.parent_id else None
+    category.parent_id = next_parent_id
     category.level = payload.level
     category.description = payload.description
     category.sort_order = payload.sort_order
     category.attributes_json = json.dumps(payload.attributes)
-    await db.commit()
+    category.updated_at = utc_now()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        if "slug" in str(exc).lower():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Category slug already exists") from exc
+        raise
     return {"category": {"id": encode_id(category.id or 0), "name": category.name, "slug": category.slug}}
 
 
 @router.delete("/admin/categories/{category_id}")
 async def delete_category(
     category_id: str,
+    payload: CategoryDeleteRequest | None = None,
     _: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
     category = await db.get(Category, decode_id_or_404(category_id))
     if category is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    categories = await _active_categories(db)
+    descendants = _collect_descendant_ids(category.id or 0, categories)
+    migration_target_id = decode_id_or_404(payload.migrate_to_category_id) if payload and payload.migrate_to_category_id else None
+
+    if descendants and migration_target_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Category has active descendants; provide migrate_to_category_id",
+        )
+    if migration_target_id is not None:
+        if migration_target_id == category.id or migration_target_id in descendants:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot migrate into deleted subtree")
+        migration_target = await db.get(Category, migration_target_id)
+        if migration_target is None or not migration_target.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Migration target category not found")
+        for product in (await db.execute(select(Product).where(Product.category_id == (category.id or 0)))).scalars().all():
+            product.category_id = migration_target_id
+        for child in categories:
+            if child.parent_id == category.id:
+                child.parent_id = migration_target_id
+                child.level = migration_target.level + 1
+                if child.level > 3:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Migration would exceed maximum hierarchy depth",
+                    )
+
     category.is_active = False
+    category.updated_at = utc_now()
+    await db.commit()
+    return {"success": True}
+
+
+@router.post("/admin/categories/reorder")
+async def reorder_categories(
+    payload: CategoryReorderRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    categories = await _active_categories(db)
+    category_by_id = {category.id: category for category in categories if category.id is not None}
+    requested_ids = {decode_id_or_404(item.id) for item in payload.items}
+    if requested_ids != set(category_by_id.keys()):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Reorder payload must include all active categories")
+
+    for item in payload.items:
+        category = category_by_id[decode_id_or_404(item.id)]
+        parent_id = decode_id_or_404(item.parent_id) if item.parent_id else None
+        category.parent_id = parent_id
+        category.sort_order = item.sort_order
+
+    for category in category_by_id.values():
+        category.level = _build_depth(category.parent_id, category_by_id)
+        if category.level > 3:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category depth cannot exceed 3 levels")
+        category.updated_at = utc_now()
+
     await db.commit()
     return {"success": True}
 

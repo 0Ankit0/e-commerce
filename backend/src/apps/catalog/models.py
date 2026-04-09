@@ -51,6 +51,7 @@ class Category(SQLModel, table=True):
     is_active: bool = Field(default=True)
     attributes_json: str = Field(default="[]")
     created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class Brand(SQLModel, table=True):
