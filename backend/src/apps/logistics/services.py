@@ -21,6 +21,9 @@ from src.apps.logistics.models import (
     DeliveryExceptionStatus,
     DeliveryZone,
     Hub,
+    HubOperationEvent,
+    HubSortQueue,
+    HubSortQueueStatus,
     LineHaulTrip,
     LineHaulTripStatus,
     PickupJob,
@@ -135,6 +138,82 @@ async def get_trip_or_404(trip_id: int, db: AsyncSession) -> LineHaulTrip:
     if trip is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found")
     return trip
+
+
+async def get_hub_sort_queue_or_404(queue_id: int, db: AsyncSession) -> HubSortQueue:
+    queue = await db.get(HubSortQueue, queue_id)
+    if queue is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hub sort queue not found")
+    return queue
+
+
+async def append_hub_operation_event(
+    *,
+    hub_id: int,
+    operation_type: str,
+    db: AsyncSession,
+    queue_id: int | None = None,
+    queue_item_id: int | None = None,
+    shipment_id: int | None = None,
+    manifest_id: int | None = None,
+    actor_type: str = "system",
+    actor_id: int | None = None,
+    payload: dict[str, object] | None = None,
+) -> HubOperationEvent:
+    event = HubOperationEvent(
+        hub_id=hub_id,
+        queue_id=queue_id,
+        queue_item_id=queue_item_id,
+        shipment_id=shipment_id,
+        manifest_id=manifest_id,
+        operation_type=operation_type,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        payload_json=json.dumps(payload or {}),
+    )
+    db.add(event)
+    await db.flush()
+    return event
+
+
+async def create_hub_sort_queue(
+    *,
+    hub_id: int,
+    code: str,
+    manifest_id: int | None,
+    actor_id: int | None,
+    db: AsyncSession,
+) -> HubSortQueue:
+    queue = HubSortQueue(hub_id=hub_id, code=code, manifest_id=manifest_id)
+    db.add(queue)
+    await db.flush()
+    await append_hub_operation_event(
+        hub_id=hub_id,
+        operation_type="sort_queue_created",
+        queue_id=queue.id,
+        manifest_id=manifest_id,
+        actor_type="admin",
+        actor_id=actor_id,
+        payload={"code": code},
+        db=db,
+    )
+    return queue
+
+
+async def close_hub_sort_queue(queue: HubSortQueue, *, actor_id: int | None, db: AsyncSession) -> HubSortQueue:
+    queue.status = HubSortQueueStatus.CLOSED
+    queue.closed_at = utc_now()
+    await append_hub_operation_event(
+        hub_id=queue.hub_id,
+        operation_type="sort_queue_closed",
+        queue_id=queue.id,
+        manifest_id=queue.manifest_id,
+        actor_type="admin",
+        actor_id=actor_id,
+        payload={},
+        db=db,
+    )
+    return queue
 
 
 async def update_shipment_tracking(
