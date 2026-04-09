@@ -8,12 +8,16 @@ from src.apps.commerce.models import Address
 from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import encode_id
 from src.apps.logistics.api.v1.routes import (
+    HubBulkAssignRequest,
+    HubBulkScanRequest,
     HubBulkMoveNextLegRequest,
     HubSortAssignRequest,
     HubSortQueueCreateRequest,
     HubSortScanRequest,
     assign_hub_sort_item,
+    bulk_assign_hub_sort_items,
     bulk_move_to_next_leg,
+    bulk_scan_hub_sort_items,
     close_hub_queue,
     create_hub_queue,
     scan_hub_sort_item,
@@ -146,6 +150,14 @@ async def test_manifest_closed_blocks_sort_actions(db_session):
             admin,
             db_session,
         )
+    with pytest.raises(HTTPException, match="Manifest closed during sort action"):
+        await bulk_scan_hub_sort_items(
+            encode_id(hub.id or 0),
+            queue_response["queue_id"],
+            HubBulkScanRequest(shipment_ids=[encode_id(shipment.id or 0)]),
+            admin,
+            db_session,
+        )
 
 
 @pytest.mark.asyncio
@@ -212,3 +224,69 @@ async def test_bulk_move_requires_readiness_and_marks_items_moved(db_session):
     assert result["moved_count"] == 1
     item = (await db_session.execute(select(HubSortQueueItem))).scalars().one()
     assert item.status.value == "moved_to_next_leg"
+    rerun = await bulk_move_to_next_leg(
+        encode_id(hub.id or 0),
+        queue_response["queue_id"],
+        HubBulkMoveNextLegRequest(
+            shipment_ids=[encode_id(shipment.id or 0)],
+            carrier="CarrierX",
+            vehicle_number="VEH-42",
+            carrier_ready=True,
+            vehicle_ready=True,
+        ),
+        admin,
+        db_session,
+    )
+    assert rerun["moved_count"] == 0
+    assert rerun["already_moved_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_scan_and_assign_are_idempotent(db_session):
+    admin = await _seed_user(db_session)
+    hub = Hub(name="Hub Bulk", code="HUB-B")
+    db_session.add(hub)
+    await db_session.flush()
+    shipment = await _seed_shipment(db_session)
+    queue_response = await create_hub_queue(
+        encode_id(hub.id or 0),
+        HubSortQueueCreateRequest(code="QUEUE-B"),
+        admin,
+        db_session,
+    )
+    scan_result = await bulk_scan_hub_sort_items(
+        encode_id(hub.id or 0),
+        queue_response["queue_id"],
+        HubBulkScanRequest(shipment_ids=[encode_id(shipment.id or 0), encode_id(shipment.id or 0)]),
+        admin,
+        db_session,
+    )
+    assert scan_result["requested_count"] == 2
+    assert scan_result["scanned_count"] == 1
+    assert scan_result["duplicate_count"] == 1
+
+    assign_result = await bulk_assign_hub_sort_items(
+        encode_id(hub.id or 0),
+        queue_response["queue_id"],
+        HubBulkAssignRequest(
+            shipment_ids=[encode_id(shipment.id or 0)],
+            carrier="CarrierB",
+            vehicle_number="VEH-B",
+        ),
+        admin,
+        db_session,
+    )
+    assert assign_result["assigned_count"] == 1
+    assign_again = await bulk_assign_hub_sort_items(
+        encode_id(hub.id or 0),
+        queue_response["queue_id"],
+        HubBulkAssignRequest(
+            shipment_ids=[encode_id(shipment.id or 0)],
+            carrier="CarrierB",
+            vehicle_number="VEH-B",
+        ),
+        admin,
+        db_session,
+    )
+    assert assign_again["assigned_count"] == 0
+    assert assign_again["idempotent_skip_count"] == 1
