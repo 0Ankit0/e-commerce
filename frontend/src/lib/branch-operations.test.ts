@@ -3,6 +3,10 @@ import {
   canPerformSupervisorAction,
   computeBranchKpis,
   deactivateAgentWithGuardrails,
+  getAgentPerformance,
+  getBranchInventorySummary,
+  getInventoryMovementTrend,
+  getSlaBreachTrend,
   transferShipmentBranch,
 } from './branch-operations';
 import type { BranchOperationsSnapshot } from '@/types/branch-operations';
@@ -66,5 +70,56 @@ describe('branch operations KPI and permissions', () => {
     expect(transferred.branchId).toBe('b2');
     expect(transferred.status).toBe('branch_transfer');
     expect(transferred.notes).toBe('Capacity overflow');
+  });
+
+  it('computes inventory and agent performance metrics for branch dashboards', () => {
+    const inventorySummary = getBranchInventorySummary('b1', [
+      { id: 'i1', branchId: 'b1', sku: 'SKU-1', name: 'Item 1', onHand: 4, reserved: 2, reorderPoint: 5 },
+      { id: 'i2', branchId: 'b1', sku: 'SKU-2', name: 'Item 2', onHand: 10, reserved: 1, reorderPoint: 3 },
+      { id: 'i3', branchId: 'b2', sku: 'SKU-3', name: 'Item 3', onHand: 20, reserved: 0, reorderPoint: 3 },
+    ]);
+    expect(inventorySummary.skuCount).toBe(2);
+    expect(inventorySummary.lowStockCount).toBe(1);
+    expect(inventorySummary.totalOnHand).toBe(14);
+    expect(inventorySummary.totalReserved).toBe(3);
+
+    const performance = getAgentPerformance('b1', snapshot.agents, snapshot.shipments);
+    expect(performance).toHaveLength(2);
+    expect(performance[0]).toMatchObject({
+      agentId: 'a1',
+      delivered: 1,
+      failed: 1,
+      successRate: 50,
+    });
+  });
+
+  it('builds branch-level SLA and inventory trends with operational day handling', () => {
+    const boundary = { timezone: 'Asia/Kathmandu', cutoffHourLocal: 6, asOfDate: '2026-04-08' };
+    const movements = getInventoryMovementTrend(
+      'b1',
+      [
+        { id: 'm1', branchId: 'b1', sku: 'SKU-1', quantity: 9, direction: 'in', timestamp: '2026-04-08T01:00:00Z', reason: 'Hub replenishment' },
+        { id: 'm2', branchId: 'b1', sku: 'SKU-1', quantity: 3, direction: 'out', timestamp: '2026-04-08T02:00:00Z', reason: 'Allocation' },
+      ],
+      boundary,
+    );
+    expect(movements).toEqual([{ date: '2026-04-08', inbound: 9, outbound: 3 }]);
+
+    const breaches = getSlaBreachTrend(
+      'b1',
+      [
+        {
+          id: 'sx-1',
+          shipmentId: 'Sx',
+          branchId: 'b1',
+          createdAt: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(),
+          status: 'open',
+          reason: 'Blocked',
+        },
+      ],
+      boundary,
+    );
+    expect(breaches.length).toBe(1);
+    expect(breaches[0].breaches).toBe(1);
   });
 });
