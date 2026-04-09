@@ -10,6 +10,7 @@ from src.apps.core import security
 from src.apps.iam.security import PrivilegedAction, PRIVILEGED_ACTION_POLICY_MAP, PrivilegedActionPolicy
 from src.apps.iam.models.token_tracking import TokenTracking
 from src.apps.iam.models.user import User
+from src.apps.observability.models import ObservabilityLogEntry
 from src.apps.iam.utils.hashid import encode_id
 
 
@@ -321,6 +322,154 @@ class TestAuthenticationSecurity:
         )
         assert replay.status_code == 403
         assert replay.json()["detail"]["code"] == "OTP_CHALLENGE_REQUIRED"
+
+
+
+    @pytest.mark.asyncio
+    async def test_privileged_action_audits_challenge_success_and_replay(self, client: AsyncClient, db_session: AsyncSession):
+        otp_secret = pyotp.random_base32()
+        admin = User(
+            username="stepup_audit_admin",
+            email="stepup-audit-admin@example.com",
+            hashed_password=security.get_password_hash("ValidPass123"),
+            is_active=True,
+            is_superuser=True,
+            is_confirmed=True,
+            otp_enabled=True,
+            otp_verified=True,
+            otp_base32=otp_secret,
+        )
+        target = User(
+            username="stepup_audit_target",
+            email="stepup-audit-target@example.com",
+            hashed_password=security.get_password_hash("ValidPass123"),
+            is_active=True,
+            is_superuser=False,
+            is_confirmed=True,
+        )
+        db_session.add(admin)
+        db_session.add(target)
+        await db_session.commit()
+
+        login = await client.post(
+            "/api/v1/auth/login/?set_cookie=false",
+            json={"username": "stepup_audit_admin", "password": "ValidPass123"},
+        )
+        headers = {"Authorization": f"Bearer {login.json()['access']}"}
+
+        await client.patch(
+            f"/api/v1/users/{encode_id(target.id)}",
+            json={"is_active": False},
+            headers=headers,
+        )
+
+        step_up = await client.post(
+            "/api/v1/auth/otp/step-up/verify",
+            json={"otp_code": pyotp.TOTP(otp_secret).now(), "action": PrivilegedAction.USER_STATUS_EDIT.value},
+            headers=headers,
+        )
+        step_token = step_up.json()["step_up_token"]
+
+        await client.patch(
+            f"/api/v1/users/{encode_id(target.id)}",
+            json={"is_active": False},
+            headers={**headers, "X-Privileged-Auth": step_token},
+        )
+
+        await client.patch(
+            f"/api/v1/users/{encode_id(target.id)}",
+            json={"is_active": True},
+            headers={**headers, "X-Privileged-Auth": step_token},
+        )
+
+        audit_rows = (
+            await db_session.execute(
+                select(ObservabilityLogEntry)
+                .where(
+                    ObservabilityLogEntry.user_id == admin.id,
+                    ObservabilityLogEntry.event_code.in_(
+                        [
+                            "admin.privileged_action.challenge_required",
+                            "admin.privileged_action.success",
+                        ]
+                    ),
+                )
+                .order_by(ObservabilityLogEntry.timestamp.asc())
+            )
+        ).scalars().all()
+
+        outcomes = [row.event_code for row in audit_rows]
+        assert "admin.privileged_action.success" in outcomes
+        assert outcomes.count("admin.privileged_action.challenge_required") >= 2
+
+        replay_challenge = next(
+            row
+            for row in reversed(audit_rows)
+            if row.event_code == "admin.privileged_action.challenge_required"
+        )
+        assert replay_challenge.metadata_json["reason"] == "expired_or_invalid_step_up_token"
+
+    @pytest.mark.asyncio
+    async def test_privileged_action_role_change_mid_session_is_audited_failure(self, client: AsyncClient, db_session: AsyncSession):
+        otp_secret = pyotp.random_base32()
+        admin = User(
+            username="stepup_rolechange_admin",
+            email="stepup-rolechange-admin@example.com",
+            hashed_password=security.get_password_hash("ValidPass123"),
+            is_active=True,
+            is_superuser=True,
+            is_confirmed=True,
+            otp_enabled=True,
+            otp_verified=True,
+            otp_base32=otp_secret,
+        )
+        target = User(
+            username="stepup_rolechange_target",
+            email="stepup-rolechange-target@example.com",
+            hashed_password=security.get_password_hash("ValidPass123"),
+            is_active=True,
+            is_superuser=False,
+            is_confirmed=True,
+        )
+        db_session.add(admin)
+        db_session.add(target)
+        await db_session.commit()
+
+        login = await client.post(
+            "/api/v1/auth/login/?set_cookie=false",
+            json={"username": "stepup_rolechange_admin", "password": "ValidPass123"},
+        )
+        headers = {"Authorization": f"Bearer {login.json()['access']}"}
+
+        step_up = await client.post(
+            "/api/v1/auth/otp/step-up/verify",
+            json={"otp_code": pyotp.TOTP(otp_secret).now(), "action": PrivilegedAction.USER_STATUS_EDIT.value},
+            headers=headers,
+        )
+
+        admin.is_superuser = False
+        await db_session.commit()
+
+        forbidden = await client.patch(
+            f"/api/v1/users/{encode_id(target.id)}",
+            json={"is_active": False},
+            headers={**headers, "X-Privileged-Auth": step_up.json()["step_up_token"]},
+        )
+        assert forbidden.status_code == 403
+
+        failure_audit = (
+            await db_session.execute(
+                select(ObservabilityLogEntry)
+                .where(
+                    ObservabilityLogEntry.user_id == admin.id,
+                    ObservabilityLogEntry.event_code == "admin.privileged_action.failure",
+                )
+                .order_by(ObservabilityLogEntry.timestamp.desc())
+            )
+        ).scalars().first()
+
+        assert failure_audit is not None
+        assert failure_audit.metadata_json["reason"] == "role_requirement_not_met"
 
     @pytest.mark.asyncio
     async def test_privileged_action_rejects_expired_step_up_session(self, client: AsyncClient, db_session: AsyncSession, monkeypatch):
