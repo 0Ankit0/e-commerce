@@ -149,6 +149,7 @@ export const PORTAL_DEFINITIONS: Record<PortalKey, PortalDefinition> = {
       { label: 'Reports', href: '/admin/reports', icon: ScrollText },
       { label: 'Content', href: '/admin/content', icon: ShoppingBag },
       { label: 'Security', href: '/admin/security-review', icon: Shield },
+      { label: 'Comm Quotas', href: '/admin/communications-quotas', icon: Bell },
     ],
   },
 };

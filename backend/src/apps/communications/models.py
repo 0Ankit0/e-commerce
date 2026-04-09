@@ -77,3 +77,64 @@ class EmailDeliveryDeadLetter(SQLModel, table=True):
     reason: str = Field(max_length=255)
     payload_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column("payload", JSON))
     created_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class QuotaScope(str, Enum):
+    GLOBAL = "global"
+    TENANT = "tenant"
+    USER = "user"
+    TENANT_USER = "tenant_user"
+
+
+class ChannelQuotaPolicy(SQLModel, table=True):
+    __tablename__ = "channel_quota_policies"  # type: ignore[assignment]
+    __table_args__ = (
+        UniqueConstraint(
+            "channel",
+            "window_seconds",
+            "tenant_id",
+            "user_id",
+            name="uq_channel_quota_policy_scope",
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    channel: str = Field(default="sms", max_length=32, index=True)
+    scope: QuotaScope = Field(default=QuotaScope.GLOBAL, index=True)
+    tenant_id: Optional[int] = Field(default=None, foreign_key="tenant.id", index=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    limit_count: int = Field(default=50, ge=1)
+    window_seconds: int = Field(default=3600, ge=1)
+    timezone: str = Field(default="UTC", max_length=64)
+    enabled: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ChannelQuotaUsage(SQLModel, table=True):
+    __tablename__ = "channel_quota_usage"  # type: ignore[assignment]
+    __table_args__ = (
+        UniqueConstraint("policy_id", "window_start", name="uq_channel_quota_usage_bucket"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    policy_id: int = Field(foreign_key="channel_quota_policies.id", index=True)
+    window_start: datetime = Field(index=True)
+    window_end: datetime = Field(index=True)
+    usage_count: int = Field(default=0, ge=0)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ChannelQuotaOverrideAudit(SQLModel, table=True):
+    __tablename__ = "channel_quota_override_audit"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    policy_id: int = Field(foreign_key="channel_quota_policies.id", index=True)
+    actor_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    action: str = Field(max_length=64, index=True)
+    reason: str = Field(default="", max_length=512)
+    before_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column("before", JSON))
+    after_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column("after", JSON))
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column("metadata", JSON))
+    created_at: datetime = Field(default_factory=utc_now, index=True)
