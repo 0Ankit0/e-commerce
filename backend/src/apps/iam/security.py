@@ -123,6 +123,15 @@ async def enforce_privileged_action(
     policy = PRIVILEGED_ACTION_POLICY_MAP[action]
     role_ok = current_user.is_superuser if "superuser" in policy.required_roles else True
     if not role_ok:
+        await record_privileged_action_audit(
+            db,
+            actor_user_id=current_user.id,
+            action=action.value,
+            outcome="failure",
+            request=request,
+            metadata={"reason": "role_requirement_not_met", "required_roles": list(policy.required_roles)},
+        )
+        await db.commit()
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="The user doesn't have enough privileges")
 
     token = request.headers.get("X-Privileged-Auth")
@@ -174,3 +183,16 @@ async def enforce_privileged_action(
         )
         await db.commit()
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=build_privileged_action_error(action))
+
+    await record_privileged_action_audit(
+        db,
+        actor_user_id=current_user.id,
+        action=action.value,
+        outcome="success",
+        request=request,
+        metadata={
+            "reason": "step_up_validated",
+            "step_up_issued_at": payload.get("issued_at"),
+            "step_up_expires_at": payload.get("expires_at"),
+        },
+    )

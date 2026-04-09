@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type { AxiosError } from 'axios';
 import type { PrivilegedActionChallengeDetail, StepUpVerificationResponse } from '@/types';
+import { requestStepUpChallenge } from '@/lib/step-up-challenge';
 
 const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
@@ -101,7 +102,7 @@ apiClient.interceptors.response.use(
       typeof window !== 'undefined'
     ) {
       originalRequest._stepUpRetry = true;
-      const otpCode = window.prompt('Enter your 6-digit OTP code to continue this admin action:');
+      const otpCode = await requestStepUpChallenge({ challenge });
       if (!otpCode) {
         return Promise.reject(error);
       }
