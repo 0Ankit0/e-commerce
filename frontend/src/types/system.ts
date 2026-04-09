@@ -60,3 +60,39 @@ export interface MapConfigResponse {
     google: MapProviderConfig;
   };
 }
+
+export interface ChannelQuotaPolicy {
+  id: number;
+  channel: string;
+  scope: 'global' | 'tenant' | 'user' | 'tenant_user';
+  tenant_id: number | null;
+  user_id: number | null;
+  limit_count: number;
+  window_seconds: number;
+  timezone: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChannelQuotaUsage {
+  id: number;
+  policy_id: number;
+  window_start: string;
+  window_end: string;
+  usage_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChannelQuotaAudit {
+  id: number;
+  policy_id: number;
+  actor_user_id: number | null;
+  action: string;
+  reason: string;
+  before_json: Record<string, unknown>;
+  after_json: Record<string, unknown>;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+}

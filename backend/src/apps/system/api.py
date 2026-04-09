@@ -8,7 +8,15 @@ from sqlmodel import select
 
 from src.apps.communications import get_communications_service
 from src.apps.communications.delivery_observability import get_delivery_analytics, reconcile_webhook_event
-from src.apps.communications.models import EmailDeliveryDeadLetter, EmailDeliveryMessage, EmailMessageLifecycleStatus
+from src.apps.communications.models import (
+    ChannelQuotaOverrideAudit,
+    ChannelQuotaPolicy,
+    ChannelQuotaUsage,
+    EmailDeliveryDeadLetter,
+    EmailDeliveryMessage,
+    EmailMessageLifecycleStatus,
+)
+from src.apps.communications.quota import QuotaContext, derive_scope, list_matching_policies
 from src.apps.core.config import NON_RUNTIME_EDITABLE_SETTING_KEYS, settings
 from src.apps.core.models import GeneralSetting
 from src.apps.core.settings_store import (
@@ -28,6 +36,29 @@ class GeneralSettingUpdateRequest(BaseModel):
     db_value: str | None = None
     use_db_value: bool = True
 
+
+
+
+class ChannelQuotaPolicyPayload(BaseModel):
+    channel: str = Field(default="sms", max_length=32)
+    tenant_id: int | None = None
+    user_id: int | None = None
+    limit_count: int = Field(ge=1)
+    window_seconds: int = Field(ge=1)
+    timezone: str = Field(default="UTC", max_length=64)
+    enabled: bool = True
+
+
+class ChannelQuotaPolicyOverridePayload(BaseModel):
+    limit_count: int | None = Field(default=None, ge=1)
+    enabled: bool | None = None
+    reason: str = Field(default="", max_length=512)
+
+
+class ChannelQuotaCheckPayload(BaseModel):
+    channel: str = Field(default="sms", max_length=32)
+    tenant_id: int | None = None
+    user_id: int | None = None
 
 class EmailWebhookPayload(BaseModel):
     event_id: str = Field(min_length=1, max_length=255)
@@ -188,3 +219,116 @@ async def health() -> dict:
 @router.get("/ready/")
 async def ready() -> dict:
     return {"ready": True, "project": settings.PROJECT_NAME}
+
+
+@router.get("/admin/communications/quotas/policies/")
+async def list_quota_policies(
+    channel: str | None = None,
+    tenant_id: int | None = None,
+    user_id: int | None = None,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    query = select(ChannelQuotaPolicy)
+    if channel:
+        query = query.where(ChannelQuotaPolicy.channel == channel)
+    if tenant_id is not None:
+        query = query.where(ChannelQuotaPolicy.tenant_id == tenant_id)
+    if user_id is not None:
+        query = query.where(ChannelQuotaPolicy.user_id == user_id)
+    items = (await db.execute(query.order_by(ChannelQuotaPolicy.channel, ChannelQuotaPolicy.window_seconds))).scalars().all()
+    return {"items": [item.model_dump() for item in items], "count": len(items)}
+
+
+@router.post("/admin/communications/quotas/policies/")
+async def create_quota_policy(
+    payload: ChannelQuotaPolicyPayload,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    policy = ChannelQuotaPolicy(
+        channel=payload.channel,
+        tenant_id=payload.tenant_id,
+        user_id=payload.user_id,
+        scope=derive_scope(tenant_id=payload.tenant_id, user_id=payload.user_id),
+        limit_count=payload.limit_count,
+        window_seconds=payload.window_seconds,
+        timezone=payload.timezone,
+        enabled=payload.enabled,
+    )
+    db.add(policy)
+    await db.commit()
+    await db.refresh(policy)
+    return policy.model_dump()
+
+
+@router.patch("/admin/communications/quotas/policies/{policy_id}/override/")
+async def override_quota_policy(
+    policy_id: int,
+    payload: ChannelQuotaPolicyOverridePayload,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    policy = await db.get(ChannelQuotaPolicy, policy_id)
+    if policy is None:
+        raise HTTPException(status_code=404, detail="Quota policy not found")
+
+    before = policy.model_dump()
+    if payload.limit_count is not None:
+        policy.limit_count = payload.limit_count
+    if payload.enabled is not None:
+        policy.enabled = payload.enabled
+    policy.updated_at = datetime.now()
+
+    db.add(policy)
+    db.add(
+        ChannelQuotaOverrideAudit(
+            policy_id=policy.id,
+            actor_user_id=current_user.id,
+            action="manual_override",
+            reason=payload.reason,
+            before_json=before,
+            after_json=policy.model_dump(),
+            metadata_json={"channel": policy.channel},
+        )
+    )
+    await db.commit()
+    await db.refresh(policy)
+    return policy.model_dump()
+
+
+@router.get("/admin/communications/quotas/usage/")
+async def list_quota_usage(
+    channel: str = "sms",
+    tenant_id: int | None = None,
+    user_id: int | None = None,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    policies = await list_matching_policies(db, context=QuotaContext(channel=channel, tenant_id=tenant_id, user_id=user_id))
+    if not policies:
+        return {"items": [], "count": 0}
+
+    policy_ids = [int(item.id) for item in policies if item.id is not None]
+    usage_rows = (
+        await db.execute(
+            select(ChannelQuotaUsage)
+            .where(ChannelQuotaUsage.policy_id.in_(policy_ids))
+            .order_by(ChannelQuotaUsage.window_end.desc())
+            .limit(200)
+        )
+    ).scalars().all()
+    return {"items": [row.model_dump() for row in usage_rows], "count": len(usage_rows)}
+
+
+@router.get("/admin/communications/quotas/audit/")
+async def list_quota_override_audit(
+    policy_id: int | None = None,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    query = select(ChannelQuotaOverrideAudit).order_by(ChannelQuotaOverrideAudit.created_at.desc())
+    if policy_id is not None:
+        query = query.where(ChannelQuotaOverrideAudit.policy_id == policy_id)
+    rows = (await db.execute(query.limit(200))).scalars().all()
+    return {"items": [row.model_dump() for row in rows], "count": len(rows)}

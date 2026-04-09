@@ -28,6 +28,11 @@ export {
 } from './use-notifications';
 
 export {
+  useChannelQuotaAudit,
+  useChannelQuotaPolicies,
+  useChannelQuotaUsage,
+  useCreateChannelQuotaPolicy,
+  useOverrideChannelQuotaPolicy,
   usePushConfig,
   useSystemCapabilities,
   useSystemProviders,

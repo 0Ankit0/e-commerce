@@ -80,6 +80,8 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
     from src.apps.iam.models.user import User, UserProfile
     from src.apps.notification.models.notification import Notification
     from src.apps.notification.models.notification_preference import NotificationPreference
+    from src.apps.multitenancy.models.tenant import TenantMember
+    from src.apps.communications.quota import QuotaContext, QuotaExceededError, enforce_and_record_quota
 
     async with async_session_factory() as db:
         delivery = await db.get(NotificationDelivery, delivery_id)
@@ -179,6 +181,32 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
                     db.add(delivery)
                     await db.commit()
                     return True
+                membership = (
+                    await db.execute(
+                        select(TenantMember)
+                        .where(TenantMember.user_id == delivery.user_id)
+                        .where(TenantMember.is_active.is_(True))
+                        .order_by(TenantMember.joined_at.asc())
+                    )
+                ).scalars().first()
+                tenant_id = int(membership.tenant_id) if membership and membership.tenant_id is not None else None
+                try:
+                    await enforce_and_record_quota(
+                        db,
+                        context=QuotaContext(channel="sms", tenant_id=tenant_id, user_id=delivery.user_id),
+                    )
+                except QuotaExceededError as quota_exc:
+                    delivery.status = NotificationDeliveryStatus.FAILED
+                    delivery.last_error_code = "quota_exceeded"
+                    delivery.last_error_reason = (
+                        f"SMS quota exceeded. Retry after {quota_exc.retry_after_seconds} seconds."
+                    )
+                    delivery.next_attempt_at = utc_now()
+                    delivery.updated_at = utc_now()
+                    db.add(delivery)
+                    await db.commit()
+                    return False
+
                 result = comms.send_sms(to_number=profile.phone, body=f"{notification.title}: {notification.body}")
             else:
                 raise RuntimeError(f"Unsupported channel {delivery.channel}")
