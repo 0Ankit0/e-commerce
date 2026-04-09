@@ -97,6 +97,33 @@ export interface ChannelQuotaAudit {
   created_at: string;
 }
 
+export interface ChannelQuotaDashboardTotals {
+  policies: number;
+  active_policies: number;
+  usage_rows: number;
+  at_risk: number;
+}
+
+export interface ChannelQuotaDashboardItem {
+  policy_id: number;
+  scope: 'global' | 'tenant' | 'user' | 'tenant_user';
+  tenant_id: number | null;
+  user_id: number | null;
+  enabled: boolean;
+  limit_count: number;
+  window_seconds: number;
+  usage_count: number;
+  utilization: number;
+  window_end: string | null;
+  seconds_until_reset: number | null;
+}
+
+export interface ChannelQuotaDashboardResponse {
+  channel: string;
+  totals: ChannelQuotaDashboardTotals;
+  items: ChannelQuotaDashboardItem[];
+}
+
 export type EmailLifecycleStatus = 'queued' | 'sent' | 'delivered' | 'bounced' | 'failed' | 'complained';
 
 export interface EmailDeliveryMessage {

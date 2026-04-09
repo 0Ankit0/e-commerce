@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from math import floor
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -37,6 +38,13 @@ class UsageSnapshot:
     window_end: datetime
 
 
+@dataclass
+class QuotaEvaluation:
+    snapshots: list[UsageSnapshot]
+    violations: list[UsageSnapshot]
+    now: datetime
+
+
 def _window_bounds(*, now: datetime, window_seconds: int, timezone_name: str) -> tuple[datetime, datetime]:
     zone = ZoneInfo(timezone_name)
     local_now = now.astimezone(zone)
@@ -63,6 +71,57 @@ async def list_matching_policies(db: AsyncSession, *, context: QuotaContext) -> 
     query = query.where(tenant_match).where(user_match)
     rows = (await db.execute(query.order_by(ChannelQuotaPolicy.window_seconds.asc()))).scalars().all()
     return list(rows)
+
+
+def _retry_after_seconds(*, violations: list[UsageSnapshot], now: datetime) -> int:
+    return max(1, min(int((item.window_end - now).total_seconds()) for item in violations))
+
+
+async def evaluate_quota(
+    db: AsyncSession,
+    *,
+    context: QuotaContext,
+    increment: int = 1,
+    now: datetime | None = None,
+) -> QuotaEvaluation:
+    current = now or utc_now()
+    policies = await list_matching_policies(db, context=context)
+    if not policies:
+        return QuotaEvaluation(snapshots=[], violations=[], now=current)
+
+    snapshots: list[UsageSnapshot] = []
+    violations: list[UsageSnapshot] = []
+
+    for policy in policies:
+        window_start, window_end = _window_bounds(
+            now=current,
+            window_seconds=policy.window_seconds,
+            timezone_name=policy.timezone,
+        )
+        usage = (
+            (
+                await db.execute(
+                    select(ChannelQuotaUsage)
+                    .where(ChannelQuotaUsage.policy_id == policy.id)
+                    .where(ChannelQuotaUsage.window_start == window_start)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        projected = (usage.usage_count if usage else 0) + increment
+        snapshot = UsageSnapshot(
+            policy_id=int(policy.id),
+            usage_count=projected,
+            limit_count=policy.limit_count,
+            window_start=window_start,
+            window_end=window_end,
+        )
+        snapshots.append(snapshot)
+        if projected > policy.limit_count:
+            violations.append(snapshot)
+
+    return QuotaEvaluation(snapshots=snapshots, violations=violations, now=current)
 
 
 async def enforce_and_record_quota(
@@ -99,14 +158,31 @@ async def enforce_and_record_quota(
             .first()
         )
         if usage is None:
-            usage = ChannelQuotaUsage(
-                policy_id=int(policy.id),
-                window_start=window_start,
-                window_end=window_end,
-                usage_count=0,
-            )
-            db.add(usage)
-            await db.flush()
+            try:
+                async with db.begin_nested():
+                    usage = ChannelQuotaUsage(
+                        policy_id=int(policy.id),
+                        window_start=window_start,
+                        window_end=window_end,
+                        usage_count=0,
+                    )
+                    db.add(usage)
+                    await db.flush()
+            except IntegrityError:
+                usage = (
+                    (
+                        await db.execute(
+                            select(ChannelQuotaUsage)
+                            .where(ChannelQuotaUsage.policy_id == policy.id)
+                            .where(ChannelQuotaUsage.window_start == window_start)
+                            .with_for_update()
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+        if usage is None:
+            continue
 
         projected = usage.usage_count + increment
         snapshot = UsageSnapshot(
@@ -121,9 +197,8 @@ async def enforce_and_record_quota(
             violations.append(snapshot)
 
     if violations:
-        retry_after = max(1, min(int((v.window_end - current).total_seconds()) for v in violations))
         raise QuotaExceededError(
-            retry_after_seconds=retry_after,
+            retry_after_seconds=_retry_after_seconds(violations=violations, now=current),
             violated_policy_ids=[item.policy_id for item in violations],
             detail="SMS quota exceeded",
         )

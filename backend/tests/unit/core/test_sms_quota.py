@@ -1,7 +1,8 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 from src.apps.communications.models import ChannelQuotaOverrideAudit, ChannelQuotaPolicy, QuotaScope
@@ -54,7 +55,56 @@ async def test_sms_quota_resets_after_window(db_session: AsyncSession) -> None:
 
 
 @pytest.mark.asyncio
-async def test_quota_override_writes_audit_log(db_session: AsyncSession) -> None:
+async def test_sms_quota_resets_on_exact_boundary(db_session: AsyncSession) -> None:
+    policy = ChannelQuotaPolicy(
+        channel="sms",
+        scope=QuotaScope.GLOBAL,
+        limit_count=1,
+        window_seconds=60,
+        timezone="UTC",
+        enabled=True,
+    )
+    db_session.add(policy)
+    await db_session.commit()
+
+    start = datetime(2026, 4, 9, 10, 0, 0, tzinfo=UTC)
+    await enforce_and_record_quota(db_session, context=QuotaContext(channel="sms"), now=start + timedelta(seconds=59))
+    await enforce_and_record_quota(db_session, context=QuotaContext(channel="sms"), now=start + timedelta(seconds=60))
+
+
+@pytest.mark.asyncio
+async def test_sms_quota_race_at_limit_allows_only_one_send(db_session: AsyncSession) -> None:
+    policy = ChannelQuotaPolicy(
+        channel="sms",
+        scope=QuotaScope.GLOBAL,
+        limit_count=1,
+        window_seconds=60,
+        timezone="UTC",
+        enabled=True,
+    )
+    db_session.add(policy)
+    await db_session.commit()
+    now = datetime(2026, 4, 9, 10, 0, 0, tzinfo=UTC)
+
+    maker = async_sessionmaker(db_session.bind, class_=AsyncSession, expire_on_commit=False)
+
+    async def _attempt_send() -> str:
+        async with maker() as worker_session:
+            try:
+                await enforce_and_record_quota(worker_session, context=QuotaContext(channel="sms"), now=now)
+                await worker_session.commit()
+                return "allowed"
+            except QuotaExceededError:
+                await worker_session.rollback()
+                return "blocked"
+
+    outcomes = await asyncio.gather(_attempt_send(), _attempt_send())
+    assert outcomes.count("allowed") == 1
+    assert outcomes.count("blocked") == 1
+
+
+@pytest.mark.asyncio
+async def test_quota_override_writes_audit_log_with_before_after_snapshots(db_session: AsyncSession) -> None:
     policy = ChannelQuotaPolicy(
         channel="sms",
         scope=QuotaScope.GLOBAL,
@@ -82,3 +132,6 @@ async def test_quota_override_writes_audit_log(db_session: AsyncSession) -> None
     rows = (await db_session.execute(select(ChannelQuotaOverrideAudit).where(ChannelQuotaOverrideAudit.policy_id == policy.id))).scalars().all()
     assert len(rows) == 1
     assert rows[0].reason == "incident response"
+    assert rows[0].before_json["limit_count"] == 1
+    assert rows[0].after_json["limit_count"] == 10
+    assert rows[0].metadata_json["ticket"] == "INC-42"

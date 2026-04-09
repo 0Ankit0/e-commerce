@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   useChannelQuotaAudit,
+  useChannelQuotaDashboard,
   useChannelQuotaPolicies,
   useChannelQuotaUsage,
   useCreateChannelQuotaPolicy,
@@ -17,6 +18,7 @@ export default function CommunicationsQuotasPage() {
   const policiesQuery = useChannelQuotaPolicies();
   const usageQuery = useChannelQuotaUsage();
   const auditQuery = useChannelQuotaAudit();
+  const dashboardQuery = useChannelQuotaDashboard();
   const createPolicy = useCreateChannelQuotaPolicy();
   const overridePolicy = useOverrideChannelQuotaPolicy();
   const [limitCount, setLimitCount] = useState('50');
@@ -67,6 +69,37 @@ export default function CommunicationsQuotasPage() {
               </Button>
             </div>
           ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Usage dashboard</CardTitle>
+          <CardDescription>Track active policies, saturation risk, and per-policy utilization.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-4">
+            <div className="rounded-xl border p-3 text-sm">Policies: {dashboardQuery.data?.totals.policies ?? 0}</div>
+            <div className="rounded-xl border p-3 text-sm">Active: {dashboardQuery.data?.totals.active_policies ?? 0}</div>
+            <div className="rounded-xl border p-3 text-sm">Usage rows: {dashboardQuery.data?.totals.usage_rows ?? 0}</div>
+            <div className="rounded-xl border p-3 text-sm">At risk (≥80%): {dashboardQuery.data?.totals.at_risk ?? 0}</div>
+          </div>
+          <div className="space-y-3">
+            {(dashboardQuery.data?.items ?? []).slice(0, 12).map((item) => (
+              <div key={item.policy_id} className="rounded-xl border p-3">
+                <p className="text-sm font-medium">Policy #{item.policy_id} · {item.scope}</p>
+                <p className="text-xs text-[var(--text-muted)]">
+                  {item.usage_count}/{item.limit_count} in {item.window_seconds}s · resets in {item.seconds_until_reset ?? 'n/a'}s
+                </p>
+                <div className="mt-2 h-2 w-full rounded-full bg-[var(--surface-muted)]">
+                  <div
+                    className="h-full rounded-full bg-[var(--accent)]"
+                    style={{ width: `${Math.max(3, Math.min(100, Math.round(item.utilization * 100)))}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
         </CardContent>
       </Card>
 
