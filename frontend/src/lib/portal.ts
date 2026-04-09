@@ -142,6 +142,7 @@ export const PORTAL_DEFINITIONS: Record<PortalKey, PortalDefinition> = {
       { label: 'Overview', href: '/admin/dashboard', icon: LayoutDashboard },
       { label: 'Orders', href: '/admin/orders', icon: Receipt },
       { label: 'Line-haul Planner', href: '/admin/line-haul-planner', icon: Truck },
+      { label: 'Branch Ops', href: '/admin/branch-operations', icon: Users },
       { label: 'Vendors', href: '/admin/vendors', icon: Users },
       { label: 'Catalog Review', href: '/admin/catalog', icon: Boxes },
       { label: 'Live Feed', href: '/admin/live-feed', icon: Radar },
