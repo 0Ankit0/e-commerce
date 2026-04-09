@@ -11,6 +11,7 @@ from src.apps.iam.models.user import User
 from src.apps.multitenancy.models.tenant import Tenant, TenantMember, TenantRole
 from src.apps.vendors.models import (
     Vendor,
+    VendorDocument,
     VendorDocumentStatus,
     VendorPayout,
     VendorPayoutRequest,
@@ -133,7 +134,7 @@ def assert_document_status_transition(current_status: VendorDocumentStatus, targ
         },
         VendorDocumentStatus.NEEDS_RESUBMISSION: {VendorDocumentStatus.SUBMITTED},
         VendorDocumentStatus.VERIFIED: set(),
-        VendorDocumentStatus.REJECTED: set(),
+        VendorDocumentStatus.REJECTED: {VendorDocumentStatus.SUBMITTED},
     }
     if target_status not in allowed_transitions[current_status]:
         raise HTTPException(
@@ -172,6 +173,27 @@ async def record_vendor_timeline_event(
         )
     )
 
+
+
+
+def append_document_review_history(
+    document: VendorDocument,
+    *,
+    status_value: VendorDocumentStatus,
+    note: str,
+    actor_user_id: int | None,
+) -> None:
+    history = json.loads(document.review_reason_history_json or "[]")
+    history.append(
+        {
+            "status": status_value.value,
+            "note": note,
+            "actor_user_id": actor_user_id,
+            "created_at": utc_now().isoformat(),
+            "version": document.version,
+        }
+    )
+    document.review_reason_history_json = json.dumps(history)
 
 def serialize_vendor_payout(payout: VendorPayout) -> dict[str, object]:
     from src.apps.iam.utils.hashid import encode_id

@@ -79,6 +79,7 @@ class VendorDocument(SQLModel, table=True):
     is_current: bool = Field(default=True, index=True)
     uploaded_at: datetime = Field(default_factory=utc_now)
     verified_at: Optional[datetime] = Field(default=None)
+    review_reason_history_json: str = Field(default="[]")
 
 
 class BankAccount(SQLModel, table=True):

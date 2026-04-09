@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
@@ -32,6 +33,7 @@ from src.apps.vendors.models import (
     Warehouse,
 )
 from src.apps.vendors.services import (
+    append_document_review_history,
     assert_document_status_transition,
     assert_vendor_status_transition,
     ensure_vendor_active,
@@ -199,6 +201,7 @@ async def get_my_vendor_profile(
                 "version": document.version,
                 "is_current": document.is_current,
                 "uploaded_at": document.uploaded_at.isoformat(),
+                "review_reason_history": json.loads(document.review_reason_history_json or "[]"),
             }
             for document in documents
         ],
@@ -219,6 +222,7 @@ async def get_my_vendor_profile(
                 "event_type": event.event_type,
                 "message": event.message,
                 "created_at": event.created_at.isoformat(),
+                "payload": json.loads(event.payload_json or "{}"),
             }
             for event in (
                 await db.execute(
@@ -285,6 +289,12 @@ async def upload_vendor_document(
     else:
         document = VendorDocument(vendor_id=vendor.id, **payload.model_dump(), status=VendorDocumentStatus.SUBMITTED)
         db.add(document)
+    append_document_review_history(
+        document,
+        status_value=VendorDocumentStatus.SUBMITTED,
+        note="Document submitted by vendor",
+        actor_user_id=current_user.id,
+    )
     await db.commit()
     await db.refresh(document)
     await record_vendor_timeline_event(
@@ -352,8 +362,15 @@ async def resubmit_vendor_document(
         status=VendorDocumentStatus.SUBMITTED,
         version=document.version + 1,
         is_current=True,
+        review_reason_history_json=document.review_reason_history_json,
     )
     db.add(new_document)
+    append_document_review_history(
+        new_document,
+        status_value=VendorDocumentStatus.SUBMITTED,
+        note="Document resubmitted by vendor",
+        actor_user_id=current_user.id,
+    )
     await record_vendor_timeline_event(
         vendor=vendor,
         event_type="vendor.document_resubmitted",
@@ -449,6 +466,7 @@ async def list_vendor_timeline(
                 "event_type": event.event_type,
                 "message": event.message,
                 "created_at": event.created_at.isoformat(),
+                "payload": json.loads(event.payload_json or "{}"),
             }
             for event in events
         ],
@@ -654,6 +672,7 @@ async def mark_vendor_document_under_review(
     assert_document_status_transition(document.status, VendorDocumentStatus.UNDER_REVIEW)
     document.status = VendorDocumentStatus.UNDER_REVIEW
     document.remarks = payload.remarks
+    append_document_review_history(document, status_value=VendorDocumentStatus.UNDER_REVIEW, note=payload.remarks or "Document moved to under review", actor_user_id=admin_user.id)
     vendor = await db.get(Vendor, document.vendor_id)
     if vendor:
         await record_vendor_timeline_event(
@@ -690,6 +709,7 @@ async def verify_vendor_document(
     document.status = VendorDocumentStatus.VERIFIED
     document.remarks = payload.remarks
     document.verified_at = utc_now()
+    append_document_review_history(document, status_value=VendorDocumentStatus.VERIFIED, note=payload.remarks or "Document verified", actor_user_id=admin_user.id)
     vendor = await db.get(Vendor, document.vendor_id)
     if vendor:
         await record_vendor_timeline_event(
@@ -725,6 +745,7 @@ async def reject_vendor_document(
     assert_document_status_transition(document.status, VendorDocumentStatus.REJECTED)
     document.status = VendorDocumentStatus.REJECTED
     document.remarks = payload.remarks
+    append_document_review_history(document, status_value=VendorDocumentStatus.REJECTED, note=payload.remarks, actor_user_id=admin_user.id)
     vendor = await db.get(Vendor, document.vendor_id)
     if vendor:
         mark_vendor_status(vendor, VendorStatus.NEEDS_RESUBMISSION, payload.remarks)
@@ -761,6 +782,7 @@ async def request_vendor_document_resubmission(
     assert_document_status_transition(document.status, VendorDocumentStatus.NEEDS_RESUBMISSION)
     document.status = VendorDocumentStatus.NEEDS_RESUBMISSION
     document.remarks = payload.remarks
+    append_document_review_history(document, status_value=VendorDocumentStatus.NEEDS_RESUBMISSION, note=payload.remarks, actor_user_id=admin_user.id)
     vendor = await db.get(Vendor, document.vendor_id)
     if vendor:
         mark_vendor_status(vendor, VendorStatus.NEEDS_RESUBMISSION, payload.remarks)
@@ -1011,6 +1033,34 @@ async def list_vendor_payout_batches(
         "total": len(batches),
     }
 
+
+
+
+@router.get("/admin/vendors/{vendor_id}/timeline")
+async def list_admin_vendor_timeline(
+    vendor_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
+    events = (
+        await db.execute(
+            select(VendorTimelineEvent).where(VendorTimelineEvent.vendor_id == vendor.id).order_by(VendorTimelineEvent.created_at.desc())
+        )
+    ).scalars().all()
+    return {
+        "items": [
+            {
+                "id": encode_id(event.id or 0),
+                "event_type": event.event_type,
+                "message": event.message,
+                "created_at": event.created_at.isoformat(),
+                "payload": json.loads(event.payload_json or "{}"),
+            }
+            for event in events
+        ],
+        "total": len(events),
+    }
 
 @router.get("/admin/vendors/{vendor_id}/settlement-export")
 async def export_vendor_settlement(
