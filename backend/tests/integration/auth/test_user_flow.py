@@ -1,10 +1,13 @@
 import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from src.apps.iam.models.user import User
 from src.apps.core import security
+from src.apps.vendors.models import Vendor, VendorKYCStatus, VendorStatus
+from src.apps.vendors.services import assert_vendor_status_transition, mark_vendor_kyc_status
 
 
 class TestCompleteUserFlow:
@@ -94,3 +97,44 @@ class TestCompleteUserFlow:
         assert "refresh" in new_tokens
         assert new_tokens["access"] != tokens["access"]
         assert new_tokens["refresh"] != tokens["refresh"]
+
+    @pytest.mark.asyncio
+    async def test_vendor_kyc_lifecycle_and_resubmission_loop(self, db_session: AsyncSession):
+        vendor = Vendor(
+            tenant_id=1,
+            owner_user_id=1,
+            business_name="Loop Vendor",
+            display_name="Loop",
+            slug="loop-vendor",
+            status=VendorStatus.PENDING,
+        )
+        db_session.add(vendor)
+        await db_session.commit()
+        await db_session.refresh(vendor)
+
+        assert vendor.kyc_status == VendorKYCStatus.SUBMITTED
+        assert_vendor_status_transition(vendor, VendorStatus.UNDER_REVIEW)
+        vendor.status = VendorStatus.UNDER_REVIEW
+        mark_vendor_kyc_status(vendor, kyc_status=VendorKYCStatus.UNDER_REVIEW, reviewer_user_id=99)
+        mark_vendor_kyc_status(vendor, kyc_status=VendorKYCStatus.RESUBMISSION_REQUIRED, reviewer_user_id=99, reason="PAN blurry")
+        mark_vendor_kyc_status(vendor, kyc_status=VendorKYCStatus.UNDER_REVIEW, reviewer_user_id=99)
+        mark_vendor_kyc_status(vendor, kyc_status=VendorKYCStatus.APPROVED, reviewer_user_id=99)
+        await db_session.commit()
+        await db_session.refresh(vendor)
+
+        assert vendor.kyc_status == VendorKYCStatus.APPROVED
+        assert vendor.kyc_review_started_at is not None
+        assert vendor.kyc_reviewed_at is not None
+        assert "PAN blurry" in vendor.kyc_review_reasons_json
+
+    def test_vendor_invalid_transition_blocked(self):
+        vendor = Vendor(
+            tenant_id=1,
+            owner_user_id=1,
+            business_name="Invalid Transition Vendor",
+            display_name="Invalid",
+            slug="invalid-transition-vendor",
+            status=VendorStatus.PENDING,
+        )
+        with pytest.raises(HTTPException):
+            assert_vendor_status_transition(vendor, VendorStatus.APPROVED)

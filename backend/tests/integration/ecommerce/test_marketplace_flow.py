@@ -1894,6 +1894,10 @@ async def test_vendor_onboarding_transitions_and_audit_consistency(client: Async
         "under_review",
         "verified",
     ]
+    kyc_history_resp = await client.get("/api/v1/vendor/kyc/history", headers=vendor_headers)
+    assert kyc_history_resp.status_code == 200, kyc_history_resp.text
+    assert "checks" in kyc_history_resp.json()
+    assert "kyc_status" in kyc_history_resp.json()
 
     stale_non_current_approval = await client.post(
         f"/api/v1/admin/vendor-documents/{stale_document_id}/verify",
@@ -1909,6 +1913,9 @@ async def test_vendor_onboarding_transitions_and_audit_consistency(client: Async
     ]
     assert admin_resubmission_entries
     assert "remarks" in admin_resubmission_entries[0]["payload"]
+    admin_kyc_history = await client.get(f"/api/v1/admin/vendors/{vendor_id}/kyc/history", headers=admin_headers)
+    assert admin_kyc_history.status_code == 200, admin_kyc_history.text
+    assert admin_kyc_history.json()["vendor_id"] == vendor_id
 
     unauthorized_doc_action = await client.post(
         f"/api/v1/admin/vendor-documents/{document_id}/request-resubmission",
