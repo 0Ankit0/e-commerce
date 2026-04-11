@@ -101,6 +101,8 @@ class CatalogProduct {
   final double? minSellingPrice;
   final String? categoryName;
   final String? brandName;
+  final String? vendorName;
+  final String? vendorKycStatus;
   final List<CatalogProductImage> images;
   final List<CatalogVariant> variants;
 
@@ -118,6 +120,8 @@ class CatalogProduct {
     required this.minSellingPrice,
     required this.categoryName,
     required this.brandName,
+    required this.vendorName,
+    required this.vendorKycStatus,
     required this.images,
     required this.variants,
   });
@@ -125,6 +129,7 @@ class CatalogProduct {
   factory CatalogProduct.fromJson(Map<String, dynamic> json) {
     final category = json['category'] as Map<String, dynamic>?;
     final brand = json['brand'] as Map<String, dynamic>?;
+    final vendor = json['vendor'] as Map<String, dynamic>?;
     return CatalogProduct(
       id: json['id'].toString(),
       name: json['name'] as String? ?? '',
@@ -139,6 +144,8 @@ class CatalogProduct {
       minSellingPrice: (json['min_selling_price'] as num?)?.toDouble(),
       categoryName: category?['name'] as String?,
       brandName: brand?['name'] as String?,
+      vendorName: vendor?['display_name'] as String? ?? vendor?['business_name'] as String? ?? json['vendor_name'] as String?,
+      vendorKycStatus: (vendor?['kyc_status'] as String?) ?? (json['vendor_kyc_status'] as String?),
       images: (json['images'] as List<dynamic>? ?? const [])
           .map(
             (item) =>

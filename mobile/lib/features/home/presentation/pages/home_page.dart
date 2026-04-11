@@ -13,6 +13,36 @@ import '../../../notifications/presentation/providers/notification_provider.dart
 String _currency(num value) =>
     NumberFormat.currency(symbol: '\$', decimalDigits: 2).format(value);
 
+String _kycLabel(String? status) {
+  switch (status) {
+    case 'approved':
+      return 'KYC verified vendor';
+    case 'under_review':
+      return 'KYC under review';
+    case 'resubmission_required':
+      return 'KYC resubmission requested';
+    case 'rejected':
+      return 'KYC rejected';
+    case 'submitted':
+      return 'KYC submitted';
+    default:
+      return 'Vendor verification pending';
+  }
+}
+
+Color _kycColor(String? status) {
+  switch (status) {
+    case 'approved':
+      return Colors.green.shade700;
+    case 'rejected':
+      return Colors.red.shade700;
+    case 'resubmission_required':
+      return Colors.orange.shade700;
+    default:
+      return AppColors.inkSoft;
+  }
+}
+
 class HomeTab extends ConsumerStatefulWidget {
   const HomeTab({super.key});
 
@@ -328,6 +358,17 @@ class _FeaturedProductCard extends StatelessWidget {
                 color: AppColors.primary,
               ),
             ),
+            const SizedBox(height: 6),
+            Text(
+              _kycLabel(product.vendorKycStatus),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                color: _kycColor(product.vendorKycStatus),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ],
         ),
       ),
@@ -415,6 +456,30 @@ class _CatalogProductCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 10),
+                    if ((product.vendorName ?? '').isNotEmpty) ...[
+                      Text(
+                        product.vendorName!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.inkSoft,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                    ],
+                    Text(
+                      _kycLabel(product.vendorKycStatus),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: _kycColor(product.vendorKycStatus),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     Row(
                       children: [
                         Icon(
