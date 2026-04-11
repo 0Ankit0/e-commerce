@@ -74,6 +74,7 @@ from src.apps.logistics.services import (
     close_hub_sort_queue,
     start_line_haul_trip,
     update_shipment_tracking,
+    validate_line_haul_assignments,
 )
 from src.apps.orders.models import Order, OrderStatus, ReturnRequest, ReturnStatus, Shipment, ShipmentTracking, VendorOrder
 from src.apps.notification.services.commerce_events import notify_delivery_exception, notify_order_event, notify_return_event
@@ -217,6 +218,23 @@ class LineHaulPlannerRunRequest(BaseModel):
     random_seed: int = Field(default=7, ge=0)
 
 
+class PlannerAssignmentInput(BaseModel):
+    route_id: str = Field(min_length=2, max_length=80)
+    vehicle_id: str = Field(min_length=2, max_length=80)
+    assigned_units: int = Field(ge=0)
+
+
+class LineHaulPlanDraftRequest(BaseModel):
+    name: str = Field(min_length=3, max_length=120)
+    status: str = Field(default="draft", pattern="^(draft|finalized)$")
+    routes: list[PlannerRouteInput]
+    vehicles: list[PlannerVehicleInput]
+    connectivity: dict[str, list[str]] = Field(default_factory=dict)
+    locked_assignments: list[PlannerLockedAssignmentInput] = Field(default_factory=list)
+    assignments: list[PlannerAssignmentInput] = Field(default_factory=list)
+    optimizer_metadata: dict[str, object] = Field(default_factory=dict)
+
+
 class CourierGpsIngestionRequest(BaseModel):
     shipment_id: str | None = None
     agent_id: str | None = None
@@ -300,6 +318,25 @@ def _serialize_route_plan(plan: RouteOptimizationPlan) -> dict[str, object]:
         "score": plan.score,
         "stops": json.loads(plan.stops_json or "[]"),
         "metrics": json.loads(plan.metrics_json or "{}"),
+        "updated_at": plan.updated_at.isoformat(),
+    }
+
+
+def _serialize_line_haul_draft(plan: RouteOptimizationPlan) -> dict[str, object]:
+    payload = json.loads(plan.metrics_json or "{}")
+    return {
+        "draft_id": encode_id(plan.id or 0),
+        "name": payload.get("name") or f"Draft {encode_id(plan.id or 0)}",
+        "status": payload.get("status") or "draft",
+        "manifest_id": encode_id(plan.manifest_id) if plan.manifest_id else None,
+        "trip_id": encode_id(plan.trip_id) if plan.trip_id else None,
+        "routes": json.loads(plan.stops_json or "[]"),
+        "vehicles": payload.get("vehicles") or [],
+        "connectivity": payload.get("connectivity") or {},
+        "locked_assignments": payload.get("locked_assignments") or [],
+        "assignments": payload.get("assignments") or [],
+        "optimizer_metadata": payload.get("optimizer_metadata") or {},
+        "validation": payload.get("validation") or {"is_valid": True, "errors": [], "summary": {}},
         "updated_at": plan.updated_at.isoformat(),
     }
 
@@ -1247,6 +1284,19 @@ async def run_line_haul_planner(
             random_seed=payload.random_seed,
         )
     )
+    assignment_rows = [
+        {
+            "route_id": assignment.route_id,
+            "vehicle_id": assignment.vehicle_id,
+            "assigned_units": assignment.assigned_units,
+        }
+        for assignment in result.assignments
+    ]
+    validation = validate_line_haul_assignments(
+        routes=[route.model_dump() for route in payload.routes],
+        vehicles=[vehicle.model_dump() for vehicle in payload.vehicles],
+        assignments=assignment_rows,
+    )
     return {
         "assignments": [
             {
@@ -1260,7 +1310,116 @@ async def run_line_haul_planner(
         ],
         "unassigned_routes": result.unassigned_routes,
         "metadata": result.metadata,
+        "validation": validation,
     }
+
+
+@router.post("/logistics/line-haul-planner/assignments/validate")
+async def validate_line_haul_assignment_payload(
+    payload: LineHaulPlanDraftRequest,
+    _: User = Depends(get_current_active_superuser),
+):
+    return validate_line_haul_assignments(
+        routes=[route.model_dump() for route in payload.routes],
+        vehicles=[vehicle.model_dump() for vehicle in payload.vehicles],
+        assignments=[assignment.model_dump() for assignment in payload.assignments],
+    )
+
+
+@router.post("/logistics/line-haul-planner/drafts", status_code=status.HTTP_201_CREATED)
+async def save_line_haul_plan_draft(
+    payload: LineHaulPlanDraftRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    validation = validate_line_haul_assignments(
+        routes=[route.model_dump() for route in payload.routes],
+        vehicles=[vehicle.model_dump() for vehicle in payload.vehicles],
+        assignments=[assignment.model_dump() for assignment in payload.assignments],
+    )
+    draft = RouteOptimizationPlan(
+        strategy="line_haul_plan_draft_v1",
+        stops_json=json.dumps([route.model_dump() for route in payload.routes]),
+        metrics_json=json.dumps(
+            {
+                "name": payload.name,
+                "status": payload.status,
+                "vehicles": [vehicle.model_dump() for vehicle in payload.vehicles],
+                "connectivity": payload.connectivity,
+                "locked_assignments": [assignment.model_dump() for assignment in payload.locked_assignments],
+                "assignments": [assignment.model_dump() for assignment in payload.assignments],
+                "optimizer_metadata": payload.optimizer_metadata,
+                "validation": validation,
+            }
+        ),
+        score=float(payload.optimizer_metadata.get("score", 0) or 0),
+        updated_at=utc_now(),
+    )
+    db.add(draft)
+    await db.commit()
+    await db.refresh(draft)
+    return _serialize_line_haul_draft(draft)
+
+
+@router.get("/logistics/line-haul-planner/drafts")
+async def list_line_haul_plan_drafts(
+    limit: int = Query(default=25, ge=1, le=100),
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    drafts = (
+        await db.execute(
+            select(RouteOptimizationPlan)
+            .where(RouteOptimizationPlan.strategy == "line_haul_plan_draft_v1")
+            .order_by(RouteOptimizationPlan.updated_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return {"items": [_serialize_line_haul_draft(draft) for draft in drafts]}
+
+
+@router.get("/logistics/line-haul-planner/optimization-results")
+async def list_line_haul_optimization_results(
+    limit: int = Query(default=25, ge=1, le=100),
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    plans = (
+        await db.execute(
+            select(RouteOptimizationPlan)
+            .where(RouteOptimizationPlan.strategy == "line_haul_plan_draft_v1")
+            .order_by(RouteOptimizationPlan.updated_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return {"items": [_serialize_line_haul_draft(plan) for plan in plans]}
+
+
+@router.post("/logistics/line-haul-planner/drafts/{draft_id}/apply")
+async def apply_line_haul_plan_draft(
+    draft_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    draft = await db.get(RouteOptimizationPlan, decode_id_or_404(draft_id))
+    if draft is None or draft.strategy != "line_haul_plan_draft_v1":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Line-haul draft not found")
+    payload = json.loads(draft.metrics_json or "{}")
+    validation = payload.get("validation") or {}
+    if not validation.get("is_valid", True):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Draft has assignment conflicts. Resolve conflicts before applying.",
+                "validation_errors": validation.get("errors", []),
+            },
+        )
+    payload["status"] = "finalized"
+    draft.metrics_json = json.dumps(payload)
+    draft.updated_at = utc_now()
+    await db.commit()
+    await db.refresh(draft)
+    return _serialize_line_haul_draft(draft)
 
 
 @router.post("/logistics/trips/{trip_id}/gps", status_code=status.HTTP_201_CREATED)

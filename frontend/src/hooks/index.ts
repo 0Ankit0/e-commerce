@@ -100,6 +100,13 @@ export {
 } from './use-websocket';
 
 export { useAnalytics } from './use-analytics';
+export {
+  useLineHaulPlanDrafts,
+  useRunLineHaulOptimization,
+  useValidateLineHaulAssignments,
+  useSaveLineHaulDraft,
+  useApplyLineHaulDraft,
+} from './use-route-planning';
 
 export {
   useObservabilityLogs,
