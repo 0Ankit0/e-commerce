@@ -13,6 +13,7 @@ import type {
   RolePermissionsResponse,
   CheckPermissionResponse,
   PaginatedResponse,
+  PrivilegedPolicy,
 } from '@/types';
 
 interface AuthorizationScopeOptions {
@@ -231,5 +232,16 @@ export function useCasbinPermissions(userId: string, scope?: AuthorizationScopeO
       return response.data;
     },
     enabled: !!userId,
+  });
+}
+
+export function usePrivilegedPolicies() {
+  return useQuery({
+    queryKey: ['rbac', 'privileged-policies'],
+    queryFn: async () => {
+      const response = await apiClient.get<PrivilegedPolicy[]>('/security/privileged-actions');
+      return response.data;
+    },
+    staleTime: 10_000,
   });
 }

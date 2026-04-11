@@ -7,6 +7,7 @@ import {
   usePermissions,
   useCreateRole,
   useCreatePermission,
+  usePrivilegedPolicies,
 } from '@/hooks/use-rbac';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui';
@@ -48,6 +49,8 @@ export default function RBACPage() {
   const permissionsQuery = usePermissions();
   const createRole = useCreateRole();
   const createPermission = useCreatePermission();
+  const policiesQuery = usePrivilegedPolicies();
+  const [enforcementFailureReason, setEnforcementFailureReason] = useState<string | null>(null);
 
   const [showRoleForm, setShowRoleForm] = useState(false);
   const [roleName, setRoleName] = useState('');
@@ -62,7 +65,17 @@ export default function RBACPage() {
     e.preventDefault();
     createRole.mutate(
       { name: roleName, description: roleDesc },
-      { onSuccess: () => { setRoleName(''); setRoleDesc(''); setShowRoleForm(false); } }
+      {
+        onSuccess: () => {
+          setRoleName('');
+          setRoleDesc('');
+          setShowRoleForm(false);
+          setEnforcementFailureReason(null);
+        },
+        onError: (error: any) => {
+          setEnforcementFailureReason(error?.response?.data?.detail?.reason ?? 'missing_or_expired_step_up');
+        },
+      }
     );
   };
 
@@ -70,7 +83,18 @@ export default function RBACPage() {
     e.preventDefault();
     createPermission.mutate(
       { resource: permResource, action: permAction, description: permDesc },
-      { onSuccess: () => { setPermResource(''); setPermAction(''); setPermDesc(''); setShowPermForm(false); } }
+      {
+        onSuccess: () => {
+          setPermResource('');
+          setPermAction('');
+          setPermDesc('');
+          setShowPermForm(false);
+          setEnforcementFailureReason(null);
+        },
+        onError: (error: any) => {
+          setEnforcementFailureReason(error?.response?.data?.detail?.reason ?? 'missing_or_expired_step_up');
+        },
+      }
     );
   };
 
@@ -78,12 +102,22 @@ export default function RBACPage() {
     { id: 'roles', label: 'Roles', icon: <ShieldCheck className="h-4 w-4" /> },
     { id: 'permissions', label: 'Permissions', icon: <Key className="h-4 w-4" /> },
   ];
+  const roleCreatePolicy = policiesQuery.data?.find((policy) => policy.action === 'admin.rbac.create_role');
+  const permissionCreatePolicy = policiesQuery.data?.find((policy) => policy.action === 'admin.rbac.create_permission');
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Roles & Permissions</h1>
         <p className="text-gray-500">Manage role and permission definitions for the platform</p>
+        <p className="mt-2 text-xs text-gray-500">
+          Enforcement: roles {roleCreatePolicy?.require_step_up ? `OTP (${roleCreatePolicy.otp_freshness_seconds}s)` : 'no OTP'} · permissions {permissionCreatePolicy?.require_step_up ? `OTP (${permissionCreatePolicy.otp_freshness_seconds}s)` : 'no OTP'}
+        </p>
+        {enforcementFailureReason ? (
+          <p className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            Step-up failure reason: {enforcementFailureReason}
+          </p>
+        ) : null}
       </div>
 
       <div className="flex gap-2 border-b border-gray-200">

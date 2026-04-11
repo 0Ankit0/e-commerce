@@ -38,8 +38,18 @@ class CheckPermissionRequest(BaseModel):
     resource: str
     action: str
 
+class PrivilegedPolicyUpdateRequest(BaseModel):
+    require_step_up: bool | None = None
+    otp_freshness_seconds: int | None = None
+
 
 # ── Response schemas ─────────────────────────────────────────────────────────
+class PrivilegedPolicyResponse(BaseModel):
+    action: str
+    required_roles: list[str]
+    require_step_up: bool
+    otp_freshness_seconds: int
+
 
 class PermissionResponse(BaseModel):
     id: int
