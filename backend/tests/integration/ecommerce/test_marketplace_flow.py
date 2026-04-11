@@ -508,6 +508,111 @@ async def test_route_optimization_and_courier_gps_ingestion(client: AsyncClient,
 
 
 @pytest.mark.asyncio
+async def test_line_haul_planner_draft_save_and_apply_flow(client: AsyncClient, db_session: AsyncSession):
+    _, admin_headers = await _create_user_headers(
+        db_session,
+        username="planner_admin",
+        email="planner-admin@example.com",
+        is_superuser=True,
+    )
+
+    planner_payload = {
+        "routes": [
+            {"route_id": "KTM-PKR", "origin_hub": "KTM", "destination_hub": "PKR", "demand_units": 45},
+            {"route_id": "KTM-BWA", "origin_hub": "KTM", "destination_hub": "BWA", "demand_units": 12},
+        ],
+        "vehicles": [
+            {"vehicle_id": "VAN-1", "hub_code": "KTM", "capacity_units": 30},
+            {"vehicle_id": "VAN-2", "hub_code": "KTM", "capacity_units": 20},
+        ],
+        "connectivity": {"KTM": ["PKR", "BWA"], "PKR": ["KTM"], "BWA": ["KTM"]},
+        "locked_assignments": [],
+        "random_seed": 17,
+    }
+
+    run_resp = await client.post("/api/v1/logistics/line-haul-planner/run", headers=admin_headers, json=planner_payload)
+    assert run_resp.status_code == 200, run_resp.text
+    run_data = run_resp.json()
+    assert run_data["validation"]["is_valid"] is True
+
+    conflicting_assignments = run_data["assignments"] + [
+        {"route_id": "KTM-PKR", "vehicle_id": "VAN-1", "assigned_units": 25},
+        {"route_id": "KTM-PKR", "vehicle_id": "VAN-1", "assigned_units": 10},
+    ]
+    validate_resp = await client.post(
+        "/api/v1/logistics/line-haul-planner/assignments/validate",
+        headers=admin_headers,
+        json={
+            "name": "conflicting-draft",
+            "status": "draft",
+            "routes": planner_payload["routes"],
+            "vehicles": planner_payload["vehicles"],
+            "connectivity": planner_payload["connectivity"],
+            "locked_assignments": planner_payload["locked_assignments"],
+            "assignments": conflicting_assignments,
+            "optimizer_metadata": run_data["metadata"],
+        },
+    )
+    assert validate_resp.status_code == 200, validate_resp.text
+    assert validate_resp.json()["is_valid"] is False
+    error_codes = {err["code"] for err in validate_resp.json()["errors"]}
+    assert "over_capacity" in error_codes
+    assert "duplicate_assignment" in error_codes
+
+    save_resp = await client.post(
+        "/api/v1/logistics/line-haul-planner/drafts",
+        headers=admin_headers,
+        json={
+            "name": "Conflicting planner draft",
+            "status": "draft",
+            "routes": planner_payload["routes"],
+            "vehicles": planner_payload["vehicles"],
+            "connectivity": planner_payload["connectivity"],
+            "locked_assignments": planner_payload["locked_assignments"],
+            "assignments": conflicting_assignments,
+            "optimizer_metadata": run_data["metadata"],
+        },
+    )
+    assert save_resp.status_code == 201, save_resp.text
+    draft_id = save_resp.json()["draft_id"]
+    assert save_resp.json()["validation"]["is_valid"] is False
+
+    apply_conflicting_resp = await client.post(
+        f"/api/v1/logistics/line-haul-planner/drafts/{draft_id}/apply",
+        headers=admin_headers,
+    )
+    assert apply_conflicting_resp.status_code == 409, apply_conflicting_resp.text
+
+    valid_save_resp = await client.post(
+        "/api/v1/logistics/line-haul-planner/drafts",
+        headers=admin_headers,
+        json={
+            "name": "Valid planner draft",
+            "status": "draft",
+            "routes": planner_payload["routes"],
+            "vehicles": planner_payload["vehicles"],
+            "connectivity": planner_payload["connectivity"],
+            "locked_assignments": planner_payload["locked_assignments"],
+            "assignments": run_data["assignments"],
+            "optimizer_metadata": run_data["metadata"],
+        },
+    )
+    assert valid_save_resp.status_code == 201, valid_save_resp.text
+    valid_draft_id = valid_save_resp.json()["draft_id"]
+
+    apply_valid_resp = await client.post(
+        f"/api/v1/logistics/line-haul-planner/drafts/{valid_draft_id}/apply",
+        headers=admin_headers,
+    )
+    assert apply_valid_resp.status_code == 200, apply_valid_resp.text
+    assert apply_valid_resp.json()["status"] == "finalized"
+
+    list_drafts_resp = await client.get("/api/v1/logistics/line-haul-planner/drafts", headers=admin_headers)
+    assert list_drafts_resp.status_code == 200, list_drafts_resp.text
+    assert len(list_drafts_resp.json()["items"]) >= 2
+
+
+@pytest.mark.asyncio
 async def test_vendor_delivery_and_customer_return_flow(client: AsyncClient, db_session: AsyncSession):
     admin, admin_headers = await _create_user_headers(
         db_session,

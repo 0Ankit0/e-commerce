@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from datetime import datetime
 from math import asin, cos, radians, sin, sqrt
 
@@ -44,6 +45,96 @@ ALLOWED_SHIPMENT_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.SHIPPED: {OrderStatus.OUT_FOR_DELIVERY},
     OrderStatus.OUT_FOR_DELIVERY: {OrderStatus.DELIVERED, OrderStatus.RETURNED},
 }
+
+
+def validate_line_haul_assignments(
+    *,
+    routes: list[dict[str, object]],
+    vehicles: list[dict[str, object]],
+    assignments: list[dict[str, object]],
+) -> dict[str, object]:
+    route_ids = {str(route.get("route_id") or "") for route in routes}
+    vehicle_caps = {str(vehicle.get("vehicle_id") or ""): max(int(vehicle.get("capacity_units") or 0), 0) for vehicle in vehicles}
+    vehicle_loads: dict[str, int] = defaultdict(int)
+    duplicate_pairs: dict[tuple[str, str], int] = defaultdict(int)
+    errors: list[dict[str, object]] = []
+
+    for idx, assignment in enumerate(assignments):
+        route_id = str(assignment.get("route_id") or "")
+        vehicle_id = str(assignment.get("vehicle_id") or "")
+        assigned_units = max(int(assignment.get("assigned_units") or 0), 0)
+
+        duplicate_pairs[(route_id, vehicle_id)] += 1
+        vehicle_loads[vehicle_id] += assigned_units
+
+        if route_id not in route_ids:
+            errors.append(
+                {
+                    "code": "unknown_route",
+                    "message": f"Assignment row {idx + 1} references unknown route '{route_id}'.",
+                    "field": "route_id",
+                    "route_id": route_id,
+                    "vehicle_id": vehicle_id,
+                }
+            )
+        if vehicle_id not in vehicle_caps:
+            errors.append(
+                {
+                    "code": "unknown_vehicle",
+                    "message": f"Assignment row {idx + 1} references unknown vehicle '{vehicle_id}'.",
+                    "field": "vehicle_id",
+                    "route_id": route_id,
+                    "vehicle_id": vehicle_id,
+                }
+            )
+
+    for (route_id, vehicle_id), count in sorted(duplicate_pairs.items()):
+        if count > 1:
+            errors.append(
+                {
+                    "code": "duplicate_assignment",
+                    "message": f"Route '{route_id}' is assigned to vehicle '{vehicle_id}' {count} times.",
+                    "field": "assignments",
+                    "route_id": route_id,
+                    "vehicle_id": vehicle_id,
+                    "duplicate_count": count,
+                }
+            )
+
+    for vehicle_id, used_units in sorted(vehicle_loads.items()):
+        capacity_units = vehicle_caps.get(vehicle_id)
+        if capacity_units is None:
+            continue
+        if used_units > capacity_units:
+            errors.append(
+                {
+                    "code": "over_capacity",
+                    "message": f"Vehicle '{vehicle_id}' is overloaded by {used_units - capacity_units} units.",
+                    "field": "assigned_units",
+                    "vehicle_id": vehicle_id,
+                    "capacity_units": capacity_units,
+                    "assigned_units": used_units,
+                }
+            )
+
+    utilization = [
+        {
+            "vehicle_id": vehicle_id,
+            "capacity_units": capacity_units,
+            "assigned_units": vehicle_loads.get(vehicle_id, 0),
+            "utilization_percent": round(((vehicle_loads.get(vehicle_id, 0) / capacity_units) * 100), 2) if capacity_units else 0.0,
+        }
+        for vehicle_id, capacity_units in sorted(vehicle_caps.items())
+    ]
+    return {
+        "is_valid": len(errors) == 0,
+        "errors": errors,
+        "summary": {
+            "assignment_count": len(assignments),
+            "error_count": len(errors),
+            "utilization": utilization,
+        },
+    }
 
 
 async def get_zone_by_pincode(pincode: str, db: AsyncSession) -> DeliveryZone | None:
