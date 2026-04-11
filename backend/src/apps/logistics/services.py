@@ -24,6 +24,8 @@ from src.apps.logistics.models import (
     Hub,
     HubOperationEvent,
     HubSortQueue,
+    HubSortQueueItem,
+    HubSortItemStatus,
     HubSortQueueStatus,
     LineHaulTrip,
     LineHaulTripStatus,
@@ -305,6 +307,130 @@ async def close_hub_sort_queue(queue: HubSortQueue, *, actor_id: int | None, db:
         db=db,
     )
     return queue
+
+
+async def record_hub_intake_scan(
+    *,
+    queue: HubSortQueue,
+    shipment_id: int,
+    hub_id: int,
+    actor_id: int | None,
+    scan_code: str,
+    notes: str,
+    db: AsyncSession,
+) -> HubSortQueueItem:
+    item = HubSortQueueItem(
+        queue_id=queue.id or 0,
+        shipment_id=shipment_id,
+        status=HubSortItemStatus.SCANNED,
+        scanned_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    db.add(item)
+    await db.flush()
+    await append_hub_operation_event(
+        hub_id=hub_id,
+        operation_type="hub_intake_recorded",
+        queue_id=queue.id,
+        queue_item_id=item.id,
+        shipment_id=shipment_id,
+        manifest_id=queue.manifest_id,
+        actor_type="admin",
+        actor_id=actor_id,
+        payload={"scan_code": scan_code, "notes": notes},
+        db=db,
+    )
+    return item
+
+
+async def assign_sort_bucket(
+    *,
+    item: HubSortQueueItem,
+    queue: HubSortQueue,
+    hub_id: int,
+    carrier: str,
+    vehicle_number: str,
+    next_hub_id: int | None,
+    actor_id: int | None,
+    db: AsyncSession,
+) -> HubSortQueueItem:
+    if item.status == HubSortItemStatus.EXCEPTION:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot assign shipment with unresolved exception")
+    item.status = HubSortItemStatus.ASSIGNED
+    item.assigned_next_hub_id = next_hub_id
+    item.assigned_carrier = carrier
+    item.assigned_vehicle_number = vehicle_number
+    item.assigned_at = utc_now()
+    item.updated_at = utc_now()
+    await append_hub_operation_event(
+        hub_id=hub_id,
+        operation_type="sort_bucket_assigned",
+        queue_id=queue.id,
+        queue_item_id=item.id,
+        shipment_id=item.shipment_id,
+        manifest_id=queue.manifest_id,
+        actor_type="admin",
+        actor_id=actor_id,
+        payload={"carrier": carrier, "vehicle_number": vehicle_number, "next_hub_id": next_hub_id},
+        db=db,
+    )
+    return item
+
+
+async def stage_outbound_shipment(
+    *,
+    item: HubSortQueueItem,
+    queue: HubSortQueue,
+    hub_id: int,
+    actor_id: int | None,
+    carrier: str,
+    vehicle_number: str,
+    db: AsyncSession,
+) -> HubSortQueueItem:
+    if item.status != HubSortItemStatus.ASSIGNED:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Shipment must be assigned before outbound staging")
+    if item.assigned_carrier != carrier or item.assigned_vehicle_number != vehicle_number:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assigned carrier/vehicle mismatch")
+    item.status = HubSortItemStatus.MOVED_TO_NEXT_LEG
+    item.moved_at = utc_now()
+    item.updated_at = utc_now()
+    await append_hub_operation_event(
+        hub_id=hub_id,
+        operation_type="outbound_staged",
+        queue_id=queue.id,
+        queue_item_id=item.id,
+        shipment_id=item.shipment_id,
+        manifest_id=queue.manifest_id,
+        actor_type="admin",
+        actor_id=actor_id,
+        payload={"carrier": carrier, "vehicle_number": vehicle_number},
+        db=db,
+    )
+    return item
+
+
+async def confirm_dispatch(
+    *,
+    item: HubSortQueueItem,
+    queue: HubSortQueue,
+    hub_id: int,
+    actor_id: int | None,
+    db: AsyncSession,
+) -> None:
+    if item.status != HubSortItemStatus.MOVED_TO_NEXT_LEG:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Dispatch confirmation requires outbound staging completion")
+    await append_hub_operation_event(
+        hub_id=hub_id,
+        operation_type="dispatch_confirmed",
+        queue_id=queue.id,
+        queue_item_id=item.id,
+        shipment_id=item.shipment_id,
+        manifest_id=queue.manifest_id,
+        actor_type="admin",
+        actor_id=actor_id,
+        payload={"confirmed_at": utc_now().isoformat()},
+        db=db,
+    )
 
 
 async def update_shipment_tracking(

@@ -75,6 +75,10 @@ from src.apps.logistics.services import (
     start_line_haul_trip,
     update_shipment_tracking,
     validate_line_haul_assignments,
+    record_hub_intake_scan,
+    assign_sort_bucket,
+    stage_outbound_shipment,
+    confirm_dispatch,
 )
 from src.apps.orders.models import Order, OrderStatus, ReturnRequest, ReturnStatus, Shipment, ShipmentTracking, VendorOrder
 from src.apps.notification.services.commerce_events import notify_delivery_exception, notify_order_event, notify_return_event
@@ -285,6 +289,10 @@ class HubBulkAssignRequest(BaseModel):
     next_hub_id: str | None = None
     carrier: str = Field(min_length=2, max_length=80)
     vehicle_number: str = Field(min_length=2, max_length=64)
+
+
+class DispatchConfirmRequest(BaseModel):
+    shipment_id: str
 
 
 def _serialize_sort_queue_item(item: HubSortQueueItem) -> dict[str, object]:
@@ -709,24 +717,122 @@ async def assign_hub_sort_item(
     ).scalars().first()
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment scan not found in queue")
-    if item.status == HubSortItemStatus.EXCEPTION:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot assign shipment with unresolved exception")
-    item.status = HubSortItemStatus.ASSIGNED
-    item.assigned_next_hub_id = decode_id_or_404(payload.next_hub_id) if payload.next_hub_id else None
-    item.assigned_carrier = payload.carrier
-    item.assigned_vehicle_number = payload.vehicle_number
-    item.assigned_at = utc_now()
-    item.updated_at = utc_now()
-    await append_hub_operation_event(
+    await assign_sort_bucket(
+        item=item,
+        queue=queue,
         hub_id=decoded_hub_id,
-        operation_type="next_leg_assigned",
-        queue_id=queue.id,
-        queue_item_id=item.id,
-        shipment_id=item.shipment_id,
-        manifest_id=queue.manifest_id,
-        actor_type="admin",
+        carrier=payload.carrier,
+        vehicle_number=payload.vehicle_number,
+        next_hub_id=decode_id_or_404(payload.next_hub_id) if payload.next_hub_id else None,
         actor_id=current_user.id,
-        payload={"carrier": payload.carrier, "vehicle_number": payload.vehicle_number},
+        db=db,
+    )
+    await db.commit()
+    return {"success": True}
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/sort-bucket-assignment")
+async def assign_sort_bucket_route(
+    hub_id: str,
+    queue_id: str,
+    payload: HubSortAssignRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    return await assign_hub_sort_item(hub_id, queue_id, payload, current_user, db)
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/intake", status_code=status.HTTP_201_CREATED)
+async def intake_hub_shipment(
+    hub_id: str,
+    queue_id: str,
+    payload: HubSortScanRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    decoded_hub_id = decode_id_or_404(hub_id)
+    queue = await get_hub_sort_queue_or_404(decode_id_or_404(queue_id), db)
+    if queue.hub_id != decoded_hub_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Queue does not belong to hub")
+    await _ensure_sort_action_allowed(queue, db)
+    shipment = await db.get(Shipment, decode_id_or_404(payload.shipment_id))
+    if shipment is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
+    item = await record_hub_intake_scan(
+        queue=queue,
+        shipment_id=shipment.id or 0,
+        hub_id=decoded_hub_id,
+        actor_id=current_user.id,
+        scan_code=payload.scan_code,
+        notes=payload.notes,
+        db=db,
+    )
+    await db.commit()
+    return _serialize_sort_queue_item(item)
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/outbound-stage")
+async def outbound_stage_hub_shipment(
+    hub_id: str,
+    queue_id: str,
+    payload: HubSortAssignRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    decoded_hub_id = decode_id_or_404(hub_id)
+    queue = await get_hub_sort_queue_or_404(decode_id_or_404(queue_id), db)
+    if queue.hub_id != decoded_hub_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Queue does not belong to hub")
+    item = (
+        await db.execute(
+            select(HubSortQueueItem).where(
+                HubSortQueueItem.queue_id == queue.id,
+                HubSortQueueItem.shipment_id == decode_id_or_404(payload.shipment_id),
+            )
+        )
+    ).scalars().first()
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment scan not found in queue")
+    await stage_outbound_shipment(
+        item=item,
+        queue=queue,
+        hub_id=decoded_hub_id,
+        actor_id=current_user.id,
+        carrier=payload.carrier,
+        vehicle_number=payload.vehicle_number,
+        db=db,
+    )
+    await db.commit()
+    return {"success": True}
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/dispatch-confirmation")
+async def confirm_hub_dispatch(
+    hub_id: str,
+    queue_id: str,
+    payload: DispatchConfirmRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    decoded_hub_id = decode_id_or_404(hub_id)
+    queue = await get_hub_sort_queue_or_404(decode_id_or_404(queue_id), db)
+    if queue.hub_id != decoded_hub_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Queue does not belong to hub")
+    item = (
+        await db.execute(
+            select(HubSortQueueItem).where(
+                HubSortQueueItem.queue_id == queue.id,
+                HubSortQueueItem.shipment_id == decode_id_or_404(payload.shipment_id),
+            )
+        )
+    ).scalars().first()
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment scan not found in queue")
+    await confirm_dispatch(
+        item=item,
+        queue=queue,
+        hub_id=decoded_hub_id,
+        actor_id=current_user.id,
         db=db,
     )
     await db.commit()
@@ -1989,6 +2095,7 @@ async def get_hub_kpi_dashboard(
     hub_id: str,
     _: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
+    analytics: AnalyticsService = Depends(get_analytics),
 ):
     decoded_hub_id = decode_id_or_404(hub_id)
     queues = (await db.execute(select(HubSortQueue).where(HubSortQueue.hub_id == decoded_hub_id))).scalars().all()
@@ -2003,14 +2110,15 @@ async def get_hub_kpi_dashboard(
     dwell_samples_minutes = [
         max((item.moved_at - item.scanned_at).total_seconds(), 0) / 60 for item in moved_items if item.scanned_at and item.moved_at
     ]
-    throughput = len(moved_items)
-    avg_dwell = round(sum(dwell_samples_minutes) / len(dwell_samples_minutes), 2) if dwell_samples_minutes else 0.0
-    mis_sort_rate = round((len(exception_items) / len(items)) * 100, 2) if items else 0.0
+    metrics = analytics.build_hub_operational_metrics(
+        scanned_shipments=len(items),
+        throughput_shipments=len(moved_items),
+        dwell_samples_minutes=dwell_samples_minutes,
+        exception_shipments=len(exception_items),
+    )
     return {
         "hub_id": hub_id,
         "queue_count": len(queues),
         "scanned_shipments": len(items),
-        "throughput_shipments": throughput,
-        "average_dwell_time_minutes": avg_dwell,
-        "mis_sort_rate_percent": mis_sort_rate,
+        **metrics,
     }

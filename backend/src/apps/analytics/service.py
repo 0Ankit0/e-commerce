@@ -148,3 +148,24 @@ class AnalyticsService:
                 await self._provider.shutdown()
             except Exception as exc:
                 logger.warning("Analytics shutdown error: %s", exc)
+
+    def build_hub_operational_metrics(
+        self,
+        *,
+        scanned_shipments: int,
+        throughput_shipments: int,
+        dwell_samples_minutes: list[float],
+        exception_shipments: int,
+        sla_minutes: int = 180,
+    ) -> dict[str, float | int]:
+        """Calculate hub operational metrics used by logistics dashboards."""
+        average_dwell = round(sum(dwell_samples_minutes) / len(dwell_samples_minutes), 2) if dwell_samples_minutes else 0.0
+        mis_sort_rate = round((exception_shipments / scanned_shipments) * 100, 2) if scanned_shipments else 0.0
+        sla_breaches = len([sample for sample in dwell_samples_minutes if sample > sla_minutes])
+        return {
+            "throughput_shipments": throughput_shipments,
+            "average_dwell_time_minutes": average_dwell,
+            "mis_sort_rate_percent": mis_sort_rate,
+            "sla_breach_shipments": sla_breaches,
+            "sla_target_minutes": sla_minutes,
+        }
