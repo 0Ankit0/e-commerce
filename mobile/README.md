@@ -30,7 +30,18 @@ The mobile app is a Flutter client for the same FastAPI auth and commerce APIs u
   are consumed via `generated_config.cmake`.
 - The `flutter_assemble` target is intentionally driven through a symbolic
   `_phony_` output to ensure Flutter backend steps rerun when inputs change.
+- Plugin/generated wiring remains isolated in platform-root CMake files via
+  `include(flutter/generated_plugins.cmake)` so hand-maintained project logic
+  and Flutter-managed plugin glue stay separated.
 
+## Manual Steps After CMake Edits
+
+- No additional manual migration is required.
+- If Flutter-generated files are stale, regenerate them with a platform build:
+  - Linux: `flutter build linux --debug`
+  - Windows: `flutter build windows --debug`
+- Do not hand-edit files under `mobile/*/flutter/ephemeral`; treat them as
+  generated outputs.
 ## Key Runtime Areas
 
 - Auth flows under `lib/features/auth`
