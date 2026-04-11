@@ -24,6 +24,7 @@ class VendorKYCStatus(str, Enum):
     RESUBMISSION_REQUIRED = "resubmission_required"
     APPROVED = "approved"
     REJECTED = "rejected"
+    SUSPENDED_AFTER_APPROVAL = "suspended_after_approval"
 
 
 class CommissionTier(str, Enum):
@@ -71,6 +72,8 @@ class Vendor(SQLModel, table=True):
     kyc_review_started_at: Optional[datetime] = Field(default=None)
     kyc_reviewed_at: Optional[datetime] = Field(default=None)
     kyc_last_reviewer_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    kyc_assigned_reviewer_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    kyc_reviewer_assigned_at: Optional[datetime] = Field(default=None)
     kyc_review_reasons_json: str = Field(default="[]")
     verification_timeline_json: str = Field(default="[]")
     approved_at: Optional[datetime] = Field(default=None)

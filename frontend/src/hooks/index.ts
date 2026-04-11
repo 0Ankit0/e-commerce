@@ -101,6 +101,13 @@ export {
 
 export { useAnalytics } from './use-analytics';
 export {
+  useAdminKycQueue,
+  useAdminVendorTimeline,
+  useAdminKycDecision,
+  useVendorKycHistory,
+  useSubmitKycPacket,
+} from './use-vendors';
+export {
   useLineHaulPlanDrafts,
   useRunLineHaulOptimization,
   useValidateLineHaulAssignments,
