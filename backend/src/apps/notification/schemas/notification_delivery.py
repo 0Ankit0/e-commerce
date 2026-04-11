@@ -18,11 +18,16 @@ class NotificationDeliveryRead(BaseModel):
     provider: str | None
     target: str | None
     attempt_count: int
+    retry_count: int
     max_attempts: int
     last_error_code: str | None
     last_error_reason: str | None
+    provider_response_code: str | None
+    provider_response_payload: str | None
     created_at: datetime
     updated_at: datetime
+    queued_at: datetime
+    sent_at: datetime | None
     last_attempt_at: datetime | None
     next_attempt_at: datetime | None
     delivered_at: datetime | None

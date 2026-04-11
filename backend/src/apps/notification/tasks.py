@@ -38,6 +38,17 @@ INVALID_TOKEN_MARKERS = (
 )
 
 
+def _extract_provider_code(metadata: dict[str, Any]) -> str | None:
+    for key in ("code", "error_code", "status", "status_code", "error"):
+        value = metadata.get(key)
+        if value is not None:
+            return str(value)[:128]
+    errors = metadata.get("errors")
+    if isinstance(errors, list) and errors:
+        return str(errors[0])[:128]
+    return None
+
+
 @shared_task(name="send_notification_email_task")
 def send_notification_email_task(
     recipients: List[Dict[str, str]],
@@ -122,6 +133,7 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
             return True
 
         delivery.attempt_count = delivery.attempt_count + 1
+        delivery.retry_count = max(0, delivery.attempt_count - 1)
         delivery.last_attempt_at = utc_now()
         delivery.updated_at = utc_now()
         db.add(delivery)
@@ -213,10 +225,24 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
             else:
                 raise RuntimeError(f"Unsupported channel {delivery.channel}")
 
-            if not result.success:
-                raise RuntimeError(result.error or "Provider reported failure")
-
             delivery.provider = result.provider
+            delivery.provider_response_code = _extract_provider_code(result.metadata)
+            delivery.provider_response_payload = str(result.metadata)[:2048] if result.metadata else None
+            delivery.status = NotificationDeliveryStatus.SENT
+            delivery.sent_at = utc_now()
+
+            if not result.success:
+                delivery.status = NotificationDeliveryStatus.FAILED
+                delivery.last_error_code = delivery.provider_response_code or "provider_error"
+                delivery.last_error_reason = (result.error or "Provider reported failure")[:1024]
+                delivery.updated_at = utc_now()
+                db.add(delivery)
+                await db.commit()
+                raise RuntimeError(delivery.last_error_reason)
+
+            db.add(delivery)
+            await db.commit()
+
             delivery.status = NotificationDeliveryStatus.DELIVERED
             delivery.delivered_at = utc_now()
             delivery.last_error_reason = None
@@ -244,6 +270,7 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
             else:
                 delivery.last_error_code = "provider_error"
 
+            delivery.status = NotificationDeliveryStatus.FAILED
             delivery.last_error_reason = message[:1024]
             delivery.updated_at = utc_now()
 

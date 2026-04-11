@@ -3,7 +3,7 @@ import hashlib
 import logging
 from typing import Optional
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import String, and_, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
@@ -224,10 +224,11 @@ async def _enqueue_channel_delivery(
         notification_id=notification.id,
         user_id=notification.user_id,
         channel=channel,
-        status=NotificationDeliveryStatus.PENDING,
+        status=NotificationDeliveryStatus.QUEUED,
         target=stable_target,
         dedup_key=key,
         max_attempts=max_attempts,
+        queued_at=utc_now(),
     )
     db.add(delivery)
     await db.commit()
@@ -340,7 +341,7 @@ async def retry_delivery(db: AsyncSession, delivery_id: int) -> Optional[Notific
     if delivery.status == NotificationDeliveryStatus.DELIVERED:
         return delivery
 
-    delivery.status = NotificationDeliveryStatus.PENDING
+    delivery.status = NotificationDeliveryStatus.QUEUED
     delivery.last_error_reason = None
     delivery.last_error_code = None
     delivery.dead_lettered_at = None
@@ -351,6 +352,140 @@ async def retry_delivery(db: AsyncSession, delivery_id: int) -> Optional[Notific
     await db.refresh(delivery)
     dispatch_notification_delivery_task.delay(delivery.id)
     return delivery
+
+
+async def get_channel_delivery_trends(
+    db: AsyncSession,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    channel: NotificationDeliveryChannel | None = None,
+    skip: int = 0,
+    limit: int = 50,
+) -> dict[str, object]:
+    day = func.date(NotificationDelivery.created_at).label("day")
+    latency_ms = (
+        (func.julianday(NotificationDelivery.delivered_at) - func.julianday(NotificationDelivery.queued_at)) * 86400000.0
+    )
+
+    filters = []
+    if date_from:
+        filters.append(cast(NotificationDelivery.created_at, String) >= f"{date_from} 00:00:00")
+    if date_to:
+        filters.append(cast(NotificationDelivery.created_at, String) <= f"{date_to} 23:59:59")
+    if channel is not None:
+        filters.append(NotificationDelivery.channel == channel)
+
+    grouped = (
+        select(
+            day,
+            NotificationDelivery.channel,
+            func.count().label("total"),
+            func.sum(case((NotificationDelivery.status == NotificationDeliveryStatus.DELIVERED, 1), else_=0)).label("delivered"),
+            func.sum(case((NotificationDelivery.status.in_([NotificationDeliveryStatus.FAILED, NotificationDeliveryStatus.DEAD_LETTER]), 1), else_=0)).label("failed"),
+            func.avg(case((NotificationDelivery.delivered_at.is_not(None), latency_ms), else_=None)).label("avg_latency_ms"),
+        )
+        .group_by(day, NotificationDelivery.channel)
+        .order_by(day.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    if filters:
+        grouped = grouped.where(*filters)
+
+    rows = (await db.execute(grouped)).all()
+    items = []
+    for row in rows:
+        total = int(row.total or 0)
+        delivered = int(row.delivered or 0)
+        failed = int(row.failed or 0)
+        items.append(
+            {
+                "day": row.day,
+                "channel": row.channel.value if hasattr(row.channel, "value") else str(row.channel),
+                "total": total,
+                "delivered": delivered,
+                "failed": failed,
+                "delivery_rate": (delivered / total) if total else 0.0,
+                "failure_rate": (failed / total) if total else 0.0,
+                "avg_latency_ms": float(row.avg_latency_ms or 0.0),
+            }
+        )
+
+    totals_query = select(func.count()).select_from(NotificationDelivery)
+    if filters:
+        totals_query = totals_query.where(*filters)
+    total_rows = (await db.execute(totals_query)).scalar_one()
+    return {"items": items, "total": total_rows}
+
+
+async def get_template_delivery_trends(
+    db: AsyncSession,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    channel: NotificationDeliveryChannel | None = None,
+    template: str | None = None,
+    skip: int = 0,
+    limit: int = 50,
+) -> dict[str, object]:
+    day = func.date(NotificationDelivery.created_at).label("day")
+    filters = []
+    if date_from:
+        filters.append(cast(NotificationDelivery.created_at, String) >= f"{date_from} 00:00:00")
+    if date_to:
+        filters.append(cast(NotificationDelivery.created_at, String) <= f"{date_to} 23:59:59")
+    if channel is not None:
+        filters.append(NotificationDelivery.channel == channel)
+    if template:
+        filters.append(Notification.type == template)
+
+    grouped = (
+        select(
+            day,
+            Notification.type.label("template"),
+            NotificationDelivery.channel,
+            func.count().label("total"),
+            func.sum(case((NotificationDelivery.status == NotificationDeliveryStatus.DELIVERED, 1), else_=0)).label("delivered"),
+            func.sum(case((NotificationDelivery.status.in_([NotificationDeliveryStatus.FAILED, NotificationDeliveryStatus.DEAD_LETTER]), 1), else_=0)).label("failed"),
+        )
+        .join(Notification, Notification.id == NotificationDelivery.notification_id)
+        .group_by(day, Notification.type, NotificationDelivery.channel)
+        .order_by(day.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    if filters:
+        grouped = grouped.where(*filters)
+
+    rows = (await db.execute(grouped)).all()
+    items = []
+    for row in rows:
+        total = int(row.total or 0)
+        delivered = int(row.delivered or 0)
+        failed = int(row.failed or 0)
+        items.append(
+            {
+                "day": row.day,
+                "template": row.template.value if hasattr(row.template, "value") else str(row.template),
+                "channel": row.channel.value if hasattr(row.channel, "value") else str(row.channel),
+                "total": total,
+                "delivered": delivered,
+                "failed": failed,
+                "delivery_rate": (delivered / total) if total else 0.0,
+                "failure_rate": (failed / total) if total else 0.0,
+            }
+        )
+
+    totals_query = (
+        select(func.count())
+        .select_from(NotificationDelivery)
+        .join(Notification, Notification.id == NotificationDelivery.notification_id)
+    )
+    if filters:
+        totals_query = totals_query.where(*filters)
+    total_rows = (await db.execute(totals_query)).scalar_one()
+    return {"items": items, "total": total_rows}
 
 
 async def get_user_notifications(

@@ -17,6 +17,8 @@ class NotificationDeliveryChannel(str, Enum):
 
 
 class NotificationDeliveryStatus(str, Enum):
+    QUEUED = "queued"
+    SENT = "sent"
     PENDING = "pending"
     RETRYING = "retrying"
     DELIVERED = "delivered"
@@ -38,13 +40,18 @@ class NotificationDelivery(SQLModel, table=True):
     dedup_key: str = Field(max_length=255, unique=True, index=True)
 
     attempt_count: int = Field(default=0)
+    retry_count: int = Field(default=0)
     max_attempts: int = Field(default=4)
 
     last_error_code: Optional[str] = Field(default=None, max_length=128)
     last_error_reason: Optional[str] = Field(default=None, max_length=1024)
+    provider_response_code: Optional[str] = Field(default=None, max_length=128)
+    provider_response_payload: Optional[str] = Field(default=None, max_length=2048)
 
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
+    queued_at: datetime = Field(default_factory=datetime.now)
+    sent_at: Optional[datetime] = Field(default=None)
     last_attempt_at: Optional[datetime] = Field(default=None)
     next_attempt_at: Optional[datetime] = Field(default=None, index=True)
     delivered_at: Optional[datetime] = Field(default=None)
