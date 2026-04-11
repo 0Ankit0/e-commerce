@@ -22,6 +22,19 @@ from src.apps.vendors.models import (
     BankAccountVerificationStatus,
 )
 
+KYC_ALLOWED_TRANSITIONS: dict[VendorKYCStatus, set[VendorKYCStatus]] = {
+    VendorKYCStatus.SUBMITTED: {VendorKYCStatus.UNDER_REVIEW},
+    VendorKYCStatus.UNDER_REVIEW: {
+        VendorKYCStatus.RESUBMISSION_REQUIRED,
+        VendorKYCStatus.APPROVED,
+        VendorKYCStatus.REJECTED,
+    },
+    VendorKYCStatus.RESUBMISSION_REQUIRED: {VendorKYCStatus.SUBMITTED, VendorKYCStatus.UNDER_REVIEW},
+    VendorKYCStatus.APPROVED: {VendorKYCStatus.SUSPENDED_AFTER_APPROVAL},
+    VendorKYCStatus.REJECTED: set(),
+    VendorKYCStatus.SUSPENDED_AFTER_APPROVAL: set(),
+}
+
 
 async def require_tenant_admin(tenant_id: int, user: User, db: AsyncSession) -> Tenant:
     tenant = await db.get(Tenant, tenant_id)
@@ -97,6 +110,8 @@ def serialize_vendor(vendor: Vendor) -> dict[str, object]:
         "kyc_review_started_at": vendor.kyc_review_started_at.isoformat() if vendor.kyc_review_started_at else None,
         "kyc_reviewed_at": vendor.kyc_reviewed_at.isoformat() if vendor.kyc_reviewed_at else None,
         "kyc_last_reviewer_user_id": vendor.kyc_last_reviewer_user_id,
+        "kyc_assigned_reviewer_user_id": vendor.kyc_assigned_reviewer_user_id,
+        "kyc_reviewer_assigned_at": vendor.kyc_reviewer_assigned_at.isoformat() if vendor.kyc_reviewer_assigned_at else None,
         "kyc_review_reasons": json.loads(vendor.kyc_review_reasons_json or "[]"),
         "created_at": vendor.created_at.isoformat(),
     }
@@ -124,6 +139,7 @@ def mark_vendor_kyc_status(
     reviewer_user_id: int | None = None,
     reason: str = "",
 ) -> None:
+    assert_vendor_kyc_transition(vendor.kyc_status, kyc_status)
     vendor.kyc_status = kyc_status
     vendor.kyc_last_reviewer_user_id = reviewer_user_id
     now = utc_now()
@@ -143,6 +159,18 @@ def mark_vendor_kyc_status(
             }
         )
     vendor.kyc_review_reasons_json = json.dumps(reasons)
+    if kyc_status == VendorKYCStatus.SUBMITTED:
+        vendor.kyc_submitted_at = now
+        vendor.kyc_review_started_at = None
+        vendor.kyc_reviewed_at = None
+
+
+def assert_vendor_kyc_transition(current_status: VendorKYCStatus, target_status: VendorKYCStatus) -> None:
+    if target_status not in KYC_ALLOWED_TRANSITIONS[current_status]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Invalid KYC status transition: {current_status.value} -> {target_status.value}",
+        )
 
 
 async def validate_vendor_kyc_requirements(vendor: Vendor, db: AsyncSession) -> dict[str, object]:
@@ -307,6 +335,15 @@ def serialize_vendor_kyc_timeline(events: list[VendorTimelineEvent]) -> list[dic
         for event in events
         if event.event_type.startswith("vendor.") and ("kyc" in event.event_type or "document" in event.event_type or event.event_type in {"vendor.under_review", "vendor.approved", "vendor.rejected", "vendor.resubmission_requested"})
     ]
+
+
+def vendor_kyc_step_status(checks: dict[str, object]) -> dict[str, str]:
+    missing_documents = set(checks.get("missing_documents", []))
+    return {
+        "gst": "complete" if "gst" not in missing_documents else "pending",
+        "pan": "complete" if "pan" not in missing_documents else "pending",
+        "bank": "complete" if checks.get("bank_verified") else ("submitted" if checks.get("bank_submitted") else "pending"),
+    }
 
 def serialize_vendor_payout(payout: VendorPayout) -> dict[str, object]:
     from src.apps.iam.utils.hashid import encode_id
