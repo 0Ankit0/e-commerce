@@ -8,6 +8,7 @@ from src.apps.commerce.models import Address
 from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import encode_id
 from src.apps.logistics.api.v1.routes import (
+    DispatchConfirmRequest,
     HubBulkAssignRequest,
     HubBulkScanRequest,
     HubBulkMoveNextLegRequest,
@@ -15,11 +16,14 @@ from src.apps.logistics.api.v1.routes import (
     HubSortQueueCreateRequest,
     HubSortScanRequest,
     assign_hub_sort_item,
+    confirm_hub_dispatch,
     bulk_assign_hub_sort_items,
     bulk_move_to_next_leg,
     bulk_scan_hub_sort_items,
     close_hub_queue,
     create_hub_queue,
+    intake_hub_shipment,
+    outbound_stage_hub_shipment,
     scan_hub_sort_item,
 )
 from src.apps.logistics.models import Hub, HubOperationEvent, HubSortQueueItem, ShipmentManifest
@@ -290,3 +294,85 @@ async def test_bulk_scan_and_assign_are_idempotent(db_session):
     )
     assert assign_again["assigned_count"] == 0
     assert assign_again["idempotent_skip_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_confirmation_rejects_invalid_operation_order(db_session):
+    admin = await _seed_user(db_session)
+    hub = Hub(name="Hub Dispatch", code="HUB-D")
+    db_session.add(hub)
+    await db_session.flush()
+    shipment = await _seed_shipment(db_session)
+    queue_response = await create_hub_queue(
+        encode_id(hub.id or 0),
+        HubSortQueueCreateRequest(code="QUEUE-D"),
+        admin,
+        db_session,
+    )
+    await intake_hub_shipment(
+        encode_id(hub.id or 0),
+        queue_response["queue_id"],
+        HubSortScanRequest(shipment_id=encode_id(shipment.id or 0)),
+        admin,
+        db_session,
+    )
+    with pytest.raises(HTTPException, match="Dispatch confirmation requires outbound staging completion"):
+        await confirm_hub_dispatch(
+            encode_id(hub.id or 0),
+            queue_response["queue_id"],
+            DispatchConfirmRequest(shipment_id=encode_id(shipment.id or 0)),
+            admin,
+            db_session,
+        )
+
+
+@pytest.mark.asyncio
+async def test_hub_leg_transition_audit_timestamps_are_recorded(db_session):
+    admin = await _seed_user(db_session)
+    hub = Hub(name="Hub Audit", code="HUB-AUD")
+    db_session.add(hub)
+    await db_session.flush()
+    shipment = await _seed_shipment(db_session)
+    queue_response = await create_hub_queue(
+        encode_id(hub.id or 0),
+        HubSortQueueCreateRequest(code="QUEUE-AUD"),
+        admin,
+        db_session,
+    )
+    await intake_hub_shipment(
+        encode_id(hub.id or 0),
+        queue_response["queue_id"],
+        HubSortScanRequest(shipment_id=encode_id(shipment.id or 0)),
+        admin,
+        db_session,
+    )
+    await assign_hub_sort_item(
+        encode_id(hub.id or 0),
+        queue_response["queue_id"],
+        HubSortAssignRequest(shipment_id=encode_id(shipment.id or 0), carrier="Carrier-A", vehicle_number="VEH-A"),
+        admin,
+        db_session,
+    )
+    await outbound_stage_hub_shipment(
+        encode_id(hub.id or 0),
+        queue_response["queue_id"],
+        HubSortAssignRequest(shipment_id=encode_id(shipment.id or 0), carrier="Carrier-A", vehicle_number="VEH-A"),
+        admin,
+        db_session,
+    )
+    await confirm_hub_dispatch(
+        encode_id(hub.id or 0),
+        queue_response["queue_id"],
+        DispatchConfirmRequest(shipment_id=encode_id(shipment.id or 0)),
+        admin,
+        db_session,
+    )
+    item = (await db_session.execute(select(HubSortQueueItem))).scalars().one()
+    assert item.scanned_at is not None
+    assert item.assigned_at is not None
+    assert item.moved_at is not None
+    operation_types = (await db_session.execute(select(HubOperationEvent.operation_type))).scalars().all()
+    assert "hub_intake_recorded" in operation_types
+    assert "sort_bucket_assigned" in operation_types
+    assert "outbound_staged" in operation_types
+    assert "dispatch_confirmed" in operation_types
