@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
-from src.apps.iam.api.deps import get_current_user, get_db
+from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import decode_id_or_404
 from src.apps.logistics.services import (
@@ -18,6 +18,11 @@ from src.apps.logistics.services import (
     resolve_user_branch_scope,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
+from src.apps.notification.models.notification_delivery import NotificationDeliveryChannel
+from src.apps.notification.services.notification import (
+    get_channel_delivery_trends,
+    get_template_delivery_trends,
+)
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
@@ -85,4 +90,46 @@ async def get_branch_kpi_drilldown(
         agent_id=decode_id_or_404(agent_id) if agent_id else None,
         date_from=date_from,
         date_to=date_to,
+    )
+
+
+@router.get("/notifications/channels/performance")
+async def get_notification_channel_performance(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    channel: NotificationDeliveryChannel | None = None,
+    skip: int = 0,
+    limit: int = 50,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    return await get_channel_delivery_trends(
+        db=db,
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=date_to.isoformat() if date_to else None,
+        channel=channel,
+        skip=skip,
+        limit=limit,
+    )
+
+
+@router.get("/notifications/templates/performance")
+async def get_notification_template_performance(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    channel: NotificationDeliveryChannel | None = None,
+    template: str | None = None,
+    skip: int = 0,
+    limit: int = 50,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    return await get_template_delivery_trends(
+        db=db,
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=date_to.isoformat() if date_to else None,
+        channel=channel,
+        template=template,
+        skip=skip,
+        limit=limit,
     )

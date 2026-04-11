@@ -9,6 +9,9 @@ import type {
   PaginatedResponse,
   BranchDashboardDrilldownResponse,
   BranchDashboardSnapshotResponse,
+  NotificationChannelPerformance,
+  NotificationPerformanceResponse,
+  NotificationTemplatePerformance,
   SecurityIncident,
   SecurityIncidentStatusUpdate,
 } from '@/types';
@@ -40,6 +43,15 @@ export interface BranchDashboardFilters {
   date_from?: string;
   date_to?: string;
   agent_id?: string;
+}
+
+export interface NotificationPerformanceFilters {
+  date_from?: string;
+  date_to?: string;
+  channel?: string;
+  template?: string;
+  skip?: number;
+  limit?: number;
 }
 
 export function useObservabilityLogs(filters: ObservabilityLogFilters) {
@@ -144,6 +156,34 @@ export function useBranchDashboardDrilldown(filters: BranchDashboardFilters) {
     queryKey: ['branch-dashboard-drilldown', filters],
     queryFn: async () => {
       const response = await apiClient.get<BranchDashboardDrilldownResponse>('/analytics/branch-kpis/drilldown', { params: filters });
+      return response.data;
+    },
+    staleTime: 15_000,
+  });
+}
+
+export function useNotificationChannelPerformance(filters: NotificationPerformanceFilters) {
+  return useQuery({
+    queryKey: ['notification-channel-performance', filters],
+    queryFn: async () => {
+      const response = await apiClient.get<NotificationPerformanceResponse<NotificationChannelPerformance>>(
+        '/analytics/notifications/channels/performance',
+        { params: filters }
+      );
+      return response.data;
+    },
+    staleTime: 15_000,
+  });
+}
+
+export function useNotificationTemplatePerformance(filters: NotificationPerformanceFilters) {
+  return useQuery({
+    queryKey: ['notification-template-performance', filters],
+    queryFn: async () => {
+      const response = await apiClient.get<NotificationPerformanceResponse<NotificationTemplatePerformance>>(
+        '/analytics/notifications/templates/performance',
+        { params: filters }
+      );
       return response.data;
     },
     staleTime: 15_000,

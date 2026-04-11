@@ -163,3 +163,30 @@ export interface EmailDeliveryAnalytics {
   failure_rate: number;
   failure_reasons: DeliveryFailureReason[];
 }
+
+export interface NotificationChannelPerformance {
+  day: string;
+  channel: string;
+  total: number;
+  delivered: number;
+  failed: number;
+  delivery_rate: number;
+  failure_rate: number;
+  avg_latency_ms: number;
+}
+
+export interface NotificationTemplatePerformance {
+  day: string;
+  template: string;
+  channel: string;
+  total: number;
+  delivered: number;
+  failed: number;
+  delivery_rate: number;
+  failure_rate: number;
+}
+
+export interface NotificationPerformanceResponse<T> {
+  items: T[];
+  total: number;
+}
