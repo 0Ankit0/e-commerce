@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+import csv
+import io
+from datetime import date, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -77,8 +79,11 @@ from src.apps.logistics.services import (
     validate_line_haul_assignments,
     record_hub_intake_scan,
     assign_sort_bucket,
+    build_branch_kpi_drilldown,
+    build_branch_kpi_snapshot,
     stage_outbound_shipment,
     confirm_dispatch,
+    resolve_user_branch_scope,
 )
 from src.apps.orders.models import Order, OrderStatus, ReturnRequest, ReturnStatus, Shipment, ShipmentTracking, VendorOrder
 from src.apps.notification.services.commerce_events import notify_delivery_exception, notify_order_event, notify_return_event
@@ -2024,6 +2029,76 @@ async def get_branch_performance(
         "inventory_movements": len(movements),
         "total_moved_units": sum(movement.quantity for movement in movements),
     }
+
+
+@router.get("/logistics/branch-dashboard/snapshot")
+async def get_branch_dashboard_snapshot(
+    branch_id: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    agent_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    allowed_branch_ids = await resolve_user_branch_scope(current_user, db)
+    return await build_branch_kpi_snapshot(
+        db=db,
+        branch_id=decode_id_or_404(branch_id) if branch_id else None,
+        allowed_branch_ids=allowed_branch_ids,
+        agent_id=decode_id_or_404(agent_id) if agent_id else None,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+@router.get("/logistics/branch-dashboard/drilldown")
+async def get_branch_dashboard_drilldown(
+    branch_id: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    agent_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    allowed_branch_ids = await resolve_user_branch_scope(current_user, db)
+    return await build_branch_kpi_drilldown(
+        db=db,
+        branch_id=decode_id_or_404(branch_id) if branch_id else None,
+        allowed_branch_ids=allowed_branch_ids,
+        agent_id=decode_id_or_404(agent_id) if agent_id else None,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+@router.get("/logistics/branch-dashboard/export")
+async def export_branch_dashboard_snapshot(
+    branch_id: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    agent_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    allowed_branch_ids = await resolve_user_branch_scope(current_user, db)
+    payload = await build_branch_kpi_snapshot(
+        db=db,
+        branch_id=decode_id_or_404(branch_id) if branch_id else None,
+        allowed_branch_ids=allowed_branch_ids,
+        agent_id=decode_id_or_404(agent_id) if agent_id else None,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["kpi", "value"])
+    for key, value in payload["snapshot"].items():
+        writer.writerow([key, value])
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="branch-dashboard-kpis.csv"'},
+    )
 
 
 @router.get("/logistics/hubs/{hub_id}/performance")

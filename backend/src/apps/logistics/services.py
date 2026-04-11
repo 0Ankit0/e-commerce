@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime, time
 from math import asin, cos, radians, sin, sqrt
 
 from fastapi import HTTPException, status
@@ -40,6 +40,7 @@ from src.apps.logistics.models import (
     ShippingOption,
 )
 from src.apps.orders.models import Order, OrderStatus, ReturnRequest, Shipment, ShipmentTracking, VendorOrder, VendorOrderStatus
+from src.apps.iam.models.user import User
 
 ALLOWED_SHIPMENT_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.CONFIRMED: {OrderStatus.PROCESSING},
@@ -936,3 +937,227 @@ async def ingest_courier_location_ping(
             shipment.updated_at = utc_now()
     await db.flush()
     return ping
+
+
+async def resolve_user_branch_scope(current_user: User, db: AsyncSession) -> set[int] | None:
+    """Return allowed branch IDs for the caller, or ``None`` for unrestricted access."""
+    if current_user.is_superuser:
+        return None
+    scoped_agents = (
+        await db.execute(select(DeliveryAgent).where(DeliveryAgent.user_id == current_user.id))
+    ).scalars().all()
+    return {agent.branch_id for agent in scoped_agents}
+
+
+def ensure_branch_scope_access(
+    *,
+    allowed_branch_ids: set[int] | None,
+    requested_branch_id: int | None,
+) -> None:
+    """Raise when a caller requests data outside their authorized branch scope."""
+    if allowed_branch_ids is None:
+        return
+    if requested_branch_id is None:
+        if allowed_branch_ids:
+            return
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Branch-scoped access denied")
+    if requested_branch_id not in allowed_branch_ids:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Branch-scoped access denied")
+
+
+def calculate_branch_kpi_snapshot(
+    *,
+    movement_count: int,
+    total_moved_units: int,
+    agent_count: int,
+    active_agent_count: int,
+    pickup_jobs: list[PickupJob],
+    reverse_pickups: list[ReversePickupJob],
+    exceptions: list[DeliveryException],
+) -> dict[str, float | int]:
+    completed_pickups = len([job for job in pickup_jobs if job.status == PickupJobStatus.PICKED_UP])
+    reverse_completed = len(
+        [
+            job
+            for job in reverse_pickups
+            if job.status in {ReversePickupStatus.PICKED_UP, ReversePickupStatus.RECEIVED, ReversePickupStatus.RETURNED_TO_VENDOR}
+        ]
+    )
+    open_exceptions = len([item for item in exceptions if item.status in {DeliveryExceptionStatus.OPEN, DeliveryExceptionStatus.RESCHEDULED}])
+    total_delivery_attempts = len(pickup_jobs) + len(exceptions)
+    failed_deliveries = len([item for item in exceptions if item.exception_type.lower() in {"failed_delivery", "delivery_failed"}])
+    delivery_success_rate = round((completed_pickups / len(pickup_jobs)) * 100, 2) if pickup_jobs else 0.0
+    return {
+        "inventory_movements": movement_count,
+        "total_moved_units": total_moved_units,
+        "agent_count": agent_count,
+        "active_agent_count": active_agent_count,
+        "pickup_jobs": len(pickup_jobs),
+        "completed_pickups": completed_pickups,
+        "reverse_pickups": len(reverse_pickups),
+        "reverse_completed": reverse_completed,
+        "open_exceptions": open_exceptions,
+        "failed_deliveries": failed_deliveries,
+        "delivery_success_rate_percent": delivery_success_rate,
+        "delivery_attempts": total_delivery_attempts,
+        "backlog_shipments": max(total_delivery_attempts - completed_pickups, 0),
+    }
+
+
+async def build_branch_kpi_snapshot(
+    *,
+    db: AsyncSession,
+    branch_id: int | None,
+    allowed_branch_ids: set[int] | None,
+    agent_id: int | None,
+    date_from: date | None,
+    date_to: date | None,
+) -> dict[str, object]:
+    ensure_branch_scope_access(allowed_branch_ids=allowed_branch_ids, requested_branch_id=branch_id)
+    scoped_branch_ids = allowed_branch_ids if branch_id is None else {branch_id}
+
+    pickup_query = select(PickupJob)
+    reverse_query = select(ReversePickupJob)
+    exception_query = select(DeliveryException)
+    movement_query = select(BranchInventoryMovement)
+    agent_query = select(DeliveryAgent)
+    if scoped_branch_ids is not None:
+        pickup_query = pickup_query.where(PickupJob.branch_id.in_(scoped_branch_ids))
+        reverse_query = reverse_query.where(ReversePickupJob.branch_id.in_(scoped_branch_ids))
+        movement_query = movement_query.where(BranchInventoryMovement.branch_id.in_(scoped_branch_ids))
+        agent_query = agent_query.where(DeliveryAgent.branch_id.in_(scoped_branch_ids))
+        exception_query = exception_query.where(
+            DeliveryException.agent_id.in_(select(DeliveryAgent.id).where(DeliveryAgent.branch_id.in_(scoped_branch_ids)))
+        )
+    if agent_id is not None:
+        pickup_query = pickup_query.where(PickupJob.agent_id == agent_id)
+        reverse_query = reverse_query.where(ReversePickupJob.agent_id == agent_id)
+        exception_query = exception_query.where(DeliveryException.agent_id == agent_id)
+
+    if date_from:
+        start_at = datetime.combine(date_from, time.min)
+        pickup_query = pickup_query.where(PickupJob.created_at >= start_at)
+        reverse_query = reverse_query.where(ReversePickupJob.created_at >= start_at)
+        exception_query = exception_query.where(DeliveryException.created_at >= start_at)
+        movement_query = movement_query.where(BranchInventoryMovement.created_at >= start_at)
+    if date_to:
+        end_at = datetime.combine(date_to, time.max)
+        pickup_query = pickup_query.where(PickupJob.created_at <= end_at)
+        reverse_query = reverse_query.where(ReversePickupJob.created_at <= end_at)
+        exception_query = exception_query.where(DeliveryException.created_at <= end_at)
+        movement_query = movement_query.where(BranchInventoryMovement.created_at <= end_at)
+
+    pickup_jobs = (await db.execute(pickup_query)).scalars().all()
+    reverse_pickups = (await db.execute(reverse_query)).scalars().all()
+    exceptions = (await db.execute(exception_query)).scalars().all()
+    movements = (await db.execute(movement_query)).scalars().all()
+    agents = (await db.execute(agent_query)).scalars().all()
+    snapshot = calculate_branch_kpi_snapshot(
+        movement_count=len(movements),
+        total_moved_units=sum(movement.quantity for movement in movements),
+        agent_count=len(agents),
+        active_agent_count=len([agent for agent in agents if agent.status == DeliveryAgentStatus.AVAILABLE]),
+        pickup_jobs=pickup_jobs,
+        reverse_pickups=reverse_pickups,
+        exceptions=exceptions,
+    )
+    branch_code_map: dict[int, str] = {}
+    if scoped_branch_ids is None:
+        branches = (await db.execute(select(Branch))).scalars().all()
+        branch_code_map = {branch.id or 0: branch.code for branch in branches if branch.id is not None}
+    else:
+        branches = (await db.execute(select(Branch).where(Branch.id.in_(scoped_branch_ids)))).scalars().all()
+        branch_code_map = {branch.id or 0: branch.code for branch in branches if branch.id is not None}
+
+    return {
+        "snapshot": snapshot,
+        "branch_scope": [encode_id(branch) for branch in sorted(scoped_branch_ids)] if scoped_branch_ids is not None else [],
+        "date_from": date_from.isoformat() if date_from else None,
+        "date_to": date_to.isoformat() if date_to else None,
+        "agent_id": encode_id(agent_id) if agent_id else None,
+        "branch_codes": {encode_id(branch_id): code for branch_id, code in branch_code_map.items()},
+    }
+
+
+async def build_branch_kpi_drilldown(
+    *,
+    db: AsyncSession,
+    branch_id: int | None,
+    allowed_branch_ids: set[int] | None,
+    agent_id: int | None,
+    date_from: date | None,
+    date_to: date | None,
+) -> dict[str, object]:
+    ensure_branch_scope_access(allowed_branch_ids=allowed_branch_ids, requested_branch_id=branch_id)
+    scoped_branch_ids = allowed_branch_ids if branch_id is None else {branch_id}
+    pickup_query = select(PickupJob)
+    exception_query = select(DeliveryException)
+    movement_query = select(BranchInventoryMovement)
+
+    if scoped_branch_ids is not None:
+        pickup_query = pickup_query.where(PickupJob.branch_id.in_(scoped_branch_ids))
+        movement_query = movement_query.where(BranchInventoryMovement.branch_id.in_(scoped_branch_ids))
+        exception_query = exception_query.where(
+            DeliveryException.agent_id.in_(select(DeliveryAgent.id).where(DeliveryAgent.branch_id.in_(scoped_branch_ids)))
+        )
+    if agent_id is not None:
+        pickup_query = pickup_query.where(PickupJob.agent_id == agent_id)
+        exception_query = exception_query.where(DeliveryException.agent_id == agent_id)
+    if date_from:
+        start_at = datetime.combine(date_from, time.min)
+        pickup_query = pickup_query.where(PickupJob.created_at >= start_at)
+        exception_query = exception_query.where(DeliveryException.created_at >= start_at)
+        movement_query = movement_query.where(BranchInventoryMovement.created_at >= start_at)
+    if date_to:
+        end_at = datetime.combine(date_to, time.max)
+        pickup_query = pickup_query.where(PickupJob.created_at <= end_at)
+        exception_query = exception_query.where(DeliveryException.created_at <= end_at)
+        movement_query = movement_query.where(BranchInventoryMovement.created_at <= end_at)
+
+    pickups = (await db.execute(pickup_query)).scalars().all()
+    exceptions = (await db.execute(exception_query)).scalars().all()
+    movements = (await db.execute(movement_query)).scalars().all()
+
+    agent_ids = {job.agent_id for job in pickups if job.agent_id} | {item.agent_id for item in exceptions if item.agent_id}
+    agents = []
+    if agent_ids:
+        agents = (await db.execute(select(DeliveryAgent).where(DeliveryAgent.id.in_(agent_ids)))).scalars().all()
+    agent_names = {agent.id or 0: agent.name for agent in agents if agent.id is not None}
+
+    productivity: dict[int, dict[str, int]] = defaultdict(lambda: {"assigned": 0, "completed": 0, "failed": 0})
+    for job in pickups:
+        if not job.agent_id:
+            continue
+        productivity[job.agent_id]["assigned"] += 1
+        if job.status == PickupJobStatus.PICKED_UP:
+            productivity[job.agent_id]["completed"] += 1
+    for item in exceptions:
+        if not item.agent_id:
+            continue
+        productivity[item.agent_id]["failed"] += 1
+
+    movement_totals: dict[str, int] = defaultdict(int)
+    for movement in movements:
+        movement_totals[movement.movement_type] += movement.quantity
+
+    return {
+        "productivity": [
+            {
+                "agent_id": encode_id(agent_key),
+                "agent_name": agent_names.get(agent_key, f"Agent {agent_key}"),
+                "assigned": totals["assigned"],
+                "completed": totals["completed"],
+                "failed": totals["failed"],
+            }
+            for agent_key, totals in sorted(productivity.items(), key=lambda item: item[1]["completed"], reverse=True)
+        ],
+        "delivery_outcomes": {
+            "success": len([job for job in pickups if job.status == PickupJobStatus.PICKED_UP]),
+            "failed": len([item for item in exceptions if item.exception_type.lower() in {"failed_delivery", "delivery_failed"}]),
+        },
+        "backlog": {
+            "pending_pickups": len([job for job in pickups if job.status in {PickupJobStatus.PENDING, PickupJobStatus.ASSIGNED}]),
+            "open_exceptions": len([item for item in exceptions if item.status in {DeliveryExceptionStatus.OPEN, DeliveryExceptionStatus.RESCHEDULED}]),
+        },
+        "inventory_flow": movement_totals,
+    }
