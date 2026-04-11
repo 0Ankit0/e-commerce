@@ -190,3 +190,44 @@ export interface NotificationPerformanceResponse<T> {
   items: T[];
   total: number;
 }
+
+
+export interface SmsQuotaConfig {
+  id: number;
+  provider: string;
+  per_user_daily_limit: number | null;
+  per_ip_window_limit: number | null;
+  ip_window_seconds: number;
+  global_provider_daily_limit: number | null;
+  privileged_override_enabled: boolean;
+  updated_by_user_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SmsQuotaViolationEvent {
+  id: number;
+  config_id: number | null;
+  scope: string;
+  provider: string | null;
+  user_id: number | null;
+  ip_address: string | null;
+  limit_count: number;
+  attempted_count: number;
+  window_start: string;
+  window_end: string;
+  override_applied: boolean;
+  reason: string;
+  created_at: string;
+}
+
+export interface SmsQuotaDashboardResponse {
+  provider: string;
+  totals: {
+    counters: number;
+    violations: number;
+    override_violations: number;
+  };
+  usage_by_scope: Record<string, number>;
+  active_counters: ChannelQuotaUsage[];
+}

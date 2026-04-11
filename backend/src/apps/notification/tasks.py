@@ -93,7 +93,7 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
     from src.apps.notification.models.notification import Notification
     from src.apps.notification.models.notification_preference import NotificationPreference
     from src.apps.multitenancy.models.tenant import TenantMember
-    from src.apps.communications.quota import QuotaContext, QuotaExceededError, enforce_and_record_quota
+    from src.apps.notification.services.sms_service import SmsQuotaCheckContext, SmsQuotaExceededError, enforce_sms_quota
 
     async with async_session_factory() as db:
         delivery = await db.get(NotificationDelivery, delivery_id)
@@ -202,18 +202,17 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
                         .order_by(TenantMember.joined_at.asc())
                     )
                 ).scalars().first()
-                tenant_id = int(membership.tenant_id) if membership and membership.tenant_id is not None else None
+                _ = membership
                 try:
-                    await enforce_and_record_quota(
+                    await enforce_sms_quota(
                         db,
-                        context=QuotaContext(channel="sms", tenant_id=tenant_id, user_id=delivery.user_id),
+                        context=SmsQuotaCheckContext(user_id=delivery.user_id, provider="default"),
                     )
-                except QuotaExceededError as quota_exc:
+                except SmsQuotaExceededError as quota_exc:
                     delivery.status = NotificationDeliveryStatus.FAILED
                     delivery.last_error_code = "quota_exceeded"
                     delivery.last_error_reason = (
-                        f"SMS quota exceeded. Retry after {quota_exc.retry_after_seconds} seconds "
-                        f"(policies: {quota_exc.violated_policy_ids})."
+                        f"SMS quota exceeded for {quota_exc.scope}. Retry after {quota_exc.retry_after_seconds} seconds."
                     )
                     delivery.next_attempt_at = utc_now() + timedelta(seconds=quota_exc.retry_after_seconds)
                     delivery.updated_at = utc_now()

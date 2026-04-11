@@ -10,6 +10,9 @@ import type {
   ChannelQuotaDashboardResponse,
   ChannelQuotaPolicy,
   ChannelQuotaUsage,
+  SmsQuotaConfig,
+  SmsQuotaDashboardResponse,
+  SmsQuotaViolationEvent,
   EmailDeliveryAnalytics,
   EmailDeliveryDeadLetter,
   EmailDeliveryMessage,
@@ -143,6 +146,64 @@ export function useOverrideChannelQuotaPolicy() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['channel-quota-policies'] });
       queryClient.invalidateQueries({ queryKey: ['channel-quota-audit'] });
+    },
+  });
+}
+
+
+export function useSmsQuotaConfig(provider = 'default') {
+  return useQuery({
+    queryKey: ['sms-quota-config', provider],
+    queryFn: async () => {
+      const response = await apiClient.get<SmsQuotaConfig>('/notifications/admin/sms-quotas/config/', { params: { provider } });
+      return response.data;
+    },
+  });
+}
+
+export function useUpdateSmsQuotaConfig() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: Partial<SmsQuotaConfig> & { provider: string }) => {
+      const response = await apiClient.put<SmsQuotaConfig>('/notifications/admin/sms-quotas/config/', payload);
+      return response.data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['sms-quota-config', data.provider] });
+      queryClient.invalidateQueries({ queryKey: ['sms-quota-dashboard', data.provider] });
+    },
+  });
+}
+
+export function useSmsQuotaDashboard(provider = 'default') {
+  return useQuery({
+    queryKey: ['sms-quota-dashboard', provider],
+    queryFn: async () => {
+      const response = await apiClient.get<SmsQuotaDashboardResponse>('/notifications/admin/sms-quotas/dashboard/', { params: { provider } });
+      return response.data;
+    },
+  });
+}
+
+export function useSmsQuotaViolations(provider = 'default') {
+  return useQuery({
+    queryKey: ['sms-quota-violations', provider],
+    queryFn: async () => {
+      const response = await apiClient.get<{ items: SmsQuotaViolationEvent[] }>('/notifications/admin/sms-quotas/violations/', { params: { provider } });
+      return response.data.items;
+    },
+  });
+}
+
+export function useResetSmsQuotaCounters() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (provider = 'default') => {
+      const response = await apiClient.post<{ deleted: number; provider: string }>('/notifications/admin/sms-quotas/counters/reset/', null, { params: { provider } });
+      return response.data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['sms-quota-dashboard', data.provider] });
     },
   });
 }

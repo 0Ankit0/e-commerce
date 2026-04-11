@@ -17,4 +17,9 @@ __all__ = [
     "NotificationDelivery",
     "NotificationDeliveryChannel",
     "NotificationDeliveryStatus",
+    "SmsQuotaConfig",
+    "SmsQuotaCounter",
+    "SmsQuotaViolationEvent",
 ]
+
+from .sms_quota import SmsQuotaConfig, SmsQuotaCounter, SmsQuotaViolationEvent
