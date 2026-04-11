@@ -105,8 +105,16 @@ export interface PrivilegedActionChallengeDetail {
   code: 'OTP_CHALLENGE_REQUIRED';
   message: string;
   action: string;
+  reason: string;
   otp: {
     required_freshness_seconds: number;
+    grace_window_seconds: number;
+    mode: 'audit' | 'enforce' | string;
+  };
+  rechallenge?: {
+    required: boolean;
+    reason: string;
+    retryable: boolean;
   };
 }
 
@@ -114,5 +122,6 @@ export interface StepUpVerificationResponse {
   step_up_token: string;
   expires_at: string;
   required_freshness_seconds: number;
+  grace_window_seconds: number;
   action: string;
 }

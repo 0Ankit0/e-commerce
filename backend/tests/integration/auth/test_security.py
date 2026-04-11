@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from src.apps.core import security
+from src.apps.core.config import settings
 from src.apps.iam.security import PrivilegedAction, PRIVILEGED_ACTION_POLICY_MAP, PrivilegedActionPolicy
 from src.apps.iam.models.token_tracking import TokenTracking
 from src.apps.iam.models.user import User
@@ -504,7 +505,9 @@ class TestAuthenticationSecurity:
             PrivilegedActionPolicy(
                 action=original_policy.action,
                 required_roles=original_policy.required_roles,
+                require_step_up=original_policy.require_step_up,
                 otp_freshness_seconds=1,
+                step_up_grace_seconds=1,
             ),
         )
 
@@ -529,3 +532,54 @@ class TestAuthenticationSecurity:
         )
         assert expired.status_code == 403
         assert expired.json()["detail"]["code"] == "OTP_CHALLENGE_REQUIRED"
+        assert expired.json()["detail"]["reason"] == "step_up_expired_requires_rechallenge"
+
+    @pytest.mark.asyncio
+    async def test_privileged_action_audit_only_mode_records_bypass(self, client: AsyncClient, db_session: AsyncSession, monkeypatch):
+        admin = User(
+            username="stepup_audit_only_admin",
+            email="stepup-audit-only-admin@example.com",
+            hashed_password=security.get_password_hash("ValidPass123"),
+            is_active=True,
+            is_superuser=True,
+            is_confirmed=True,
+            otp_enabled=False,
+            otp_verified=False,
+        )
+        target = User(
+            username="stepup_audit_only_target",
+            email="stepup-audit-only-target@example.com",
+            hashed_password=security.get_password_hash("ValidPass123"),
+            is_active=True,
+            is_superuser=False,
+            is_confirmed=True,
+        )
+        db_session.add(admin)
+        db_session.add(target)
+        await db_session.commit()
+
+        monkeypatch.setattr(settings, "PRIVILEGED_STEP_UP_MODE", "audit")
+
+        login = await client.post(
+            "/api/v1/auth/login/?set_cookie=false",
+            json={"username": "stepup_audit_only_admin", "password": "ValidPass123"},
+        )
+        headers = {"Authorization": f"Bearer {login.json()['access']}"}
+        allowed = await client.patch(
+            f"/api/v1/users/{encode_id(target.id)}",
+            json={"is_active": False},
+            headers=headers,
+        )
+        assert allowed.status_code == 200
+
+        bypass_event = (
+            await db_session.execute(
+                select(ObservabilityLogEntry)
+                .where(
+                    ObservabilityLogEntry.user_id == admin.id,
+                    ObservabilityLogEntry.event_code == "admin.privileged_action.bypassed",
+                )
+                .order_by(ObservabilityLogEntry.timestamp.desc())
+            )
+        ).scalars().first()
+        assert bypass_event is not None

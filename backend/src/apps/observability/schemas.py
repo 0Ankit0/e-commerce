@@ -53,6 +53,10 @@ class ObservabilityLogSummary(BaseModel):
     open_incidents: int
     acknowledged_incidents: int
     critical_incidents: int
+    privileged_step_up_required_24h: int
+    privileged_step_up_succeeded_24h: int
+    privileged_step_up_failed_24h: int
+    privileged_step_up_bypassed_24h: int
 
 
 class SecurityIncidentRead(_HashIdModel):

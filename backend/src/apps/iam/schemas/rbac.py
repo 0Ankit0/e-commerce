@@ -49,6 +49,7 @@ class PrivilegedPolicyResponse(BaseModel):
     required_roles: list[str]
     require_step_up: bool
     otp_freshness_seconds: int
+    step_up_grace_seconds: int
 
 
 class PermissionResponse(BaseModel):

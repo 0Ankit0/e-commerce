@@ -558,6 +558,7 @@ async def list_privileged_action_policy(
             required_roles=list(policy.required_roles),
             require_step_up=policy.require_step_up,
             otp_freshness_seconds=policy.otp_freshness_seconds,
+            step_up_grace_seconds=policy.step_up_grace_seconds,
         )
         for policy in policies
     ]
@@ -594,4 +595,5 @@ async def update_privileged_action_policy(
         required_roles=list(refreshed.required_roles),
         require_step_up=refreshed.require_step_up,
         otp_freshness_seconds=refreshed.otp_freshness_seconds,
+        step_up_grace_seconds=refreshed.step_up_grace_seconds,
     )
