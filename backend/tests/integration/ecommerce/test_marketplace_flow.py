@@ -16,7 +16,7 @@ from src.apps.commerce.models import Address, WishlistShareLink
 from src.apps.iam.models.token_tracking import TokenTracking
 from src.apps.iam.models.user import User, UserProfile
 from src.apps.iam.utils.hashid import decode_id_or_404
-from src.apps.logistics.models import CourierLocationPing, DeliveryException, RouteOptimizationPlan, ShipmentManifest
+from src.apps.logistics.models import CourierLocationPing, DeliveryException, RouteOptimizationPlan, ShipmentManifest, ShipmentManifestStatus
 from src.apps.messaging.models import ChatMessageEnvelope
 from src.apps.multitenancy.models.tenant import Tenant, TenantMember, TenantRole
 from src.apps.orders.models import Order, OrderStatus, ReturnRequest, Shipment, ShipmentTracking
@@ -2115,3 +2115,146 @@ async def test_vendor_document_concurrent_admin_review_actions(client: AsyncClie
     updated_document = await db_session.get(VendorDocument, decode_id_or_404(document_id))
     assert updated_document is not None
     assert updated_document.status.value in {"verified", "needs_resubmission"}
+
+
+@pytest.mark.asyncio
+async def test_line_haul_planning_full_lifecycle_with_conflict_resolution(client: AsyncClient, db_session: AsyncSession):
+    _, admin_headers = await _create_user_headers(
+        db_session,
+        username="planning_admin",
+        email="planning-admin@example.com",
+        is_superuser=True,
+    )
+
+    create_resp = await client.post(
+        "/api/v1/logistics/planning/plans",
+        headers=admin_headers,
+        json={
+            "name": "April Line Haul",
+            "routes": [
+                {
+                    "route_id": "KTM-PKR",
+                    "origin_hub": "KTM",
+                    "destination_hub": "PKR",
+                    "demand_units": 18,
+                    "demand_weight_kg": 1800,
+                    "demand_volume_m3": 15,
+                },
+                {
+                    "route_id": "KTM-BWA",
+                    "origin_hub": "KTM",
+                    "destination_hub": "BWA",
+                    "demand_units": 8,
+                    "demand_weight_kg": 500,
+                    "demand_volume_m3": 4,
+                },
+            ],
+            "vehicles": [
+                {
+                    "vehicle_id": "TRK-1",
+                    "hub_code": "KTM",
+                    "capacity_units": 15,
+                    "capacity_weight_kg": 1500,
+                    "capacity_volume_m3": 10,
+                    "available_count": 1,
+                }
+            ],
+            "connectivity": {"KTM": ["PKR", "BWA"], "PKR": ["KTM"], "BWA": ["KTM"]},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    plan = create_resp.json()
+    plan_id = plan["plan_id"]
+
+    optimize_resp = await client.post(
+        f"/api/v1/logistics/planning/plans/{plan_id}/optimize",
+        headers=admin_headers,
+        json={"expected_version": plan["version"], "random_seed": 9, "manual_overrides": [], "locked_assignments": []},
+    )
+    assert optimize_resp.status_code == 200, optimize_resp.text
+    optimized = optimize_resp.json()
+    assert optimized["conflicts"]
+    assert any(item["state"] == "unscheduled" for item in optimized["ui_states"])
+
+    resolve_resp = await client.put(
+        f"/api/v1/logistics/planning/plans/{plan_id}",
+        headers=admin_headers,
+        json={
+            "name": "April Line Haul",
+            "expected_version": optimized["version"],
+            "routes": optimized["routes"],
+            "vehicles": optimized["vehicles"]
+            + [
+                {
+                    "vehicle_id": "TRK-2",
+                    "hub_code": "KTM",
+                    "capacity_units": 15,
+                    "capacity_weight_kg": 2000,
+                    "capacity_volume_m3": 12,
+                    "available_count": 1,
+                }
+            ],
+            "connectivity": optimized["connectivity"],
+            "assignments": [],
+        },
+    )
+    assert resolve_resp.status_code == 200, resolve_resp.text
+
+    reoptimize_resp = await client.post(
+        f"/api/v1/logistics/planning/plans/{plan_id}/optimize",
+        headers=admin_headers,
+        json={"expected_version": resolve_resp.json()["version"], "random_seed": 9, "manual_overrides": [], "locked_assignments": []},
+    )
+    assert reoptimize_resp.status_code == 200, reoptimize_resp.text
+    reoptimized = reoptimize_resp.json()
+    assert reoptimized["conflicts"] == []
+    assert all(item["state"] == "ready-to-publish" for item in reoptimized["ui_states"])
+
+    publish_resp = await client.post(
+        f"/api/v1/logistics/planning/plans/{plan_id}/publish",
+        headers=admin_headers,
+        json={"expected_version": reoptimized["version"]},
+    )
+    assert publish_resp.status_code == 200, publish_resp.text
+    published = publish_resp.json()
+    assert published["status"] == "published"
+
+    board_resp = await client.get(f"/api/v1/logistics/planning/plans/{plan_id}/board", headers=admin_headers)
+    assert board_resp.status_code == 200, board_resp.text
+    board = board_resp.json()
+    assert len(board["route_network"]["list"]) == 2
+    assert len(board["shipment_pool_by_destination_hub"]) == 2
+    assert len(board["vehicle_fleet_capacity_board"]) == 2
+
+    manifest_resp = await client.post(
+        f"/api/v1/logistics/planning/plans/{plan_id}/dispatch/manifest",
+        headers=admin_headers,
+        json={"expected_version": published["version"], "code": "PLAN-MANIFEST-1", "shipment_ids": []},
+    )
+    assert manifest_resp.status_code == 201, manifest_resp.text
+    with_manifest = manifest_resp.json()["plan"]
+
+    assign_resp = await client.post(
+        f"/api/v1/logistics/planning/plans/{plan_id}/dispatch/assign",
+        headers=admin_headers,
+        json={
+            "expected_version": with_manifest["version"],
+            "vehicle_number": "BA-2-PA-1122",
+            "driver_name": "Test Driver",
+            "driver_phone": "+9779800000000",
+        },
+    )
+    assert assign_resp.status_code == 200, assign_resp.text
+    with_trip = assign_resp.json()["plan"]
+
+    execution_resp = await client.post(
+        f"/api/v1/logistics/planning/plans/{plan_id}/dispatch/publish",
+        headers=admin_headers,
+        json={"expected_version": with_trip["version"]},
+    )
+    assert execution_resp.status_code == 200, execution_resp.text
+    assert execution_resp.json()["manifest_status"] == "dispatched"
+
+    manifest_db = await db_session.get(ShipmentManifest, decode_id_or_404(execution_resp.json()["manifest_id"]))
+    assert manifest_db is not None
+    assert manifest_db.status == ShipmentManifestStatus.DISPATCHED
