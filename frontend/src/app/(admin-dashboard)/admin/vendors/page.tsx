@@ -1,12 +1,12 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, Store, CheckCircle2, XCircle, Clock, X } from 'lucide-react';
+import { Plus, Store, CheckCircle2, XCircle, Clock, X, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
-type VendorStatus = 'pending' | 'approved' | 'rejected';
+type VendorStatus = 'submitted' | 'under_review' | 'resubmission_required' | 'approved' | 'rejected';
 
 interface VendorItem {
   id: string;
@@ -15,23 +15,29 @@ interface VendorItem {
   category: string;
   status: VendorStatus;
   submittedAt: string;
+  missingDocs: string[];
+  reviewOutcome?: string;
 }
 
 const INITIAL_VENDORS: VendorItem[] = [
-  { id: '1', name: 'Artisan Crafts Co.', email: 'hello@artisancrafts.com', category: 'Handmade', status: 'pending', submittedAt: '2025-03-20' },
-  { id: '2', name: 'Tech Gadgets Ltd.', email: 'vendor@techgadgets.io', category: 'Electronics', status: 'approved', submittedAt: '2025-03-15' },
-  { id: '3', name: 'Green Living Store', email: 'info@greenliving.shop', category: 'Eco Products', status: 'pending', submittedAt: '2025-03-22' },
-  { id: '4', name: 'Vintage Finds', email: 'shop@vintagefinds.com', category: 'Vintage', status: 'rejected', submittedAt: '2025-03-10' },
+  { id: '1', name: 'Artisan Crafts Co.', email: 'hello@artisancrafts.com', category: 'Handmade', status: 'under_review', submittedAt: '2025-03-20', missingDocs: [] },
+  { id: '2', name: 'Tech Gadgets Ltd.', email: 'vendor@techgadgets.io', category: 'Electronics', status: 'approved', submittedAt: '2025-03-15', missingDocs: [], reviewOutcome: 'All KYC checks passed.' },
+  { id: '3', name: 'Green Living Store', email: 'info@greenliving.shop', category: 'Eco Products', status: 'resubmission_required', submittedAt: '2025-03-22', missingDocs: ['pan'], reviewOutcome: 'PAN image unreadable.' },
+  { id: '4', name: 'Vintage Finds', email: 'shop@vintagefinds.com', category: 'Vintage', status: 'rejected', submittedAt: '2025-03-10', missingDocs: ['gst', 'bank'], reviewOutcome: 'Document mismatch after retries.' },
 ];
 
 const STATUS_ICONS: Record<VendorStatus, React.ReactNode> = {
-  pending: <Clock className="h-4 w-4" />,
+  submitted: <Clock className="h-4 w-4" />,
+  under_review: <Clock className="h-4 w-4" />,
+  resubmission_required: <AlertTriangle className="h-4 w-4" />,
   approved: <CheckCircle2 className="h-4 w-4" />,
   rejected: <XCircle className="h-4 w-4" />,
 };
 
 const STATUS_STYLES: Record<VendorStatus, string> = {
-  pending: 'bg-[var(--warning-soft)] text-[var(--text-secondary)]',
+  submitted: 'bg-[var(--warning-soft)] text-[var(--text-secondary)]',
+  under_review: 'bg-[var(--warning-soft)] text-[var(--text-secondary)]',
+  resubmission_required: 'bg-amber-100 text-amber-700',
   approved: 'bg-[var(--success-soft)] text-emerald-700',
   rejected: 'bg-[var(--danger-soft)] text-red-700',
 };
@@ -44,7 +50,7 @@ function AddVendorModal({ onClose, onAdd }: { onClose: () => void; onAdd: (v: Om
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !email.trim()) return;
-    onAdd({ name: name.trim(), email: email.trim(), category: category.trim() || 'General', status: 'pending' });
+    onAdd({ name: name.trim(), email: email.trim(), category: category.trim() || 'General', status: 'submitted', missingDocs: ['gst', 'pan', 'bank'] });
     onClose();
   };
 
@@ -95,7 +101,7 @@ export default function AdminVendorsPage() {
     setVendors((prev) => prev.map((v) => (v.id === id ? { ...v, status } : v)));
   };
 
-  const pendingCount = vendors.filter((v) => v.status === 'pending').length;
+  const pendingCount = vendors.filter((v) => ['submitted', 'under_review', 'resubmission_required'].includes(v.status)).length;
   const approvedCount = vendors.filter((v) => v.status === 'approved').length;
 
   return (
@@ -137,7 +143,7 @@ export default function AdminVendorsPage() {
               <CardDescription className="mt-1">Approve or reject vendor applications.</CardDescription>
             </div>
             <div className="flex rounded-xl border border-[var(--border-color)] bg-white p-1">
-              {(['all', 'pending', 'approved', 'rejected'] as const).map((f) => (
+              {(['all', 'submitted', 'under_review', 'resubmission_required', 'approved', 'rejected'] as const).map((f) => (
                 <button
                   key={f}
                   type="button"
@@ -171,6 +177,10 @@ export default function AdminVendorsPage() {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold text-[var(--text-primary)]">{vendor.name}</p>
                       <p className="truncate text-xs text-[var(--text-muted)]">{vendor.email} · {vendor.category}</p>
+                      {vendor.missingDocs.length > 0 && (
+                        <p className="truncate text-[11px] text-amber-700">Missing: {vendor.missingDocs.join(', ')}</p>
+                      )}
+                      {vendor.reviewOutcome && <p className="truncate text-[11px] text-[var(--text-muted)]">{vendor.reviewOutcome}</p>}
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
@@ -178,14 +188,14 @@ export default function AdminVendorsPage() {
                       {STATUS_ICONS[vendor.status]}
                       {vendor.status}
                     </span>
-                    {vendor.status === 'pending' && (
+                    {(vendor.status === 'submitted' || vendor.status === 'under_review' || vendor.status === 'resubmission_required') && (
                       <>
                         <Button size="sm" onClick={() => setStatus(vendor.id, 'approved')}>Approve</Button>
                         <Button size="sm" variant="outline" onClick={() => setStatus(vendor.id, 'rejected')}>Reject</Button>
                       </>
                     )}
                     {vendor.status === 'rejected' && (
-                      <Button size="sm" variant="outline" onClick={() => setStatus(vendor.id, 'pending')}>Re-review</Button>
+                      <Button size="sm" variant="outline" onClick={() => setStatus(vendor.id, 'under_review')}>Re-review</Button>
                     )}
                   </div>
                 </li>
@@ -199,4 +209,3 @@ export default function AdminVendorsPage() {
     </div>
   );
 }
-

@@ -13,10 +13,13 @@ from src.apps.vendors.models import (
     Vendor,
     VendorDocument,
     VendorDocumentStatus,
+    VendorKYCStatus,
     VendorPayout,
     VendorPayoutRequest,
     VendorStatus,
     VendorTimelineEvent,
+    BankAccount,
+    BankAccountVerificationStatus,
 )
 
 
@@ -81,6 +84,7 @@ def serialize_vendor(vendor: Vendor) -> dict[str, object]:
         "logo_url": vendor.logo_url,
         "banner_url": vendor.banner_url,
         "status": vendor.status.value,
+        "kyc_status": vendor.kyc_status.value,
         "onboarding_step": vendor.onboarding_step,
         "commission_tier": vendor.commission_tier.value,
         "rating": vendor.rating,
@@ -89,6 +93,11 @@ def serialize_vendor(vendor: Vendor) -> dict[str, object]:
         "verification_timeline": json.loads(vendor.verification_timeline_json or "[]"),
         "approved_at": vendor.approved_at.isoformat() if vendor.approved_at else None,
         "rejected_reason": vendor.rejected_reason,
+        "kyc_submitted_at": vendor.kyc_submitted_at.isoformat() if vendor.kyc_submitted_at else None,
+        "kyc_review_started_at": vendor.kyc_review_started_at.isoformat() if vendor.kyc_review_started_at else None,
+        "kyc_reviewed_at": vendor.kyc_reviewed_at.isoformat() if vendor.kyc_reviewed_at else None,
+        "kyc_last_reviewer_user_id": vendor.kyc_last_reviewer_user_id,
+        "kyc_review_reasons": json.loads(vendor.kyc_review_reasons_json or "[]"),
         "created_at": vendor.created_at.isoformat(),
     }
 
@@ -106,6 +115,96 @@ def mark_vendor_status(vendor: Vendor, status_value: VendorStatus, rejected_reas
         VendorStatus.REJECTED: "rejected",
         VendorStatus.SUSPENDED: "suspended",
     }[status_value]
+
+
+def mark_vendor_kyc_status(
+    vendor: Vendor,
+    *,
+    kyc_status: VendorKYCStatus,
+    reviewer_user_id: int | None = None,
+    reason: str = "",
+) -> None:
+    vendor.kyc_status = kyc_status
+    vendor.kyc_last_reviewer_user_id = reviewer_user_id
+    now = utc_now()
+    if kyc_status == VendorKYCStatus.UNDER_REVIEW:
+        vendor.kyc_review_started_at = now
+        vendor.kyc_reviewed_at = None
+    elif kyc_status in {VendorKYCStatus.APPROVED, VendorKYCStatus.REJECTED, VendorKYCStatus.RESUBMISSION_REQUIRED}:
+        vendor.kyc_reviewed_at = now
+    reasons = json.loads(vendor.kyc_review_reasons_json or "[]")
+    if reason:
+        reasons.append(
+            {
+                "status": kyc_status.value,
+                "reason": reason,
+                "reviewer_user_id": reviewer_user_id,
+                "created_at": now.isoformat(),
+            }
+        )
+    vendor.kyc_review_reasons_json = json.dumps(reasons)
+
+
+async def validate_vendor_kyc_requirements(vendor: Vendor, db: AsyncSession) -> dict[str, object]:
+    required_docs = {"gst", "pan"}
+    current_docs = (
+        await db.execute(
+            select(VendorDocument).where(
+                VendorDocument.vendor_id == vendor.id,
+                VendorDocument.is_current == True,  # noqa: E712
+            )
+        )
+    ).scalars().all()
+    verified_doc_types = {doc.doc_type.strip().lower() for doc in current_docs if doc.status == VendorDocumentStatus.VERIFIED}
+    missing_documents = sorted(required_docs - verified_doc_types)
+    bank_accounts = (await db.execute(select(BankAccount).where(BankAccount.vendor_id == vendor.id))).scalars().all()
+    has_verified_bank = any(bank.verification_status == BankAccountVerificationStatus.VERIFIED for bank in bank_accounts)
+    return {
+        "required_documents": sorted(required_docs),
+        "verified_documents": sorted(verified_doc_types),
+        "missing_documents": missing_documents,
+        "bank_verified": has_verified_bank,
+        "bank_submitted": len(bank_accounts) > 0,
+    }
+
+
+async def ensure_vendor_kyc_ready_for_review(vendor: Vendor, db: AsyncSession) -> None:
+    required_docs = {"gst", "pan"}
+    current_docs = (
+        await db.execute(
+            select(VendorDocument).where(
+                VendorDocument.vendor_id == vendor.id,
+                VendorDocument.is_current == True,  # noqa: E712
+            )
+        )
+    ).scalars().all()
+    submitted_doc_types = {doc.doc_type.strip().lower() for doc in current_docs}
+    missing_documents = sorted(required_docs - submitted_doc_types)
+    bank_exists = (
+        await db.execute(select(BankAccount).where(BankAccount.vendor_id == vendor.id))
+    ).scalars().first() is not None
+    if missing_documents or not bank_exists:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "KYC submission incomplete for review",
+                "missing_documents": missing_documents,
+                "bank_submitted": bank_exists,
+                "required_documents": sorted(required_docs),
+            },
+        )
+
+
+async def ensure_vendor_kyc_ready_for_approval(vendor: Vendor, db: AsyncSession) -> None:
+    checks = await validate_vendor_kyc_requirements(vendor, db)
+    if checks["missing_documents"] or not checks["bank_verified"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "KYC requirements incomplete",
+                **checks,
+            },
+        )
 
 
 def assert_vendor_status_transition(vendor: Vendor, target_status: VendorStatus) -> None:
@@ -194,6 +293,20 @@ def append_document_review_history(
         }
     )
     document.review_reason_history_json = json.dumps(history)
+
+
+def serialize_vendor_kyc_timeline(events: list[VendorTimelineEvent]) -> list[dict[str, object]]:
+    return [
+        {
+            "event_type": event.event_type,
+            "message": event.message,
+            "actor_user_id": event.actor_user_id,
+            "created_at": event.created_at.isoformat(),
+            "payload": json.loads(event.payload_json or "{}"),
+        }
+        for event in events
+        if event.event_type.startswith("vendor.") and ("kyc" in event.event_type or "document" in event.event_type or event.event_type in {"vendor.under_review", "vendor.approved", "vendor.rejected", "vendor.resubmission_requested"})
+    ]
 
 def serialize_vendor_payout(payout: VendorPayout) -> dict[str, object]:
     from src.apps.iam.utils.hashid import encode_id

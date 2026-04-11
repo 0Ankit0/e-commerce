@@ -18,6 +18,14 @@ class VendorStatus(str, Enum):
     SUSPENDED = "suspended"
 
 
+class VendorKYCStatus(str, Enum):
+    SUBMITTED = "submitted"
+    UNDER_REVIEW = "under_review"
+    RESUBMISSION_REQUIRED = "resubmission_required"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
 class CommissionTier(str, Enum):
     STANDARD = "standard"
     PREMIUM = "premium"
@@ -58,6 +66,12 @@ class Vendor(SQLModel, table=True):
     rating_count: int = Field(default=0, ge=0)
     product_count: int = Field(default=0, ge=0)
     onboarding_step: str = Field(default="profile_submitted", max_length=80)
+    kyc_status: VendorKYCStatus = Field(default=VendorKYCStatus.SUBMITTED, index=True)
+    kyc_submitted_at: datetime = Field(default_factory=utc_now)
+    kyc_review_started_at: Optional[datetime] = Field(default=None)
+    kyc_reviewed_at: Optional[datetime] = Field(default=None)
+    kyc_last_reviewer_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    kyc_review_reasons_json: str = Field(default="[]")
     verification_timeline_json: str = Field(default="[]")
     approved_at: Optional[datetime] = Field(default=None)
     rejected_reason: str = Field(default="", max_length=500)
@@ -79,6 +93,8 @@ class VendorDocument(SQLModel, table=True):
     is_current: bool = Field(default=True, index=True)
     uploaded_at: datetime = Field(default_factory=utc_now)
     verified_at: Optional[datetime] = Field(default=None)
+    reviewed_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    resubmission_requested_at: Optional[datetime] = Field(default=None)
     review_reason_history_json: str = Field(default="[]")
 
 

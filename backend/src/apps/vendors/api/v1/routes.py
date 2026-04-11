@@ -24,6 +24,7 @@ from src.apps.vendors.models import (
     Vendor,
     VendorDocument,
     VendorDocumentStatus,
+    VendorKYCStatus,
     VendorPayout,
     VendorPayoutBatch,
     VendorPayoutRequest,
@@ -36,15 +37,19 @@ from src.apps.vendors.services import (
     append_document_review_history,
     assert_document_status_transition,
     assert_vendor_status_transition,
+    ensure_vendor_kyc_ready_for_approval,
     ensure_vendor_active,
     get_vendor_for_user,
     get_vendor_or_404,
+    mark_vendor_kyc_status,
     mark_vendor_status,
     record_vendor_timeline_event,
     require_tenant_admin,
     serialize_vendor,
+    serialize_vendor_kyc_timeline,
     serialize_vendor_payout,
     serialize_vendor_payout_request,
+    validate_vendor_kyc_requirements,
 )
 from src.apps.iam.security import PrivilegedAction, enforce_privileged_action
 
@@ -79,6 +84,10 @@ class VendorDocumentCreateRequest(BaseModel):
     doc_type: str
     doc_number: str = ""
     file_url: str = ""
+
+
+class VendorDocumentUpsertRequest(VendorDocumentCreateRequest):
+    pass
 
 
 class BankAccountCreateRequest(BaseModel):
@@ -250,7 +259,7 @@ async def create_vendor_warehouse(
 
 @router.post("/vendor/documents", status_code=status.HTTP_201_CREATED)
 async def upload_vendor_document(
-    payload: VendorDocumentCreateRequest,
+    payload: VendorDocumentUpsertRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -307,6 +316,17 @@ async def upload_vendor_document(
     )
     await db.commit()
     return {"document_id": encode_id(document.id)}
+
+
+@router.put("/vendor/documents/{doc_type}")
+async def upsert_vendor_document(
+    doc_type: str,
+    payload: VendorDocumentUpsertRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    payload.doc_type = doc_type.strip().lower()
+    return await upload_vendor_document(payload=payload, current_user=current_user, db=db)
 
 
 @router.post("/vendor/bank-accounts", status_code=status.HTTP_201_CREATED)
@@ -544,6 +564,7 @@ async def approve_vendor(
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
     assert_vendor_status_transition(vendor, VendorStatus.APPROVED)
     mark_vendor_status(vendor, VendorStatus.APPROVED)
+    mark_vendor_kyc_status(vendor, kyc_status=VendorKYCStatus.APPROVED, reviewer_user_id=admin_user.id)
     await record_vendor_timeline_event(
         vendor=vendor,
         event_type="vendor.approved",
@@ -566,6 +587,7 @@ async def reject_vendor(
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
     assert_vendor_status_transition(vendor, VendorStatus.REJECTED)
     mark_vendor_status(vendor, VendorStatus.REJECTED, payload.reason)
+    mark_vendor_kyc_status(vendor, kyc_status=VendorKYCStatus.REJECTED, reviewer_user_id=admin_user.id, reason=payload.reason)
     await record_vendor_timeline_event(
         vendor=vendor,
         event_type="vendor.rejected",
@@ -618,6 +640,7 @@ async def mark_vendor_under_review(
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
     assert_vendor_status_transition(vendor, VendorStatus.UNDER_REVIEW)
     mark_vendor_status(vendor, VendorStatus.UNDER_REVIEW)
+    mark_vendor_kyc_status(vendor, kyc_status=VendorKYCStatus.UNDER_REVIEW, reviewer_user_id=admin_user.id)
     await record_vendor_timeline_event(
         vendor=vendor,
         event_type="vendor.under_review",
@@ -639,6 +662,12 @@ async def request_vendor_resubmission(
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
     assert_vendor_status_transition(vendor, VendorStatus.NEEDS_RESUBMISSION)
     mark_vendor_status(vendor, VendorStatus.NEEDS_RESUBMISSION, payload.reason)
+    mark_vendor_kyc_status(
+        vendor,
+        kyc_status=VendorKYCStatus.RESUBMISSION_REQUIRED,
+        reviewer_user_id=admin_user.id,
+        reason=payload.reason,
+    )
     await record_vendor_timeline_event(
         vendor=vendor,
         event_type="vendor.resubmission_requested",
@@ -649,6 +678,26 @@ async def request_vendor_resubmission(
     )
     await db.commit()
     return {"vendor": serialize_vendor(vendor)}
+
+
+@router.post("/admin/vendors/{vendor_id}/kyc/approve")
+async def approve_vendor_kyc(
+    vendor_id: str,
+    admin_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
+    await ensure_vendor_kyc_ready_for_approval(vendor, db)
+    mark_vendor_kyc_status(vendor, kyc_status=VendorKYCStatus.APPROVED, reviewer_user_id=admin_user.id)
+    await record_vendor_timeline_event(
+        vendor=vendor,
+        event_type="vendor.kyc_approved",
+        message="KYC approved",
+        actor_user_id=admin_user.id,
+        db=db,
+    )
+    await db.commit()
+    return {"success": True, "kyc_status": vendor.kyc_status.value}
 
 
 @router.post("/admin/vendor-documents/{document_id}/mark-under-review")
@@ -709,6 +758,7 @@ async def verify_vendor_document(
     document.status = VendorDocumentStatus.VERIFIED
     document.remarks = payload.remarks
     document.verified_at = utc_now()
+    document.reviewed_by_user_id = admin_user.id
     append_document_review_history(document, status_value=VendorDocumentStatus.VERIFIED, note=payload.remarks or "Document verified", actor_user_id=admin_user.id)
     vendor = await db.get(Vendor, document.vendor_id)
     if vendor:
@@ -745,10 +795,12 @@ async def reject_vendor_document(
     assert_document_status_transition(document.status, VendorDocumentStatus.REJECTED)
     document.status = VendorDocumentStatus.REJECTED
     document.remarks = payload.remarks
+    document.reviewed_by_user_id = admin_user.id
     append_document_review_history(document, status_value=VendorDocumentStatus.REJECTED, note=payload.remarks, actor_user_id=admin_user.id)
     vendor = await db.get(Vendor, document.vendor_id)
     if vendor:
         mark_vendor_status(vendor, VendorStatus.NEEDS_RESUBMISSION, payload.remarks)
+        mark_vendor_kyc_status(vendor, kyc_status=VendorKYCStatus.RESUBMISSION_REQUIRED, reviewer_user_id=admin_user.id, reason=payload.remarks)
         await record_vendor_timeline_event(
             vendor=vendor,
             event_type="vendor.document_rejected",
@@ -782,10 +834,13 @@ async def request_vendor_document_resubmission(
     assert_document_status_transition(document.status, VendorDocumentStatus.NEEDS_RESUBMISSION)
     document.status = VendorDocumentStatus.NEEDS_RESUBMISSION
     document.remarks = payload.remarks
+    document.reviewed_by_user_id = admin_user.id
+    document.resubmission_requested_at = utc_now()
     append_document_review_history(document, status_value=VendorDocumentStatus.NEEDS_RESUBMISSION, note=payload.remarks, actor_user_id=admin_user.id)
     vendor = await db.get(Vendor, document.vendor_id)
     if vendor:
         mark_vendor_status(vendor, VendorStatus.NEEDS_RESUBMISSION, payload.remarks)
+        mark_vendor_kyc_status(vendor, kyc_status=VendorKYCStatus.RESUBMISSION_REQUIRED, reviewer_user_id=admin_user.id, reason=payload.remarks)
         await record_vendor_timeline_event(
             vendor=vendor,
             event_type="vendor.document_resubmission_requested",
@@ -801,7 +856,7 @@ async def request_vendor_document_resubmission(
 @router.post("/admin/vendor-bank-accounts/{bank_account_id}/verify")
 async def verify_vendor_bank_account(
     bank_account_id: str,
-    _: User = Depends(get_current_active_superuser),
+    admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
     bank_account = await db.get(BankAccount, decode_id_or_404(bank_account_id))
@@ -811,6 +866,7 @@ async def verify_vendor_bank_account(
     bank_account.remarks = ""
     vendor = await db.get(Vendor, bank_account.vendor_id)
     if vendor:
+        mark_vendor_kyc_status(vendor, kyc_status=VendorKYCStatus.UNDER_REVIEW, reviewer_user_id=admin_user.id)
         await record_vendor_timeline_event(
             vendor=vendor,
             event_type="vendor.bank_verified",
@@ -826,7 +882,7 @@ async def verify_vendor_bank_account(
 async def reject_vendor_bank_account(
     bank_account_id: str,
     payload: VendorDocumentReviewRequest,
-    _: User = Depends(get_current_active_superuser),
+    admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
     bank_account = await db.get(BankAccount, decode_id_or_404(bank_account_id))
@@ -837,6 +893,7 @@ async def reject_vendor_bank_account(
     vendor = await db.get(Vendor, bank_account.vendor_id)
     if vendor:
         mark_vendor_status(vendor, VendorStatus.NEEDS_RESUBMISSION, payload.remarks)
+        mark_vendor_kyc_status(vendor, kyc_status=VendorKYCStatus.RESUBMISSION_REQUIRED, reviewer_user_id=admin_user.id, reason=payload.remarks)
         await record_vendor_timeline_event(
             vendor=vendor,
             event_type="vendor.bank_rejected",
@@ -1061,6 +1118,37 @@ async def list_admin_vendor_timeline(
         ],
         "total": len(events),
     }
+
+
+@router.get("/vendor/kyc/history")
+async def list_my_kyc_history(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_for_user(current_user, db)
+    events = (
+        await db.execute(
+            select(VendorTimelineEvent).where(VendorTimelineEvent.vendor_id == vendor.id).order_by(VendorTimelineEvent.created_at.desc())
+        )
+    ).scalars().all()
+    checks = await validate_vendor_kyc_requirements(vendor, db)
+    return {"kyc_status": vendor.kyc_status.value, "checks": checks, "items": serialize_vendor_kyc_timeline(events)}
+
+
+@router.get("/admin/vendors/{vendor_id}/kyc/history")
+async def list_admin_kyc_history(
+    vendor_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
+    events = (
+        await db.execute(
+            select(VendorTimelineEvent).where(VendorTimelineEvent.vendor_id == vendor.id).order_by(VendorTimelineEvent.created_at.desc())
+        )
+    ).scalars().all()
+    checks = await validate_vendor_kyc_requirements(vendor, db)
+    return {"vendor_id": encode_id(vendor.id), "kyc_status": vendor.kyc_status.value, "checks": checks, "items": serialize_vendor_kyc_timeline(events)}
 
 @router.get("/admin/vendors/{vendor_id}/settlement-export")
 async def export_vendor_settlement(
