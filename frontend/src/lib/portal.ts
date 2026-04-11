@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Bell,
+  BarChart3,
   Boxes,
   ClipboardList,
   CreditCard,
@@ -144,6 +145,7 @@ export const PORTAL_DEFINITIONS: Record<PortalKey, PortalDefinition> = {
       { label: 'Line-haul Planner', href: '/admin/line-haul-planner', icon: Truck },
       { label: 'Hub Ops', href: '/admin/hub-operations', icon: Warehouse },
       { label: 'Branch Ops', href: '/admin/branch-operations', icon: Users },
+      { label: 'Branch KPI', href: '/admin/branch-dashboard', icon: BarChart3 },
       { label: 'Vendors', href: '/admin/vendors', icon: Users },
       { label: 'Catalog Review', href: '/admin/catalog', icon: Boxes },
       { label: 'Live Feed', href: '/admin/live-feed', icon: Radar },

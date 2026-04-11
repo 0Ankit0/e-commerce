@@ -52,3 +52,47 @@ export interface SecurityIncidentStatusUpdate {
   status: 'acknowledged' | 'resolved';
   review_notes?: string;
 }
+
+export interface BranchKpiSnapshot {
+  inventory_movements: number;
+  total_moved_units: number;
+  agent_count: number;
+  active_agent_count: number;
+  pickup_jobs: number;
+  completed_pickups: number;
+  reverse_pickups: number;
+  reverse_completed: number;
+  open_exceptions: number;
+  failed_deliveries: number;
+  delivery_success_rate_percent: number;
+  delivery_attempts: number;
+  backlog_shipments: number;
+}
+
+export interface BranchDashboardSnapshotResponse {
+  snapshot: BranchKpiSnapshot;
+  branch_scope: string[];
+  date_from?: string | null;
+  date_to?: string | null;
+  agent_id?: string | null;
+  branch_codes: Record<string, string>;
+}
+
+export interface BranchDashboardDrilldownResponse {
+  productivity: Array<{
+    agent_id: string;
+    agent_name: string;
+    assigned: number;
+    completed: number;
+    failed: number;
+  }>;
+  delivery_outcomes: {
+    success: number;
+    failed: number;
+  };
+  backlog: {
+    pending_pickups: number;
+    open_exceptions: number;
+  };
+  inventory_flow: Record<string, number>;
+}

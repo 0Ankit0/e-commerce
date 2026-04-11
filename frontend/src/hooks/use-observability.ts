@@ -7,6 +7,8 @@ import type {
   ObservabilityLogEntry,
   ObservabilityLogSummary,
   PaginatedResponse,
+  BranchDashboardDrilldownResponse,
+  BranchDashboardSnapshotResponse,
   SecurityIncident,
   SecurityIncidentStatusUpdate,
 } from '@/types';
@@ -31,6 +33,13 @@ export interface SecurityIncidentFilters {
   severity?: string;
   signal_type?: string;
   search?: string;
+}
+
+export interface BranchDashboardFilters {
+  branch_id?: string;
+  date_from?: string;
+  date_to?: string;
+  agent_id?: string;
 }
 
 export function useObservabilityLogs(filters: ObservabilityLogFilters) {
@@ -116,5 +125,27 @@ export function useUpdateSecurityIncident() {
       queryClient.setQueryData(['security-incident', incident.id], incident);
       queryClient.invalidateQueries({ queryKey: ['observability-summary'] });
     },
+  });
+}
+
+export function useBranchDashboardSnapshot(filters: BranchDashboardFilters) {
+  return useQuery({
+    queryKey: ['branch-dashboard-snapshot', filters],
+    queryFn: async () => {
+      const response = await apiClient.get<BranchDashboardSnapshotResponse>('/logistics/branch-dashboard/snapshot', { params: filters });
+      return response.data;
+    },
+    staleTime: 15_000,
+  });
+}
+
+export function useBranchDashboardDrilldown(filters: BranchDashboardFilters) {
+  return useQuery({
+    queryKey: ['branch-dashboard-drilldown', filters],
+    queryFn: async () => {
+      const response = await apiClient.get<BranchDashboardDrilldownResponse>('/analytics/branch-kpis/drilldown', { params: filters });
+      return response.data;
+    },
+    staleTime: 15_000,
   });
 }
