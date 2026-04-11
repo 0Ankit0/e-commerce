@@ -54,6 +54,10 @@ export function StepUpChallengeModal() {
         <p className="mt-2 text-sm text-gray-600">
           {pending.challenge.message} Enter your 6-digit OTP to continue.
         </p>
+        <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          Risk context: {pending.challenge.action} · freshness {pending.challenge.otp.required_freshness_seconds}s · grace {pending.challenge.otp.grace_window_seconds}s
+          {pending.challenge.reason ? ` · reason: ${pending.challenge.reason}` : ''}
+        </div>
         <Input
           className="mt-4"
           inputMode="numeric"

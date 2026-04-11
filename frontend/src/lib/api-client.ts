@@ -98,10 +98,10 @@ apiClient.interceptors.response.use(
     if (
       error.response?.status === 403 &&
       challenge?.code === 'OTP_CHALLENGE_REQUIRED' &&
-      !originalRequest?._stepUpRetry &&
+      (originalRequest?._stepUpRetryCount ?? 0) < 2 &&
       typeof window !== 'undefined'
     ) {
-      originalRequest._stepUpRetry = true;
+      originalRequest._stepUpRetryCount = (originalRequest?._stepUpRetryCount ?? 0) + 1;
       const otpCode = await requestStepUpChallenge({ challenge });
       if (!otpCode) {
         return Promise.reject(error);

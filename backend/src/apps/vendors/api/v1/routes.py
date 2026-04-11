@@ -832,7 +832,7 @@ async def suspend_vendor(
         db=db,
         request=request,
         current_user=admin_user,
-        action=PrivilegedAction.USER_STATUS_EDIT,
+        action=PrivilegedAction.VENDOR_SUSPEND,
     )
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
     assert_vendor_status_transition(vendor, VendorStatus.SUSPENDED)

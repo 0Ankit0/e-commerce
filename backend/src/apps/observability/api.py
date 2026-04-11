@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, desc, func, select
 
 from src.apps.core.schemas import PaginatedResponse
-from src.apps.iam.api.deps import get_current_active_superuser, get_db
+from src.apps.iam.api.deps import get_current_active_superuser, get_db, require_privileged_action
 from src.apps.iam.models.user import User
-from src.apps.iam.security import PrivilegedAction, enforce_privileged_action
+from src.apps.iam.security import PrivilegedAction
 from src.apps.iam.utils.hashid import decode_id_or_404
 from src.apps.observability.models import ObservabilityLogEntry, SecurityIncident
 from src.apps.observability.schemas import (
@@ -191,16 +191,9 @@ async def get_incident(
 async def update_incident(
     incident_id: str,
     payload: SecurityIncidentUpdate,
-    request: Request,
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(require_privileged_action(PrivilegedAction.INCIDENT_REVIEW)),
     db: AsyncSession = Depends(get_db),
 ) -> SecurityIncidentRead:
-    await enforce_privileged_action(
-        db=db,
-        request=request,
-        current_user=current_user,
-        action=PrivilegedAction.INCIDENT_REVIEW,
-    )
     iid = decode_id_or_404(incident_id)
     incident = await db.get(SecurityIncident, iid)
     if not incident:

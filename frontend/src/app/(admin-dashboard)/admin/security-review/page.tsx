@@ -188,8 +188,13 @@ export default function SecurityReviewPage() {
             <p className="text-xs text-[var(--text-muted)]">
               Step-up enforcement:{' '}
               <span className="font-semibold text-[var(--text-primary)]">
-                {incidentReviewPolicy?.require_step_up ? `enabled (${incidentReviewPolicy.otp_freshness_seconds}s)` : 'disabled'}
+                {incidentReviewPolicy?.require_step_up
+                  ? `enabled (${incidentReviewPolicy.otp_freshness_seconds}s + ${incidentReviewPolicy.step_up_grace_seconds}s grace)`
+                  : 'disabled'}
               </span>
+            </p>
+            <p className="text-xs text-[var(--text-muted)]">
+              24h step-up telemetry: required {summaryQuery.data?.privileged_step_up_required_24h ?? 0} · succeeded {summaryQuery.data?.privileged_step_up_succeeded_24h ?? 0} · failed {summaryQuery.data?.privileged_step_up_failed_24h ?? 0} · bypassed {summaryQuery.data?.privileged_step_up_bypassed_24h ?? 0}
             </p>
           </CardHeader>
           <CardContent className="space-y-5">

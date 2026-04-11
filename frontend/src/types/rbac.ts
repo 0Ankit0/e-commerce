@@ -59,4 +59,5 @@ export interface PrivilegedPolicy {
   required_roles: string[];
   require_step_up: boolean;
   otp_freshness_seconds: number;
+  step_up_grace_seconds: number;
 }

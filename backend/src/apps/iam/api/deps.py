@@ -14,6 +14,7 @@ from src.apps.core.config import settings
 from src.apps.core import security
 from src.apps.core.logging import set_log_context
 from src.apps.iam.schemas.token import TokenPayload
+from src.apps.iam.security import PrivilegedAction, enforce_privileged_action
 
 # HTTPBearer with auto_error=False so cookie fallback still works,
 # but FastAPI registers the BearerAuth security scheme on all
@@ -114,3 +115,20 @@ async def get_current_active_superuser(
             detail="The user doesn't have enough privileges"
         )
     return current_user
+
+
+def require_privileged_action(action: PrivilegedAction):
+    async def _dependency(
+        request: Request,
+        db: Annotated[AsyncSession, Depends(get_db)],
+        current_user: Annotated[User, Depends(get_current_active_superuser)],
+    ) -> User:
+        await enforce_privileged_action(
+            db=db,
+            request=request,
+            current_user=current_user,
+            action=action,
+        )
+        return current_user
+
+    return _dependency

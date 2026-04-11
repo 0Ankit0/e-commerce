@@ -721,6 +721,38 @@ async def build_log_summary(db: AsyncSession) -> dict[str, int]:
             )
         )
     ).scalar_one()
+    privileged_required = (
+        await db.execute(
+            select(func.count(col(ObservabilityLogEntry.id))).where(
+                ObservabilityLogEntry.timestamp >= window_start,
+                ObservabilityLogEntry.event_code == "admin.privileged_action.challenge_required",
+            )
+        )
+    ).scalar_one()
+    privileged_succeeded = (
+        await db.execute(
+            select(func.count(col(ObservabilityLogEntry.id))).where(
+                ObservabilityLogEntry.timestamp >= window_start,
+                ObservabilityLogEntry.event_code == "admin.privileged_action.success",
+            )
+        )
+    ).scalar_one()
+    privileged_failed = (
+        await db.execute(
+            select(func.count(col(ObservabilityLogEntry.id))).where(
+                ObservabilityLogEntry.timestamp >= window_start,
+                ObservabilityLogEntry.event_code == "admin.privileged_action.failure",
+            )
+        )
+    ).scalar_one()
+    privileged_bypassed = (
+        await db.execute(
+            select(func.count(col(ObservabilityLogEntry.id))).where(
+                ObservabilityLogEntry.timestamp >= window_start,
+                ObservabilityLogEntry.event_code == "admin.privileged_action.bypassed",
+            )
+        )
+    ).scalar_one()
     return {
         "total_logs_24h": total_logs,
         "info_logs_24h": info_logs,
@@ -729,6 +761,10 @@ async def build_log_summary(db: AsyncSession) -> dict[str, int]:
         "open_incidents": open_incidents,
         "acknowledged_incidents": acknowledged_incidents,
         "critical_incidents": critical_incidents,
+        "privileged_step_up_required_24h": privileged_required,
+        "privileged_step_up_succeeded_24h": privileged_succeeded,
+        "privileged_step_up_failed_24h": privileged_failed,
+        "privileged_step_up_bypassed_24h": privileged_bypassed,
     }
 
 

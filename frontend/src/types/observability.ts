@@ -25,6 +25,10 @@ export interface ObservabilityLogSummary {
   open_incidents: number;
   acknowledged_incidents: number;
   critical_incidents: number;
+  privileged_step_up_required_24h: number;
+  privileged_step_up_succeeded_24h: number;
+  privileged_step_up_failed_24h: number;
+  privileged_step_up_bypassed_24h: number;
 }
 
 export interface SecurityIncident {

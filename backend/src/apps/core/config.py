@@ -169,6 +169,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_SPIKE_WINDOW_MINUTES: int = 10
     ERROR_SPIKE_THRESHOLD: int = 5
     ERROR_SPIKE_WINDOW_MINUTES: int = 10
+    PRIVILEGED_STEP_UP_MODE: str = "enforce"
+    PRIVILEGED_STEP_UP_GRACE_SECONDS: int = 60
 
     FEATURE_AUTH: bool = True
     FEATURE_MULTITENANCY: bool = True
