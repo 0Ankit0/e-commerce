@@ -21,6 +21,8 @@ from src.apps.iam.schemas.rbac import (
     RoleAssignmentResponse,
     CasbinRolesResponse,
     CasbinPermissionsResponse,
+    PrivilegedPolicyResponse,
+    PrivilegedPolicyUpdateRequest,
 )
 from src.apps.iam.utils.rbac import (
     assign_role_to_user,
@@ -37,7 +39,13 @@ from src.apps.iam.utils.hashid import decode_id_or_404
 from src.apps.core.schemas import PaginatedResponse
 from src.apps.core.cache import RedisCache
 from src.apps.observability.service import record_admin_role_change
-from src.apps.iam.security import PrivilegedAction, enforce_privileged_action
+from src.apps.iam.security import (
+    PrivilegedAction,
+    enforce_privileged_action,
+    list_privileged_action_policies,
+    override_privileged_action_policy,
+    resolve_privileged_action_policy,
+)
 
 
 router = APIRouter()
@@ -88,11 +96,17 @@ async def _invalidate_role_authorization_cache(role_id: int) -> None:
 @router.post("/roles", response_model=RoleResponse, status_code=status.HTTP_201_CREATED)
 async def create_role(
     role_data: RoleCreate,
+    request: Request,
     current_user: User = Depends(get_current_active_superuser),
     session: AsyncSession = Depends(get_session),
 ):
     """Create a new role."""
-    del current_user
+    await enforce_privileged_action(
+        db=session,
+        request=request,
+        current_user=current_user,
+        action=PrivilegedAction.ROLE_CREATE,
+    )
     role = Role(name=role_data.name, description=role_data.description)
     session.add(role)
     await session.commit()
@@ -161,11 +175,17 @@ async def get_role(
 @router.post("/permissions", response_model=PermissionResponse, status_code=status.HTTP_201_CREATED)
 async def create_permission(
     perm_data: PermissionCreate,
+    request: Request,
     current_user: User = Depends(get_current_active_superuser),
     session: AsyncSession = Depends(get_session),
 ):
     """Create a new permission."""
-    del current_user
+    await enforce_privileged_action(
+        db=session,
+        request=request,
+        current_user=current_user,
+        action=PrivilegedAction.ROLE_PERMISSION_CREATE,
+    )
     permission = Permission(
         resource=perm_data.resource,
         action=perm_data.action,
@@ -313,10 +333,17 @@ async def get_user_roles_endpoint(
 @router.post("/roles/assign-permission", status_code=status.HTTP_200_OK, response_model=PermissionAssignmentResponse)
 async def assign_permission(
     assignment: PermissionAssignment,
+    request: Request,
     current_user: User = Depends(get_current_active_superuser),
     session: AsyncSession = Depends(get_session),
 ):
     """Assign a permission to a role."""
+    await enforce_privileged_action(
+        db=session,
+        request=request,
+        current_user=current_user,
+        action=PrivilegedAction.ROLE_PERMISSION_ASSIGN,
+    )
     role_db_id = decode_id_or_404(assignment.role_id)
     perm_db_id = decode_id_or_404(assignment.permission_id)
     role_permission = await assign_permission_to_role(
@@ -342,10 +369,17 @@ async def assign_permission(
 @router.delete("/roles/remove-permission", status_code=status.HTTP_200_OK)
 async def remove_permission(
     assignment: PermissionAssignment,
+    request: Request,
     current_user: User = Depends(get_current_active_superuser),
     session: AsyncSession = Depends(get_session),
 ):
     """Remove a permission from a role."""
+    await enforce_privileged_action(
+        db=session,
+        request=request,
+        current_user=current_user,
+        action=PrivilegedAction.ROLE_PERMISSION_REMOVE,
+    )
     role_db_id = decode_id_or_404(assignment.role_id)
     perm_db_id = decode_id_or_404(assignment.permission_id)
     result = await remove_permission_from_role(
@@ -511,3 +545,53 @@ async def get_casbin_permissions(
         ttl=300,
     )
     return response
+
+
+@router.get("/security/privileged-actions", response_model=list[PrivilegedPolicyResponse])
+async def list_privileged_action_policy(
+    _: User = Depends(get_current_active_superuser),
+):
+    policies = await list_privileged_action_policies()
+    return [
+        PrivilegedPolicyResponse(
+            action=policy.action.value,
+            required_roles=list(policy.required_roles),
+            require_step_up=policy.require_step_up,
+            otp_freshness_seconds=policy.otp_freshness_seconds,
+        )
+        for policy in policies
+    ]
+
+
+@router.patch("/security/privileged-actions/{action}", response_model=PrivilegedPolicyResponse)
+async def update_privileged_action_policy(
+    action: str,
+    payload: PrivilegedPolicyUpdateRequest,
+    request: Request,
+    current_user: User = Depends(get_current_active_superuser),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        resolved_action = PrivilegedAction(action)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Unsupported privileged action") from exc
+    await enforce_privileged_action(
+        db=session,
+        request=request,
+        current_user=current_user,
+        action=PrivilegedAction.SECURITY_SETTINGS_EDIT,
+    )
+    if payload.otp_freshness_seconds is not None and payload.otp_freshness_seconds < 30:
+        raise HTTPException(status_code=400, detail="otp_freshness_seconds must be at least 30")
+    policy = await override_privileged_action_policy(
+        action=resolved_action,
+        require_step_up=payload.require_step_up,
+        otp_freshness_seconds=payload.otp_freshness_seconds,
+    )
+    refreshed = await resolve_privileged_action_policy(policy.action)
+    return PrivilegedPolicyResponse(
+        action=refreshed.action.value,
+        required_roles=list(refreshed.required_roles),
+        require_step_up=refreshed.require_step_up,
+        otp_freshness_seconds=refreshed.otp_freshness_seconds,
+    )

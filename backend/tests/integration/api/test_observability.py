@@ -1,4 +1,5 @@
 import pytest
+import pyotp
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -17,6 +18,9 @@ async def _make_user(db: AsyncSession, **kwargs) -> User:
         is_active=kwargs.get("is_active", True),
         is_superuser=kwargs.get("is_superuser", False),
         is_confirmed=kwargs.get("is_confirmed", True),
+        otp_enabled=kwargs.get("otp_enabled", False),
+        otp_verified=kwargs.get("otp_verified", False),
+        otp_base32=kwargs.get("otp_base32"),
     )
     db.add(user)
     await db.commit()
@@ -147,11 +151,15 @@ class TestObservabilityAPI:
 
     @pytest.mark.asyncio
     async def test_admin_can_acknowledge_incident(self, client: AsyncClient, db_session: AsyncSession):
+        otp_secret = pyotp.random_base32()
         admin = await _make_user(
             db_session,
             username="reviewadmin",
             email="reviewadmin@example.com",
             is_superuser=True,
+            otp_enabled=True,
+            otp_verified=True,
+            otp_base32=otp_secret,
         )
         incident = SecurityIncident(
             signal_type="ops.error_spike",
@@ -165,16 +173,79 @@ class TestObservabilityAPI:
         await db_session.commit()
         await db_session.refresh(incident)
         token = await _login(client, admin.username)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        blocked = await client.patch(
+            f"/api/v1/observability/incidents/{encode_id(incident.id)}",
+            headers=headers,
+            json={"status": "acknowledged", "review_notes": "Investigating"},
+        )
+        assert blocked.status_code == 403, blocked.text
+        assert blocked.json()["detail"]["reason"] == "missing_step_up_token"
+
+        step_up = await client.post(
+            "/api/v1/auth/otp/step-up/verify",
+            headers=headers,
+            json={"otp_code": pyotp.TOTP(otp_secret).now(), "action": "admin.observability.incident_review"},
+        )
+        assert step_up.status_code == 200, step_up.text
 
         response = await client.patch(
             f"/api/v1/observability/incidents/{encode_id(incident.id)}",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={**headers, "X-Privileged-Auth": step_up.json()["step_up_token"]},
             json={"status": "acknowledged", "review_notes": "Investigating"},
         )
-
         assert response.status_code == 200, response.text
         assert response.json()["status"] == "acknowledged"
         assert response.json()["review_notes"] == "Investigating"
+
+    @pytest.mark.asyncio
+    async def test_policy_toggle_can_disable_incident_step_up(self, client: AsyncClient, db_session: AsyncSession):
+        otp_secret = pyotp.random_base32()
+        admin = await _make_user(
+            db_session,
+            username="policyadmin",
+            email="policyadmin@example.com",
+            is_superuser=True,
+            otp_enabled=True,
+            otp_verified=True,
+            otp_base32=otp_secret,
+        )
+        incident = SecurityIncident(
+            signal_type="ops.error_spike",
+            severity="medium",
+            status="open",
+            title="Queue delay",
+            summary="Lag exceeds SLA",
+            fingerprint="ops.error_spike:/queue",
+        )
+        db_session.add(incident)
+        await db_session.commit()
+        await db_session.refresh(incident)
+
+        token = await _login(client, admin.username)
+        headers = {"Authorization": f"Bearer {token}"}
+        security_step_up = await client.post(
+            "/api/v1/auth/otp/step-up/verify",
+            headers=headers,
+            json={"otp_code": pyotp.TOTP(otp_secret).now(), "action": "admin.system.security_settings_edit"},
+        )
+        assert security_step_up.status_code == 200, security_step_up.text
+        patch_policy = await client.patch(
+            "/api/v1/security/privileged-actions/admin.observability.incident_review",
+            headers={**headers, "X-Privileged-Auth": security_step_up.json()["step_up_token"]},
+            json={"require_step_up": False},
+        )
+        assert patch_policy.status_code == 200, patch_policy.text
+        assert patch_policy.json()["require_step_up"] is False
+
+        response = await client.patch(
+            f"/api/v1/observability/incidents/{encode_id(incident.id)}",
+            headers=headers,
+            json={"status": "resolved", "review_notes": "Policy toggled for emergency response"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "resolved"
 
     @pytest.mark.asyncio
     async def test_rbac_endpoints_require_superuser(self, client: AsyncClient, db_session: AsyncSession):

@@ -20,6 +20,7 @@ import {
   useSecurityIncidents,
   useUpdateSecurityIncident,
 } from '@/hooks/use-observability';
+import { usePrivilegedPolicies } from '@/hooks/use-rbac';
 import { buildIncidentLogHref, incidentSeverityTone, incidentStatusTone } from '@/lib/observability';
 
 const STATUS_OPTIONS = ['all', 'open', 'acknowledged', 'resolved'];
@@ -45,7 +46,9 @@ export default function SecurityReviewPage() {
   const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null);
   const selectedIncidentQuery = useSecurityIncident(selectedIncidentId);
   const updateIncident = useUpdateSecurityIncident();
+  const policiesQuery = usePrivilegedPolicies();
   const [reviewNotes, setReviewNotes] = useState('');
+  const [enforcementFailureReason, setEnforcementFailureReason] = useState<string | null>(null);
 
   useEffect(() => {
     const firstIncidentId = incidentsQuery.data?.items[0]?.id ?? null;
@@ -57,6 +60,9 @@ export default function SecurityReviewPage() {
   }, [selectedIncidentQuery.data]);
 
   const selectedIncident = selectedIncidentQuery.data;
+  const incidentReviewPolicy = policiesQuery.data?.find(
+    (policy) => policy.action === 'admin.observability.incident_review'
+  );
 
   return (
     <div className="space-y-6">
@@ -179,6 +185,12 @@ export default function SecurityReviewPage() {
             <CardDescription>
               Review notes, linked logs, and the latest metadata for the selected incident.
             </CardDescription>
+            <p className="text-xs text-[var(--text-muted)]">
+              Step-up enforcement:{' '}
+              <span className="font-semibold text-[var(--text-primary)]">
+                {incidentReviewPolicy?.require_step_up ? `enabled (${incidentReviewPolicy.otp_freshness_seconds}s)` : 'disabled'}
+              </span>
+            </p>
           </CardHeader>
           <CardContent className="space-y-5">
             {!selectedIncident ? (
@@ -270,6 +282,11 @@ export default function SecurityReviewPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3">
+                  {enforcementFailureReason ? (
+                    <p className="w-full rounded-xl border border-[var(--warning-soft)] bg-[color-mix(in_srgb,var(--warning-soft)_30%,white)] px-3 py-2 text-xs text-[var(--text-primary)]">
+                      Step-up validation required: {enforcementFailureReason}
+                    </p>
+                  ) : null}
                   <Button
                     variant="outline"
                     isLoading={updateIncident.isPending}
@@ -277,6 +294,11 @@ export default function SecurityReviewPage() {
                       updateIncident.mutate({
                         incidentId: selectedIncident.id,
                         payload: { status: 'acknowledged', review_notes: reviewNotes },
+                      }, {
+                        onError: (error: any) => {
+                          setEnforcementFailureReason(error?.response?.data?.detail?.reason ?? 'missing_or_expired_step_up');
+                        },
+                        onSuccess: () => setEnforcementFailureReason(null),
                       })
                     }
                   >
@@ -288,6 +310,11 @@ export default function SecurityReviewPage() {
                       updateIncident.mutate({
                         incidentId: selectedIncident.id,
                         payload: { status: 'resolved', review_notes: reviewNotes },
+                      }, {
+                        onError: (error: any) => {
+                          setEnforcementFailureReason(error?.response?.data?.detail?.reason ?? 'missing_or_expired_step_up');
+                        },
+                        onSuccess: () => setEnforcementFailureReason(null),
                       })
                     }
                   >

@@ -53,3 +53,10 @@ export interface CheckPermissionResponse {
   action: string;
   allowed: boolean;
 }
+
+export interface PrivilegedPolicy {
+  action: string;
+  required_roles: string[];
+  require_step_up: boolean;
+  otp_freshness_seconds: number;
+}
