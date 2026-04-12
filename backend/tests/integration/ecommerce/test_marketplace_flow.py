@@ -564,7 +564,7 @@ async def test_line_haul_planner_draft_save_and_apply_flow(client: AsyncClient, 
     assert validate_resp.status_code == 200, validate_resp.text
     assert validate_resp.json()["is_valid"] is False
     error_codes = {err["code"] for err in validate_resp.json()["errors"]}
-    assert "LOG_PLANNER_OVER_CAPACITY" in error_codes
+    assert "over_capacity" in error_codes
     assert "LOG_PLANNER_DUPLICATE_ASSIGNMENT" in error_codes
 
     save_resp = await client.post(
@@ -672,6 +672,84 @@ async def test_line_haul_planner_draft_lifecycle_with_versioning_and_manifest_ge
     manifest_db = await db_session.get(ShipmentManifest, decode_id_or_404(published["generated_manifest_ids"][0]))
     assert manifest_db is not None
 
+
+@pytest.mark.asyncio
+async def test_line_haul_planner_full_flow_with_manual_override_and_publish_queue(client: AsyncClient, db_session: AsyncSession):
+    _, admin_headers = await _create_user_headers(
+        db_session,
+        username="planner_full_path_admin",
+        email="planner-full-path-admin@example.com",
+        is_superuser=True,
+    )
+    create_resp = await client.post(
+        "/api/v1/logistics/line-haul-planner/drafts",
+        headers=admin_headers,
+        json={
+            "name": "Full path draft",
+            "status": "draft",
+            "routes": [{"route_id": "KTM-DHR", "origin_hub": "KTM", "destination_hub": "DHR", "demand_units": 8}],
+            "vehicles": [{"vehicle_id": "TRUCK-7", "hub_code": "KTM", "capacity_units": 10}],
+            "connectivity": {"KTM": ["DHR"], "DHR": ["KTM"]},
+            "locked_assignments": [],
+            "assignments": [],
+            "optimizer_metadata": {},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    draft = create_resp.json()
+
+    optimize_resp = await client.post(
+        f"/api/v1/logistics/line-haul-planner/drafts/{draft['draft_id']}/optimize?expected_version={draft['version']}&random_seed=9",
+        headers=admin_headers,
+    )
+    assert optimize_resp.status_code == 200, optimize_resp.text
+    optimized = optimize_resp.json()
+    assert optimized["assignments"][0]["explainability"]["assignment_reason"] in {"capacity_fit", "locked_assignment", "manual_override"}
+
+    manual_override_resp = await client.put(
+        f"/api/v1/logistics/line-haul-planner/drafts/{draft['draft_id']}",
+        headers=admin_headers,
+        json={
+            "name": optimized["name"],
+            "status": "draft",
+            "expected_version": optimized["version"],
+            "routes": optimized["routes"],
+            "vehicles": optimized["vehicles"],
+            "connectivity": optimized["connectivity"],
+            "locked_assignments": optimized["locked_assignments"],
+            "assignments": [{"route_id": "KTM-DHR", "vehicle_id": "TRUCK-7", "assigned_units": 8}],
+            "optimizer_metadata": optimized["optimizer_metadata"],
+        },
+    )
+    assert manual_override_resp.status_code == 200, manual_override_resp.text
+    manual = manual_override_resp.json()
+
+    clone_resp = await client.post(
+        f"/api/v1/logistics/line-haul-planner/drafts/{draft['draft_id']}/clone",
+        headers=admin_headers,
+        json={"name": "What-if clone"},
+    )
+    assert clone_resp.status_code == 201, clone_resp.text
+    assert clone_resp.json()["name"] == "What-if clone"
+
+    finalize_resp = await client.post(
+        f"/api/v1/logistics/line-haul-planner/drafts/{draft['draft_id']}/finalize?expected_version={manual['version']}",
+        headers=admin_headers,
+    )
+    assert finalize_resp.status_code == 200, finalize_resp.text
+    assert finalize_resp.json()["status"] == "finalized"
+
+    queue_resp = await client.get("/api/v1/logistics/line-haul-planner/publish-queue", headers=admin_headers)
+    assert queue_resp.status_code == 200, queue_resp.text
+    assert any(item["draft_id"] == draft["draft_id"] for item in queue_resp.json()["items"])
+
+    publish_resp = await client.post(
+        f"/api/v1/logistics/line-haul-planner/drafts/{draft['draft_id']}/publish?expected_version={finalize_resp.json()['version']}",
+        headers=admin_headers,
+    )
+    assert publish_resp.status_code == 200, publish_resp.text
+    assert publish_resp.json()["status"] == "published"
+    assert publish_resp.json()["generated_manifest_ids"]
 
 @pytest.mark.asyncio
 async def test_vendor_delivery_and_customer_return_flow(client: AsyncClient, db_session: AsyncSession):

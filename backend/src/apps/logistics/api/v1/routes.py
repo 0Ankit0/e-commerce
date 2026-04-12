@@ -253,7 +253,7 @@ class PlannerAssignmentInput(BaseModel):
 
 class LineHaulPlanDraftRequest(BaseModel):
     name: str = Field(min_length=3, max_length=120)
-    status: str = Field(default="draft", pattern="^(draft|finalized)$")
+    status: str = Field(default="draft", pattern="^(draft|locked|finalized|published)$")
     routes: list[PlannerRouteInput]
     vehicles: list[PlannerVehicleInput]
     connectivity: dict[str, list[str]] = Field(default_factory=dict)
@@ -261,6 +261,10 @@ class LineHaulPlanDraftRequest(BaseModel):
     assignments: list[PlannerAssignmentInput] = Field(default_factory=list)
     optimizer_metadata: dict[str, object] = Field(default_factory=dict)
     expected_version: int | None = Field(default=None, ge=1)
+
+
+class LineHaulPlanCloneRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=3, max_length=120)
 
 
 class CourierGpsIngestionRequest(BaseModel):
@@ -390,6 +394,7 @@ def _serialize_line_haul_draft(plan: RouteOptimizationPlan) -> dict[str, object]
         "published_at": payload.get("published_at"),
         "frozen_at": payload.get("frozen_at"),
         "generated_manifest_ids": [encode_id(item) for item in payload.get("generated_manifest_ids", [])],
+        "fr_lh_001": payload.get("fr_lh_001"),
         "updated_at": plan.updated_at.isoformat(),
     }
 
@@ -399,6 +404,52 @@ def _raise_version_conflict(*, expected: int, current: int) -> None:
         status_code=status.HTTP_409_CONFLICT,
         detail={"message": "Planner draft version conflict", "expected_version": expected, "current_version": current},
     )
+
+
+async def _transition_line_haul_draft_status(
+    *,
+    draft: RouteOptimizationPlan,
+    db: AsyncSession,
+    expected_version: int,
+    next_status: str,
+    freeze: bool = False,
+) -> dict[str, object]:
+    payload = json.loads(draft.metrics_json or "{}")
+    current_version = int(payload.get("version") or 1)
+    if expected_version != current_version:
+        _raise_version_conflict(expected=expected_version, current=current_version)
+    validation = payload.get("validation") or {}
+    if not validation.get("is_valid", True):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Draft has assignment conflicts. Resolve conflicts before lifecycle transition.",
+                "validation_errors": validation.get("errors", []),
+            },
+        )
+    generated_manifest_ids: list[int] = payload.get("generated_manifest_ids", [])
+    payload["status"] = next_status
+    if next_status == "locked":
+        payload["frozen_at"] = utc_now().isoformat()
+    if next_status == "published":
+        payload["published_at"] = utc_now().isoformat()
+        payload["fr_lh_001"] = {"status": "complete", "completed_at": utc_now().isoformat(), "manual_fallback_required": False}
+        if not generated_manifest_ids and not freeze:
+            manifest = ShipmentManifest(
+                code=f"PLN-{draft.id}-{int(utc_now().timestamp())}",
+                shipment_ids_json=json.dumps([]),
+                status=ShipmentManifestStatus.DRAFT,
+            )
+            db.add(manifest)
+            await db.flush()
+            generated_manifest_ids.append(manifest.id or 0)
+    payload["generated_manifest_ids"] = generated_manifest_ids
+    payload["version"] = current_version + 1
+    draft.metrics_json = json.dumps(payload)
+    draft.updated_at = utc_now()
+    await db.commit()
+    await db.refresh(draft)
+    return _serialize_line_haul_draft(draft)
 
 
 def _shipment_ids_in_manifest(manifest: ShipmentManifest) -> set[int]:
@@ -1704,6 +1755,7 @@ async def run_line_haul_planner(
                 "route_id": assignment["route_id"],
                 "vehicle_id": assignment["vehicle_id"],
                 "assigned_units": assignment["assigned_units"],
+                "explainability": assignment.get("explainability", {}),
             }
             for assignment in assignment_rows
         ],
@@ -1845,6 +1897,36 @@ async def optimize_line_haul_plan_draft(
     return _serialize_line_haul_draft(draft)
 
 
+@router.post("/logistics/line-haul-planner/drafts/{draft_id}/clone", status_code=status.HTTP_201_CREATED)
+async def clone_line_haul_plan_draft(
+    draft_id: str,
+    payload: LineHaulPlanCloneRequest,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    source = await db.get(RouteOptimizationPlan, decode_id_or_404(draft_id))
+    if source is None or source.strategy != "line_haul_plan_draft_v1":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Line-haul draft not found")
+    source_payload = json.loads(source.metrics_json or "{}")
+    source_payload["name"] = payload.name or f"{source_payload.get('name', 'Draft')} (what-if)"
+    source_payload["status"] = "draft"
+    source_payload["version"] = 1
+    source_payload["published_at"] = None
+    source_payload["frozen_at"] = None
+    source_payload["generated_manifest_ids"] = []
+    draft = RouteOptimizationPlan(
+        strategy="line_haul_plan_draft_v1",
+        stops_json=source.stops_json,
+        metrics_json=json.dumps(source_payload),
+        score=source.score,
+        updated_at=utc_now(),
+    )
+    db.add(draft)
+    await db.commit()
+    await db.refresh(draft)
+    return _serialize_line_haul_draft(draft)
+
+
 @router.post("/logistics/line-haul-planner/drafts/{draft_id}/resolve-conflicts")
 async def resolve_line_haul_plan_conflicts(
     draft_id: str,
@@ -1892,6 +1974,92 @@ async def list_line_haul_optimization_results(
     return {"items": [_serialize_line_haul_draft(plan) for plan in plans]}
 
 
+@router.get("/logistics/line-haul-planner/backlog")
+async def get_line_haul_backlog_pool(
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    plans = (
+        await db.execute(
+            select(RouteOptimizationPlan).where(RouteOptimizationPlan.strategy == "line_haul_plan_draft_v1").order_by(RouteOptimizationPlan.updated_at.desc()).limit(1)
+        )
+    ).scalars().all()
+    if not plans:
+        return {"items": []}
+    latest = _serialize_line_haul_draft(plans[0])
+    assignments = latest.get("assignments") or []
+    assigned_by_route: dict[str, int] = {}
+    for row in assignments:
+        route_id = str(row.get("route_id") or "")
+        assigned_by_route[route_id] = assigned_by_route.get(route_id, 0) + int(row.get("assigned_units") or 0)
+    items: list[dict[str, object]] = []
+    for route in latest.get("routes") or []:
+        route_id = str(route.get("route_id") or "")
+        demand = int(route.get("demand_units") or 0)
+        items.append(
+            {
+                "route_id": route_id,
+                "destination_hub": route.get("destination_hub"),
+                "cutoff_window": route.get("cutoff_window", "EOD"),
+                "backlog_units": max(demand - assigned_by_route.get(route_id, 0), 0),
+            }
+        )
+    return {"items": items}
+
+
+@router.get("/logistics/line-haul-planner/route-canvas")
+async def get_line_haul_route_canvas(
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    plans = (
+        await db.execute(
+            select(RouteOptimizationPlan).where(RouteOptimizationPlan.strategy == "line_haul_plan_draft_v1").order_by(RouteOptimizationPlan.updated_at.desc()).limit(1)
+        )
+    ).scalars().all()
+    if not plans:
+        return {"planned": [], "unplanned": []}
+    latest = _serialize_line_haul_draft(plans[0])
+    assigned_route_ids = {str(item.get("route_id") or "") for item in latest.get("assignments") or []}
+    planned = [route for route in latest.get("routes") or [] if str(route.get("route_id") or "") in assigned_route_ids]
+    unplanned = [route for route in latest.get("routes") or [] if str(route.get("route_id") or "") not in assigned_route_ids]
+    return {"planned": planned, "unplanned": unplanned}
+
+
+@router.get("/logistics/line-haul-planner/fleet-capacity")
+async def get_line_haul_fleet_capacity_board(
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    plans = (
+        await db.execute(
+            select(RouteOptimizationPlan).where(RouteOptimizationPlan.strategy == "line_haul_plan_draft_v1").order_by(RouteOptimizationPlan.updated_at.desc()).limit(1)
+        )
+    ).scalars().all()
+    if not plans:
+        return {"items": []}
+    latest = _serialize_line_haul_draft(plans[0])
+    assignments = latest.get("assignments") or []
+    load_by_vehicle: dict[str, int] = {}
+    for row in assignments:
+        vehicle_id = str(row.get("vehicle_id") or "")
+        load_by_vehicle[vehicle_id] = load_by_vehicle.get(vehicle_id, 0) + int(row.get("assigned_units") or 0)
+    return {
+        "items": [
+            {
+                "vehicle_id": vehicle.get("vehicle_id"),
+                "hub_code": vehicle.get("hub_code"),
+                "capacity_units": int(vehicle.get("capacity_units") or 0),
+                "assigned_units": load_by_vehicle.get(str(vehicle.get("vehicle_id") or ""), 0),
+                "weight_kg": int(vehicle.get("capacity_units") or 0) * 10,
+                "volume_m3": round(int(vehicle.get("capacity_units") or 0) * 0.06, 2),
+                "vehicle_constraints": ["hub_chain", "capacity"],
+            }
+            for vehicle in latest.get("vehicles") or []
+        ]
+    }
+
+
 @router.post("/logistics/line-haul-planner/drafts/{draft_id}/apply")
 async def apply_line_haul_plan_draft(
     draft_id: str,
@@ -1903,39 +2071,69 @@ async def apply_line_haul_plan_draft(
     draft = await db.get(RouteOptimizationPlan, decode_id_or_404(draft_id))
     if draft is None or draft.strategy != "line_haul_plan_draft_v1":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Line-haul draft not found")
-    payload = json.loads(draft.metrics_json or "{}")
-    current_version = int(payload.get("version") or 1)
-    if expected_version != current_version:
-        _raise_version_conflict(expected=expected_version, current=current_version)
-    validation = payload.get("validation") or {}
-    if not validation.get("is_valid", True):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "message": "Draft has assignment conflicts. Resolve conflicts before applying.",
-                "validation_errors": validation.get("errors", []),
-            },
+    return await _transition_line_haul_draft_status(
+        draft=draft,
+        db=db,
+        expected_version=expected_version,
+        next_status="locked" if freeze else "published",
+        freeze=freeze,
+    )
+
+
+@router.post("/logistics/line-haul-planner/drafts/{draft_id}/lock")
+async def lock_line_haul_plan_draft(
+    draft_id: str,
+    expected_version: int = Query(ge=1),
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    draft = await db.get(RouteOptimizationPlan, decode_id_or_404(draft_id))
+    if draft is None or draft.strategy != "line_haul_plan_draft_v1":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Line-haul draft not found")
+    return await _transition_line_haul_draft_status(draft=draft, db=db, expected_version=expected_version, next_status="locked", freeze=True)
+
+
+@router.post("/logistics/line-haul-planner/drafts/{draft_id}/finalize")
+async def finalize_line_haul_plan_draft(
+    draft_id: str,
+    expected_version: int = Query(ge=1),
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    draft = await db.get(RouteOptimizationPlan, decode_id_or_404(draft_id))
+    if draft is None or draft.strategy != "line_haul_plan_draft_v1":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Line-haul draft not found")
+    return await _transition_line_haul_draft_status(draft=draft, db=db, expected_version=expected_version, next_status="finalized")
+
+
+@router.post("/logistics/line-haul-planner/drafts/{draft_id}/publish")
+async def publish_line_haul_plan_draft(
+    draft_id: str,
+    expected_version: int = Query(ge=1),
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    draft = await db.get(RouteOptimizationPlan, decode_id_or_404(draft_id))
+    if draft is None or draft.strategy != "line_haul_plan_draft_v1":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Line-haul draft not found")
+    return await _transition_line_haul_draft_status(draft=draft, db=db, expected_version=expected_version, next_status="published")
+
+
+@router.get("/logistics/line-haul-planner/publish-queue")
+async def list_line_haul_publish_queue(
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    plans = (
+        await db.execute(
+            select(RouteOptimizationPlan)
+            .where(RouteOptimizationPlan.strategy == "line_haul_plan_draft_v1")
+            .order_by(RouteOptimizationPlan.updated_at.desc())
+            .limit(100)
         )
-    payload["status"] = "frozen" if freeze else "published"
-    payload["frozen_at"] = utc_now().isoformat() if freeze else payload.get("frozen_at")
-    payload["published_at"] = utc_now().isoformat() if not freeze else payload.get("published_at")
-    generated_manifest_ids: list[int] = []
-    if not freeze:
-        manifest = ShipmentManifest(
-            code=f"PLN-{draft.id}-{int(utc_now().timestamp())}",
-            shipment_ids_json=json.dumps([]),
-            status=ShipmentManifestStatus.DRAFT,
-        )
-        db.add(manifest)
-        await db.flush()
-        generated_manifest_ids.append(manifest.id or 0)
-    payload["generated_manifest_ids"] = generated_manifest_ids
-    payload["version"] = current_version + 1
-    draft.metrics_json = json.dumps(payload)
-    draft.updated_at = utc_now()
-    await db.commit()
-    await db.refresh(draft)
-    return _serialize_line_haul_draft(draft)
+    ).scalars().all()
+    queued = [item for item in [_serialize_line_haul_draft(plan) for plan in plans] if item["status"] in {"locked", "finalized"}]
+    return {"items": queued, "total": len(queued)}
 
 
 @router.post("/logistics/trips/{trip_id}/gps", status_code=status.HTTP_201_CREATED)
