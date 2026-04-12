@@ -71,6 +71,16 @@ export interface BranchKpiSnapshot {
   delivery_success_rate_percent: number;
   delivery_attempts: number;
   backlog_shipments: number;
+  attempt_success_rate_percent?: number;
+  attempt_failure_rate_percent?: number;
+  rto_rate_percent?: number;
+  assigned_agents?: number;
+  avg_agent_utilization_percent?: number;
+  aging_queue_over_2h?: number;
+  aging_queue_over_6h?: number;
+  aging_queue_over_12h?: number;
+  inventory_on_hand_units?: number;
+  inventory_posture?: string;
 }
 
 export interface BranchDashboardSnapshotResponse {
@@ -78,6 +88,7 @@ export interface BranchDashboardSnapshotResponse {
   branch_scope: string[];
   date_from?: string | null;
   date_to?: string | null;
+  timezone?: string | null;
   agent_id?: string | null;
   branch_codes: Record<string, string>;
 }
