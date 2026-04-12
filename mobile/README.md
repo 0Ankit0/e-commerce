@@ -33,6 +33,16 @@ keyPassword=change-me
 
 Store your keystore file outside source control (for example `mobile/android/app/upload-keystore.jks`, also gitignored).
 
+## Android Package Identity + Variants
+
+The Android package identity is now explicit and environment-safe:
+
+- Production flavor namespace/application ID: `com.ecommerce.app`
+- Debug build ID suffix: `.debug` → `com.ecommerce.app.debug`
+- Staging build type ID suffix: `.staging` → `com.ecommerce.app.staging`
+
+The app module defines a `production` flavor and three build types (`debug`, `staging`, `release`) so CI/local builds are deterministic and do not reuse placeholder IDs.
+
 ### Validate signing config
 
 - Advisory check (local):
@@ -63,6 +73,33 @@ mobile/scripts/check_android_release_signing.sh --strict
 ```
 
 Release builds should fail fast when any required signing input is missing.
+
+### Release artifact commands (Play-ready)
+
+Generate artifacts from the `mobile/` directory:
+
+- Local signed release AAB (Play upload):
+  - `flutter build appbundle --flavor production --release`
+- Local signed release APK (internal distribution):
+  - `flutter build apk --flavor production --release`
+- Staging validation build:
+  - `flutter build apk --flavor production --debug --target-platform android-arm64`
+
+In CI, the strict signing preflight runs before attempting the release build. This ensures misconfigured keystore path/passwords or alias values fail the job before artifact generation.
+
+## Signing Key Rotation Runbook
+
+1. Generate a new upload keystore in a secure environment (do not commit it).
+2. Base64-encode the keystore and update CI secret `ANDROID_KEYSTORE_BASE64`.
+3. Rotate all related secrets together:
+   - `ANDROID_KEYSTORE_PASSWORD`
+   - `ANDROID_KEY_ALIAS`
+   - `ANDROID_KEY_PASSWORD`
+4. Run `mobile/scripts/check_android_release_signing.sh --strict` locally with the new values.
+5. Trigger CI release validation and confirm a signed AAB is produced.
+6. Revoke access to old secret values and archive old keystore material according to org retention policy.
+
+> Note: For Google Play App Signing, keep the app-signing key managed by Play and rotate only the upload key unless organizational policy requires a full app-signing key migration.
 
 ## Verification
 
