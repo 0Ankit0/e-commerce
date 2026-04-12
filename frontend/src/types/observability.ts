@@ -29,6 +29,10 @@ export interface ObservabilityLogSummary {
   privileged_step_up_succeeded_24h: number;
   privileged_step_up_failed_24h: number;
   privileged_step_up_bypassed_24h: number;
+  privileged_action_required_24h: number;
+  privileged_action_passed_24h: number;
+  privileged_action_denied_24h: number;
+  privileged_action_bypass_attempt_24h: number;
 }
 
 export interface SecurityIncident {

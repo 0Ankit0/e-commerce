@@ -132,3 +132,7 @@ def require_privileged_action(action: PrivilegedAction):
         return current_user
 
     return _dependency
+
+
+def require_strict_step_up(action: PrivilegedAction):
+    return require_privileged_action(action)

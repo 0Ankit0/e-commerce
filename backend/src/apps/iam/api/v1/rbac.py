@@ -584,10 +584,13 @@ async def update_privileged_action_policy(
     )
     if payload.otp_freshness_seconds is not None and payload.otp_freshness_seconds < 30:
         raise HTTPException(status_code=400, detail="otp_freshness_seconds must be at least 30")
+    if payload.step_up_grace_seconds is not None and payload.step_up_grace_seconds < 0:
+        raise HTTPException(status_code=400, detail="step_up_grace_seconds must be >= 0")
     policy = await override_privileged_action_policy(
         action=resolved_action,
         require_step_up=payload.require_step_up,
         otp_freshness_seconds=payload.otp_freshness_seconds,
+        step_up_grace_seconds=payload.step_up_grace_seconds,
     )
     refreshed = await resolve_privileged_action_policy(policy.action)
     return PrivilegedPolicyResponse(

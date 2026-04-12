@@ -63,6 +63,14 @@ export default function SecurityReviewPage() {
   const incidentReviewPolicy = policiesQuery.data?.find(
     (policy) => policy.action === 'admin.observability.incident_review'
   );
+  const challengeReasonLabel =
+    enforcementFailureReason === 'step_up_required'
+      ? 'OTP verification is required before changing incident status.'
+      : enforcementFailureReason === 'step_up_expired'
+        ? 'Your previous OTP verification expired. Retry the action to re-challenge.'
+        : enforcementFailureReason === 'step_up_invalid'
+          ? 'The verification marker was invalid or replayed. Retry to verify again.'
+          : enforcementFailureReason;
 
   return (
     <div className="space-y-6">
@@ -194,7 +202,7 @@ export default function SecurityReviewPage() {
               </span>
             </p>
             <p className="text-xs text-[var(--text-muted)]">
-              24h step-up telemetry: required {summaryQuery.data?.privileged_step_up_required_24h ?? 0} · succeeded {summaryQuery.data?.privileged_step_up_succeeded_24h ?? 0} · failed {summaryQuery.data?.privileged_step_up_failed_24h ?? 0} · bypassed {summaryQuery.data?.privileged_step_up_bypassed_24h ?? 0}
+              24h privileged telemetry: required {summaryQuery.data?.privileged_action_required_24h ?? 0} · passed {summaryQuery.data?.privileged_action_passed_24h ?? 0} · denied {summaryQuery.data?.privileged_action_denied_24h ?? 0} · bypass attempts {summaryQuery.data?.privileged_action_bypass_attempt_24h ?? 0}
             </p>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -289,7 +297,7 @@ export default function SecurityReviewPage() {
                 <div className="flex flex-wrap items-center gap-3">
                   {enforcementFailureReason ? (
                     <p className="w-full rounded-xl border border-[var(--warning-soft)] bg-[color-mix(in_srgb,var(--warning-soft)_30%,white)] px-3 py-2 text-xs text-[var(--text-primary)]">
-                      Step-up validation required: {enforcementFailureReason}
+                      Step-up validation required: {challengeReasonLabel}
                     </p>
                   ) : null}
                   <Button
