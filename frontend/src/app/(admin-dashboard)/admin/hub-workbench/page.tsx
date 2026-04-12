@@ -17,7 +17,20 @@ type WorkbenchItem = {
 type HubWorkbenchResponse = {
   selected_queue_id: string | null;
   inbound_items: WorkbenchItem[];
+  hold_exception_items: WorkbenchItem[];
+  sorting_lanes: { lane: string; items: WorkbenchItem[] }[];
   outbound_items: WorkbenchItem[];
+  outbound_readiness_board: {
+    ready_to_dispatch_count: number;
+    dispatched_count: number;
+    hold_count: number;
+  };
+  sla_timers: {
+    average_dwell_minutes: number;
+    average_sort_latency_minutes: number;
+    cutoff_miss_shipments: number;
+  };
+  alerts: { type: string; severity: string; count: number }[];
 };
 
 type HubKpiResponse = {
@@ -31,11 +44,8 @@ export default function AdminHubWorkbenchPage() {
   const [queueId, setQueueId] = useState('');
   const [workbench, setWorkbench] = useState<HubWorkbenchResponse | null>(null);
   const [kpi, setKpi] = useState<HubKpiResponse | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const sortedItems = useMemo(
-    () => (workbench?.outbound_items ?? []).filter((item) => item.status === 'assigned'),
-    [workbench?.outbound_items],
-  );
   const outboundItems = useMemo(
     () => (workbench?.outbound_items ?? []).filter((item) => item.status === 'moved_to_next_leg'),
     [workbench?.outbound_items],
@@ -43,6 +53,7 @@ export default function AdminHubWorkbenchPage() {
 
   const load = async () => {
     if (!hubId.trim()) return;
+    setLoading(true);
     const [workbenchResponse, kpiResponse] = await Promise.all([
       apiClient.get<HubWorkbenchResponse>(`/logistics/hubs/${hubId.trim()}/sort-workbench`, {
         params: queueId ? { queue_id: queueId } : undefined,
@@ -52,6 +63,18 @@ export default function AdminHubWorkbenchPage() {
     setWorkbench(workbenchResponse.data);
     setQueueId(queueId || workbenchResponse.data.selected_queue_id || '');
     setKpi(kpiResponse.data);
+    setLoading(false);
+  };
+
+  const requeueMisSort = async (shipmentId: string) => {
+    if (!hubId.trim() || !queueId.trim()) return;
+    await apiClient.post(`/logistics/hubs/${hubId.trim()}/sort-queues/${queueId.trim()}/exception-queue`, {
+      shipment_id: shipmentId,
+      exception_code: 'mis_sort_corrected',
+      notes: 'Requeued from hold queue by sorter',
+      requeue_for_sorting: true,
+    });
+    await load();
   };
 
   return (
@@ -76,8 +99,13 @@ export default function AdminHubWorkbenchPage() {
         <Card><CardHeader><CardTitle>Avg dwell (min)</CardTitle></CardHeader><CardContent>{kpi?.average_dwell_time_minutes ?? 0}</CardContent></Card>
         <Card><CardHeader><CardTitle>SLA breaches</CardTitle></CardHeader><CardContent>{kpi?.sla_breach_shipments ?? 0}</CardContent></Card>
       </div>
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card><CardHeader><CardTitle>Sort latency (min)</CardTitle></CardHeader><CardContent>{workbench?.sla_timers.average_sort_latency_minutes ?? 0}</CardContent></Card>
+        <Card><CardHeader><CardTitle>Cutoff misses</CardTitle></CardHeader><CardContent>{workbench?.sla_timers.cutoff_miss_shipments ?? 0}</CardContent></Card>
+        <Card><CardHeader><CardTitle>Alerts</CardTitle></CardHeader><CardContent>{workbench?.alerts.map((a) => `${a.type}:${a.count}`).join(', ') || 'None'}</CardContent></Card>
+      </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 lg:grid-cols-4">
         <Card>
           <CardHeader><CardTitle>Inbound queue</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
@@ -85,18 +113,33 @@ export default function AdminHubWorkbenchPage() {
           </CardContent>
         </Card>
         <Card>
-          <CardHeader><CardTitle>Sorted queue</CardTitle></CardHeader>
+          <CardHeader><CardTitle>Sorting lanes</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
-            {sortedItems.map((item) => <p key={item.queue_item_id}>{item.shipment_id} · {item.assigned_carrier}</p>)}
+            {(workbench?.sorting_lanes ?? []).map((lane) => <p key={lane.lane}>{lane.lane} · {lane.items.length}</p>)}
           </CardContent>
         </Card>
         <Card>
-          <CardHeader><CardTitle>Outbound queue</CardTitle></CardHeader>
+          <CardHeader><CardTitle>Mis-sort / hold queue</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
-            {outboundItems.map((item) => <p key={item.queue_item_id}>{item.shipment_id} · {item.assigned_vehicle_number}</p>)}
+            {(workbench?.hold_exception_items ?? []).map((item) => (
+              <div className="flex items-center justify-between gap-2" key={item.queue_item_id}>
+                <span>{item.shipment_id} · {item.status}</span>
+                <Button size="sm" variant="secondary" onClick={() => requeueMisSort(item.shipment_id)}>Requeue</Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle>Outbound readiness</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p>Ready: {workbench?.outbound_readiness_board.ready_to_dispatch_count ?? 0}</p>
+            <p>Dispatched: {workbench?.outbound_readiness_board.dispatched_count ?? 0}</p>
+            <p>Hold: {workbench?.outbound_readiness_board.hold_count ?? 0}</p>
+            {outboundItems.slice(0, 4).map((item) => <p key={item.queue_item_id}>{item.shipment_id} · {item.assigned_vehicle_number}</p>)}
           </CardContent>
         </Card>
       </div>
+      {loading ? <p className="text-sm text-[var(--text-muted)]">Loading live queue state...</p> : null}
     </div>
   );
 }

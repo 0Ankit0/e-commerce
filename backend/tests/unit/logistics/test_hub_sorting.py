@@ -9,6 +9,7 @@ from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import encode_id
 from src.apps.logistics.api.v1.routes import (
     DispatchConfirmRequest,
+    HubExceptionUpdateRequest,
     HubBulkAssignRequest,
     HubBulkScanRequest,
     HubBulkMoveNextLegRequest,
@@ -22,9 +23,12 @@ from src.apps.logistics.api.v1.routes import (
     bulk_scan_hub_sort_items,
     close_hub_queue,
     create_hub_queue,
+    get_hub_operational_reports,
+    get_hub_sort_workbench,
     intake_hub_shipment,
     outbound_stage_hub_shipment,
     scan_hub_sort_item,
+    update_hub_exception_queue,
 )
 from src.apps.logistics.models import Hub, HubOperationEvent, HubSortQueueItem, ShipmentManifest
 from src.apps.orders.models import Order, OrderPaymentStatus, OrderStatus, PaymentMethod, Shipment
@@ -376,3 +380,80 @@ async def test_hub_leg_transition_audit_timestamps_are_recorded(db_session):
     assert "sort_bucket_assigned" in operation_types
     assert "outbound_staged" in operation_types
     assert "dispatch_confirmed" in operation_types
+
+
+@pytest.mark.asyncio
+async def test_exception_queue_can_requeue_for_mis_sort_correction(db_session):
+    admin = await _seed_user(db_session)
+    hub = Hub(name="Hub Hold", code="HUB-HOLD")
+    db_session.add(hub)
+    await db_session.flush()
+    shipment = await _seed_shipment(db_session)
+    queue_response = await create_hub_queue(
+        encode_id(hub.id or 0),
+        HubSortQueueCreateRequest(code="QUEUE-HOLD"),
+        admin,
+        db_session,
+    )
+    await intake_hub_shipment(
+        encode_id(hub.id or 0),
+        queue_response["queue_id"],
+        HubSortScanRequest(shipment_id=encode_id(shipment.id or 0)),
+        admin,
+        db_session,
+    )
+    on_hold = await update_hub_exception_queue(
+        encode_id(hub.id or 0),
+        queue_response["queue_id"],
+        HubExceptionUpdateRequest(
+            shipment_id=encode_id(shipment.id or 0),
+            exception_code="mis_sort",
+            notes="Wrong lane",
+            requeue_for_sorting=False,
+        ),
+        admin,
+        db_session,
+    )
+    assert on_hold["status"] == "exception"
+    requeued = await update_hub_exception_queue(
+        encode_id(hub.id or 0),
+        queue_response["queue_id"],
+        HubExceptionUpdateRequest(
+            shipment_id=encode_id(shipment.id or 0),
+            exception_code="mis_sort_corrected",
+            notes="Moved to correct lane",
+            requeue_for_sorting=True,
+        ),
+        admin,
+        db_session,
+    )
+    assert requeued["status"] == "scanned"
+
+
+@pytest.mark.asyncio
+async def test_sort_workbench_and_reports_include_sla_and_queue_boards(db_session):
+    admin = await _seed_user(db_session)
+    hub = Hub(name="Hub Bench", code="HUB-BEN")
+    db_session.add(hub)
+    await db_session.flush()
+    shipment = await _seed_shipment(db_session)
+    queue_response = await create_hub_queue(
+        encode_id(hub.id or 0),
+        HubSortQueueCreateRequest(code="QUEUE-BEN"),
+        admin,
+        db_session,
+    )
+    await intake_hub_shipment(
+        encode_id(hub.id or 0),
+        queue_response["queue_id"],
+        HubSortScanRequest(shipment_id=encode_id(shipment.id or 0)),
+        admin,
+        db_session,
+    )
+    bench = await get_hub_sort_workbench(encode_id(hub.id or 0), queue_response["queue_id"], 20, admin, db_session)
+    assert "hold_exception_items" in bench
+    assert "sorting_lanes" in bench
+    assert "sla_timers" in bench
+    report = await get_hub_operational_reports(encode_id(hub.id or 0), admin, db_session)
+    assert "throughput_by_shift" in report
+    assert "sla_breach_heatmap" in report
