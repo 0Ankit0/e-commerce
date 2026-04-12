@@ -19,6 +19,7 @@ from src.apps.finance.models.payment import PaymentStatus, PaymentTransaction
 from src.apps.finance.models.stored_value import WalletLedgerType
 from src.apps.finance.services.stored_value import create_wallet_entry, create_wallet_payment_transaction, get_wallet_balance
 from src.apps.logistics.services import quote_shipping
+from src.apps.orders.references import build_order_reference
 from src.apps.orders.models import (
     CheckoutIdempotency,
     CheckoutFinalization,
@@ -207,7 +208,7 @@ async def create_order_from_cart(
     }
     reserve_only = payment_status != OrderPaymentStatus.PAID and payment_method not in {PaymentMethod.COD, PaymentMethod.WALLET}
     order = Order(
-        order_number=generate_reference("ORD"),
+        order_number=build_order_reference(),
         user_id=user_id,
         address_id=address_id,
         coupon_id=cart.coupon_id,
