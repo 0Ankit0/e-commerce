@@ -41,6 +41,7 @@ class CheckPermissionRequest(BaseModel):
 class PrivilegedPolicyUpdateRequest(BaseModel):
     require_step_up: bool | None = None
     otp_freshness_seconds: int | None = None
+    step_up_grace_seconds: int | None = None
 
 
 # ── Response schemas ─────────────────────────────────────────────────────────

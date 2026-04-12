@@ -105,7 +105,7 @@ export interface PrivilegedActionChallengeDetail {
   code: 'OTP_CHALLENGE_REQUIRED';
   message: string;
   action: string;
-  reason: string;
+  reason: 'step_up_required' | 'step_up_expired' | 'step_up_invalid' | string;
   otp: {
     required_freshness_seconds: number;
     grace_window_seconds: number;

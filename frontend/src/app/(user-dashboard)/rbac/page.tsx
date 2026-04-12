@@ -104,6 +104,14 @@ export default function RBACPage() {
   ];
   const roleCreatePolicy = policiesQuery.data?.find((policy) => policy.action === 'admin.rbac.create_role');
   const permissionCreatePolicy = policiesQuery.data?.find((policy) => policy.action === 'admin.rbac.create_permission');
+  const challengeReasonLabel =
+    enforcementFailureReason === 'step_up_required'
+      ? 'A fresh OTP challenge is required before saving.'
+      : enforcementFailureReason === 'step_up_expired'
+        ? 'Your OTP challenge expired. Re-verify and retry.'
+        : enforcementFailureReason === 'step_up_invalid'
+          ? 'The OTP challenge token was invalid or replayed. Re-verify and retry.'
+          : enforcementFailureReason;
 
   return (
     <div className="space-y-6">
@@ -115,7 +123,7 @@ export default function RBACPage() {
         </p>
         {enforcementFailureReason ? (
           <p className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-            Step-up failure reason: {enforcementFailureReason}
+            Step-up failure reason: {challengeReasonLabel}
           </p>
         ) : null}
       </div>

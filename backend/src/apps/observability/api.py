@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, desc, func, select
 
 from src.apps.core.schemas import PaginatedResponse
-from src.apps.iam.api.deps import get_current_active_superuser, get_db, require_privileged_action
+from src.apps.iam.api.deps import get_current_active_superuser, get_db, require_strict_step_up
 from src.apps.iam.models.user import User
 from src.apps.iam.security import PrivilegedAction
 from src.apps.iam.utils.hashid import decode_id_or_404
@@ -191,7 +191,7 @@ async def get_incident(
 async def update_incident(
     incident_id: str,
     payload: SecurityIncidentUpdate,
-    current_user: User = Depends(require_privileged_action(PrivilegedAction.INCIDENT_REVIEW)),
+    current_user: User = Depends(require_strict_step_up(PrivilegedAction.INCIDENT_REVIEW)),
     db: AsyncSession = Depends(get_db),
 ) -> SecurityIncidentRead:
     iid = decode_id_or_404(incident_id)

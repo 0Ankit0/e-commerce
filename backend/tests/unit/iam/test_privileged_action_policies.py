@@ -18,15 +18,18 @@ async def test_privileged_policy_override_updates_step_up_requirements():
             action=PrivilegedAction.ROLE_ASSIGN,
             require_step_up=False,
             otp_freshness_seconds=900,
+            step_up_grace_seconds=45,
         )
 
         assert updated.require_step_up is False
         assert updated.otp_freshness_seconds == 900
+        assert updated.step_up_grace_seconds == 45
     finally:
         await override_privileged_action_policy(
             action=PrivilegedAction.ROLE_ASSIGN,
             require_step_up=original.require_step_up,
             otp_freshness_seconds=original.otp_freshness_seconds,
+            step_up_grace_seconds=original.step_up_grace_seconds,
         )
 
 
@@ -50,4 +53,5 @@ async def test_privileged_policy_override_is_action_scoped():
             action=PrivilegedAction.ROLE_PERMISSION_ASSIGN,
             require_step_up=original_assign.require_step_up,
             otp_freshness_seconds=original_assign.otp_freshness_seconds,
+            step_up_grace_seconds=original_assign.step_up_grace_seconds,
         )

@@ -540,7 +540,7 @@ async def record_privileged_action_audit(
     event_code = f"admin.privileged_action.{outcome}"
     return await create_log_entry(
         db,
-        level="WARNING" if outcome == "failure" else "INFO",
+        level="WARNING" if outcome in {"denied", "bypass_attempt"} else "INFO",
         logger_name="admin.privileged_action",
         source="admin",
         message=f"Privileged action {outcome}",
@@ -725,31 +725,31 @@ async def build_log_summary(db: AsyncSession) -> dict[str, int]:
         await db.execute(
             select(func.count(col(ObservabilityLogEntry.id))).where(
                 ObservabilityLogEntry.timestamp >= window_start,
-                ObservabilityLogEntry.event_code == "admin.privileged_action.challenge_required",
+                ObservabilityLogEntry.event_code == "admin.privileged_action.required",
             )
         )
     ).scalar_one()
-    privileged_succeeded = (
+    privileged_passed = (
         await db.execute(
             select(func.count(col(ObservabilityLogEntry.id))).where(
                 ObservabilityLogEntry.timestamp >= window_start,
-                ObservabilityLogEntry.event_code == "admin.privileged_action.success",
+                ObservabilityLogEntry.event_code == "admin.privileged_action.passed",
             )
         )
     ).scalar_one()
-    privileged_failed = (
+    privileged_denied = (
         await db.execute(
             select(func.count(col(ObservabilityLogEntry.id))).where(
                 ObservabilityLogEntry.timestamp >= window_start,
-                ObservabilityLogEntry.event_code == "admin.privileged_action.failure",
+                ObservabilityLogEntry.event_code == "admin.privileged_action.denied",
             )
         )
     ).scalar_one()
-    privileged_bypassed = (
+    privileged_bypass_attempt = (
         await db.execute(
             select(func.count(col(ObservabilityLogEntry.id))).where(
                 ObservabilityLogEntry.timestamp >= window_start,
-                ObservabilityLogEntry.event_code == "admin.privileged_action.bypassed",
+                ObservabilityLogEntry.event_code == "admin.privileged_action.bypass_attempt",
             )
         )
     ).scalar_one()
@@ -762,9 +762,13 @@ async def build_log_summary(db: AsyncSession) -> dict[str, int]:
         "acknowledged_incidents": acknowledged_incidents,
         "critical_incidents": critical_incidents,
         "privileged_step_up_required_24h": privileged_required,
-        "privileged_step_up_succeeded_24h": privileged_succeeded,
-        "privileged_step_up_failed_24h": privileged_failed,
-        "privileged_step_up_bypassed_24h": privileged_bypassed,
+        "privileged_step_up_succeeded_24h": privileged_passed,
+        "privileged_step_up_failed_24h": privileged_denied,
+        "privileged_step_up_bypassed_24h": privileged_bypass_attempt,
+        "privileged_action_required_24h": privileged_required,
+        "privileged_action_passed_24h": privileged_passed,
+        "privileged_action_denied_24h": privileged_denied,
+        "privileged_action_bypass_attempt_24h": privileged_bypass_attempt,
     }
 
 

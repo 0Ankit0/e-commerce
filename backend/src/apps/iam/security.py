@@ -27,6 +27,7 @@ class PrivilegedAction(str, Enum):
     VENDOR_SUSPEND = "admin.vendor.suspend"
     INCIDENT_REVIEW = "admin.observability.incident_review"
     SECURITY_SETTINGS_EDIT = "admin.system.security_settings_edit"
+    CONTENT_PROMOTION_PUBLISH = "admin.content.promotion_publish"
 
 
 @dataclass(frozen=True)
@@ -38,72 +39,78 @@ class PrivilegedActionPolicy:
     step_up_grace_seconds: int = 60
 
 
-PRIVILEGED_ACTION_POLICY_MAP: dict[PrivilegedAction, PrivilegedActionPolicy] = {
+PRIVILEGED_ACTION_REGISTRY: dict[PrivilegedAction, PrivilegedActionPolicy] = {
     PrivilegedAction.ROLE_CREATE: PrivilegedActionPolicy(
         action=PrivilegedAction.ROLE_CREATE,
         required_roles=("superuser",),
         require_step_up=True,
-        otp_freshness_seconds=300,
+        otp_freshness_seconds=settings.PRIVILEGED_STEP_UP_TTL_SECONDS,
     ),
     PrivilegedAction.ROLE_PERMISSION_CREATE: PrivilegedActionPolicy(
         action=PrivilegedAction.ROLE_PERMISSION_CREATE,
         required_roles=("superuser",),
         require_step_up=True,
-        otp_freshness_seconds=300,
+        otp_freshness_seconds=settings.PRIVILEGED_STEP_UP_TTL_SECONDS,
     ),
     PrivilegedAction.ROLE_ASSIGN: PrivilegedActionPolicy(
         action=PrivilegedAction.ROLE_ASSIGN,
         required_roles=("superuser",),
         require_step_up=True,
-        otp_freshness_seconds=300,
+        otp_freshness_seconds=settings.PRIVILEGED_STEP_UP_TTL_SECONDS,
     ),
     PrivilegedAction.ROLE_REMOVE: PrivilegedActionPolicy(
         action=PrivilegedAction.ROLE_REMOVE,
         required_roles=("superuser",),
         require_step_up=True,
-        otp_freshness_seconds=300,
+        otp_freshness_seconds=settings.PRIVILEGED_STEP_UP_TTL_SECONDS,
     ),
     PrivilegedAction.ROLE_PERMISSION_ASSIGN: PrivilegedActionPolicy(
         action=PrivilegedAction.ROLE_PERMISSION_ASSIGN,
         required_roles=("superuser",),
         require_step_up=True,
-        otp_freshness_seconds=300,
+        otp_freshness_seconds=settings.PRIVILEGED_STEP_UP_TTL_SECONDS,
     ),
     PrivilegedAction.ROLE_PERMISSION_REMOVE: PrivilegedActionPolicy(
         action=PrivilegedAction.ROLE_PERMISSION_REMOVE,
         required_roles=("superuser",),
         require_step_up=True,
-        otp_freshness_seconds=300,
+        otp_freshness_seconds=settings.PRIVILEGED_STEP_UP_TTL_SECONDS,
     ),
     PrivilegedAction.USER_STATUS_EDIT: PrivilegedActionPolicy(
         action=PrivilegedAction.USER_STATUS_EDIT,
         required_roles=("superuser",),
         require_step_up=True,
-        otp_freshness_seconds=300,
+        otp_freshness_seconds=settings.PRIVILEGED_STEP_UP_TTL_SECONDS,
     ),
     PrivilegedAction.PAYOUT_APPROVE: PrivilegedActionPolicy(
         action=PrivilegedAction.PAYOUT_APPROVE,
         required_roles=("superuser",),
         require_step_up=True,
-        otp_freshness_seconds=300,
+        otp_freshness_seconds=settings.PRIVILEGED_STEP_UP_TTL_SECONDS,
     ),
     PrivilegedAction.VENDOR_SUSPEND: PrivilegedActionPolicy(
         action=PrivilegedAction.VENDOR_SUSPEND,
         required_roles=("superuser",),
         require_step_up=True,
-        otp_freshness_seconds=300,
+        otp_freshness_seconds=settings.PRIVILEGED_STEP_UP_TTL_SECONDS,
     ),
     PrivilegedAction.INCIDENT_REVIEW: PrivilegedActionPolicy(
         action=PrivilegedAction.INCIDENT_REVIEW,
         required_roles=("superuser",),
         require_step_up=True,
-        otp_freshness_seconds=300,
+        otp_freshness_seconds=settings.PRIVILEGED_STEP_UP_TTL_SECONDS,
     ),
     PrivilegedAction.SECURITY_SETTINGS_EDIT: PrivilegedActionPolicy(
         action=PrivilegedAction.SECURITY_SETTINGS_EDIT,
         required_roles=("superuser",),
         require_step_up=True,
-        otp_freshness_seconds=300,
+        otp_freshness_seconds=settings.PRIVILEGED_STEP_UP_TTL_SECONDS,
+    ),
+    PrivilegedAction.CONTENT_PROMOTION_PUBLISH: PrivilegedActionPolicy(
+        action=PrivilegedAction.CONTENT_PROMOTION_PUBLISH,
+        required_roles=("superuser",),
+        require_step_up=True,
+        otp_freshness_seconds=settings.PRIVILEGED_STEP_UP_TTL_SECONDS,
     ),
 }
 
@@ -119,7 +126,7 @@ def _policy_override_cache_key(action: PrivilegedAction) -> str:
 
 
 async def resolve_privileged_action_policy(action: PrivilegedAction) -> PrivilegedActionPolicy:
-    default_policy = PRIVILEGED_ACTION_POLICY_MAP[action]
+    default_policy = PRIVILEGED_ACTION_REGISTRY[action]
     override = await RedisCache.get(_policy_override_cache_key(action))
     if not override:
         return default_policy
@@ -127,7 +134,9 @@ async def resolve_privileged_action_policy(action: PrivilegedAction) -> Privileg
         action=action,
         required_roles=tuple(override.get("required_roles") or list(default_policy.required_roles)),
         require_step_up=bool(override.get("require_step_up", default_policy.require_step_up)),
-        otp_freshness_seconds=int(override.get("otp_freshness_seconds", default_policy.otp_freshness_seconds)),
+        otp_freshness_seconds=int(
+            override.get("otp_freshness_seconds", settings.PRIVILEGED_STEP_UP_TTL_SECONDS)
+        ),
         step_up_grace_seconds=int(override.get("step_up_grace_seconds", settings.PRIVILEGED_STEP_UP_GRACE_SECONDS)),
     )
 
@@ -137,6 +146,7 @@ async def override_privileged_action_policy(
     action: PrivilegedAction,
     require_step_up: bool | None = None,
     otp_freshness_seconds: int | None = None,
+    step_up_grace_seconds: int | None = None,
 ) -> PrivilegedActionPolicy:
     base_policy = await resolve_privileged_action_policy(action)
     updated = {
@@ -145,6 +155,9 @@ async def override_privileged_action_policy(
         "require_step_up": base_policy.require_step_up if require_step_up is None else require_step_up,
         "otp_freshness_seconds": (
             base_policy.otp_freshness_seconds if otp_freshness_seconds is None else otp_freshness_seconds
+        ),
+        "step_up_grace_seconds": (
+            base_policy.step_up_grace_seconds if step_up_grace_seconds is None else step_up_grace_seconds
         ),
     }
     await RedisCache.set(_policy_override_cache_key(action), updated)
@@ -158,11 +171,13 @@ async def list_privileged_action_policies() -> list[PrivilegedActionPolicy]:
 async def issue_step_up_token(*, user_id: int, action: PrivilegedAction) -> dict[str, Any]:
     policy = await resolve_privileged_action_policy(action)
     token = secrets.token_urlsafe(32)
+    marker = secrets.token_urlsafe(18)
     expires_at = _now() + timedelta(seconds=policy.otp_freshness_seconds)
     grace_expires_at = expires_at + timedelta(seconds=policy.step_up_grace_seconds)
     payload = {
         "user_id": user_id,
         "action": action.value,
+        "marker": marker,
         "expires_at": expires_at.isoformat(),
         "issued_at": _now().isoformat(),
         "grace_expires_at": grace_expires_at.isoformat(),
@@ -171,6 +186,17 @@ async def issue_step_up_token(*, user_id: int, action: PrivilegedAction) -> dict
     await RedisCache.set(
         f"privileged:stepup:{token}",
         payload,
+        ttl=policy.otp_freshness_seconds + policy.step_up_grace_seconds,
+    )
+    await RedisCache.set(
+        f"privileged:marker:{user_id}:{action.value}:{marker}",
+        {
+            "user_id": user_id,
+            "action": action.value,
+            "issued_at": payload["issued_at"],
+            "expires_at": payload["expires_at"],
+            "grace_expires_at": payload["grace_expires_at"],
+        },
         ttl=policy.otp_freshness_seconds + policy.step_up_grace_seconds,
     )
     return {
@@ -239,7 +265,7 @@ async def enforce_privileged_action(
             db,
             actor_user_id=current_user.id,
             action=action.value,
-            outcome="failure",
+            outcome="denied",
             request=request,
             metadata={"reason": "role_requirement_not_met", "required_roles": list(policy.required_roles)},
         )
@@ -251,7 +277,7 @@ async def enforce_privileged_action(
             db,
             actor_user_id=current_user.id,
             action=action.value,
-            outcome="success",
+            outcome="passed",
             request=request,
             metadata={"reason": "step_up_not_required"},
         )
@@ -261,7 +287,7 @@ async def enforce_privileged_action(
             db,
             actor_user_id=current_user.id,
             action=action.value,
-            outcome="bypassed",
+            outcome="bypass_attempt",
             request=request,
             metadata={"reason": "audit_only_mode"},
         )
@@ -273,14 +299,14 @@ async def enforce_privileged_action(
             db,
             actor_user_id=current_user.id,
             action=action.value,
-            outcome="challenge_required",
+            outcome="required",
             request=request,
-            metadata={"reason": "missing_step_up_token"},
+            metadata={"reason": "step_up_required"},
         )
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=await build_privileged_action_error(action, reason="missing_step_up_token"),
+            detail=await build_privileged_action_error(action, reason="step_up_required"),
         )
 
     payload = await _read_step_up_token(token=token)
@@ -289,14 +315,14 @@ async def enforce_privileged_action(
             db,
             actor_user_id=current_user.id,
             action=action.value,
-            outcome="challenge_required",
+            outcome="denied",
             request=request,
-            metadata={"reason": "expired_or_invalid_step_up_token"},
+            metadata={"reason": "step_up_invalid"},
         )
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=await build_privileged_action_error(action, reason="expired_or_invalid_step_up_token"),
+            detail=await build_privileged_action_error(action, reason="step_up_invalid"),
         )
     try:
         expires_at = datetime.fromisoformat(str(payload.get("expires_at")))
@@ -307,14 +333,30 @@ async def enforce_privileged_action(
             db,
             actor_user_id=current_user.id,
             action=action.value,
-            outcome="challenge_required",
+            outcome="denied",
             request=request,
-            metadata={"reason": "step_up_expired_requires_rechallenge"},
+            metadata={"reason": "step_up_expired"},
         )
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=await build_privileged_action_error(action, reason="step_up_expired_requires_rechallenge"),
+            detail=await build_privileged_action_error(action, reason="step_up_expired"),
+        )
+    marker = str(payload.get("marker", "")).strip()
+    marker_payload = await RedisCache.get(f"privileged:marker:{current_user.id}:{action.value}:{marker}")
+    if not marker_payload:
+        await record_privileged_action_audit(
+            db,
+            actor_user_id=current_user.id,
+            action=action.value,
+            outcome="denied",
+            request=request,
+            metadata={"reason": "step_up_invalid", "marker": marker},
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=await build_privileged_action_error(action, reason="step_up_invalid"),
         )
     payload = await consume_step_up_token(token=token)
     if not payload:
@@ -322,14 +364,14 @@ async def enforce_privileged_action(
             db,
             actor_user_id=current_user.id,
             action=action.value,
-            outcome="challenge_required",
+            outcome="denied",
             request=request,
-            metadata={"reason": "step_up_token_race_or_replay"},
+            metadata={"reason": "step_up_invalid"},
         )
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=await build_privileged_action_error(action, reason="step_up_token_race_or_replay"),
+            detail=await build_privileged_action_error(action, reason="step_up_invalid"),
         )
 
     if int(payload.get("user_id", 0)) != current_user.id:
@@ -337,14 +379,14 @@ async def enforce_privileged_action(
             db,
             actor_user_id=current_user.id,
             action=action.value,
-            outcome="failure",
+            outcome="denied",
             request=request,
             metadata={"reason": "token_user_mismatch"},
         )
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=await build_privileged_action_error(action, reason="token_user_mismatch"),
+            detail=await build_privileged_action_error(action, reason="step_up_invalid"),
         )
 
     if payload.get("action") != action.value:
@@ -352,21 +394,21 @@ async def enforce_privileged_action(
             db,
             actor_user_id=current_user.id,
             action=action.value,
-            outcome="failure",
+            outcome="denied",
             request=request,
             metadata={"reason": "token_action_mismatch"},
         )
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=await build_privileged_action_error(action, reason="token_action_mismatch"),
+            detail=await build_privileged_action_error(action, reason="step_up_invalid"),
         )
 
     await record_privileged_action_audit(
         db,
         actor_user_id=current_user.id,
         action=action.value,
-        outcome="success",
+        outcome="passed",
         request=request,
         metadata={
             "reason": "step_up_validated",

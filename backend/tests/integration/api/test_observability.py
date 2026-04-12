@@ -181,7 +181,7 @@ class TestObservabilityAPI:
             json={"status": "acknowledged", "review_notes": "Investigating"},
         )
         assert blocked.status_code == 403, blocked.text
-        assert blocked.json()["detail"]["reason"] == "missing_step_up_token"
+        assert blocked.json()["detail"]["reason"] == "step_up_required"
 
         step_up = await client.post(
             "/api/v1/auth/otp/step-up/verify",
@@ -198,6 +198,15 @@ class TestObservabilityAPI:
         assert response.status_code == 200, response.text
         assert response.json()["status"] == "acknowledged"
         assert response.json()["review_notes"] == "Investigating"
+
+        summary = await client.get(
+            "/api/v1/observability/logs/summary",
+            headers=headers,
+        )
+        assert summary.status_code == 200, summary.text
+        payload = summary.json()
+        assert payload["privileged_action_required_24h"] >= 1
+        assert payload["privileged_action_passed_24h"] >= 1
 
     @pytest.mark.asyncio
     async def test_policy_toggle_can_disable_incident_step_up(self, client: AsyncClient, db_session: AsyncSession):

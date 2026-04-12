@@ -57,6 +57,10 @@ class ObservabilityLogSummary(BaseModel):
     privileged_step_up_succeeded_24h: int
     privileged_step_up_failed_24h: int
     privileged_step_up_bypassed_24h: int
+    privileged_action_required_24h: int
+    privileged_action_passed_24h: int
+    privileged_action_denied_24h: int
+    privileged_action_bypass_attempt_24h: int
 
 
 class SecurityIncidentRead(_HashIdModel):

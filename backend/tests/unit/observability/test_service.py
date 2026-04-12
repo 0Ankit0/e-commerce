@@ -10,6 +10,7 @@ from src.apps.observability.service import (
     create_log_entry,
     create_or_update_incident,
     evaluate_failed_login_burst,
+    record_privileged_action_audit,
 )
 
 
@@ -130,3 +131,22 @@ class TestObservabilityService:
         finally:
             settings.FAILED_LOGIN_BURST_THRESHOLD = original_threshold
             settings.FAILED_LOGIN_BURST_WINDOW_MINUTES = original_window
+
+    @pytest.mark.asyncio
+    async def test_privileged_action_summary_tracks_required_pass_denied_and_bypass(self, db_session: AsyncSession):
+        for outcome in ("required", "passed", "denied", "bypass_attempt"):
+            await record_privileged_action_audit(
+                db_session,
+                actor_user_id=1,
+                action="admin.rbac.assign_role",
+                outcome=outcome,
+                metadata={"reason": outcome},
+            )
+        await db_session.commit()
+
+        summary = await build_log_summary(db_session)
+
+        assert summary["privileged_action_required_24h"] == 1
+        assert summary["privileged_action_passed_24h"] == 1
+        assert summary["privileged_action_denied_24h"] == 1
+        assert summary["privileged_action_bypass_attempt_24h"] == 1
