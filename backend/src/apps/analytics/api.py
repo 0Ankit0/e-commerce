@@ -56,8 +56,10 @@ async def get_feature_flag(
 @router.get("/branch-kpis/snapshot")
 async def get_branch_kpi_snapshot(
     branch_id: str | None = None,
+    zone_id: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    timezone: str = "UTC",
     agent_id: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -68,16 +70,20 @@ async def get_branch_kpi_snapshot(
         branch_id=decode_id_or_404(branch_id) if branch_id else None,
         allowed_branch_ids=allowed_branch_ids,
         agent_id=decode_id_or_404(agent_id) if agent_id else None,
+        zone_id=decode_id_or_404(zone_id) if zone_id else None,
         date_from=date_from,
         date_to=date_to,
+        timezone_name=timezone,
     )
 
 
 @router.get("/branch-kpis/drilldown")
 async def get_branch_kpi_drilldown(
     branch_id: str | None = None,
+    zone_id: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    timezone: str = "UTC",
     agent_id: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -88,8 +94,10 @@ async def get_branch_kpi_drilldown(
         branch_id=decode_id_or_404(branch_id) if branch_id else None,
         allowed_branch_ids=allowed_branch_ids,
         agent_id=decode_id_or_404(agent_id) if agent_id else None,
+        zone_id=decode_id_or_404(zone_id) if zone_id else None,
         date_from=date_from,
         date_to=date_to,
+        timezone_name=timezone,
     )
 
 

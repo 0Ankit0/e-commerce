@@ -40,8 +40,10 @@ export interface SecurityIncidentFilters {
 
 export interface BranchDashboardFilters {
   branch_id?: string;
+  zone_id?: string;
   date_from?: string;
   date_to?: string;
+  timezone?: string;
   agent_id?: string;
 }
 
@@ -156,6 +158,19 @@ export function useBranchDashboardDrilldown(filters: BranchDashboardFilters) {
     queryKey: ['branch-dashboard-drilldown', filters],
     queryFn: async () => {
       const response = await apiClient.get<BranchDashboardDrilldownResponse>('/analytics/branch-kpis/drilldown', { params: filters });
+      return response.data;
+    },
+    staleTime: 15_000,
+  });
+}
+
+export function useBranchDashboardAlerts(filters: BranchDashboardFilters) {
+  return useQuery({
+    queryKey: ['branch-dashboard-alerts', filters],
+    queryFn: async () => {
+      const response = await apiClient.get<{ alerts: Array<{ code: string; severity: string; message: string }> }>('/logistics/branch-dashboard/alerts', {
+        params: filters,
+      });
       return response.data;
     },
     staleTime: 15_000,

@@ -81,9 +81,14 @@ from src.apps.logistics.services import (
     assign_sort_bucket,
     build_branch_kpi_drilldown,
     build_branch_kpi_snapshot,
+    list_branch_dashboard_alerts,
+    reassign_branch_load,
+    prioritize_aging_shipments,
+    escalate_branch_issues,
     stage_outbound_shipment,
     confirm_dispatch,
     resolve_user_branch_scope,
+    ensure_branch_scope_access,
 )
 from src.apps.orders.models import Order, OrderStatus, ReturnRequest, ReturnStatus, Shipment, ShipmentTracking, VendorOrder
 from src.apps.notification.services.commerce_events import notify_delivery_exception, notify_order_event, notify_return_event
@@ -192,6 +197,24 @@ class BranchInventoryMovementCreateRequest(BaseModel):
     movement_type: str = Field(min_length=3, max_length=40)
     quantity: int
     notes: str = ""
+
+
+class BranchLoadReassignRequest(BaseModel):
+    branch_id: str
+    from_agent_id: str
+    to_agent_id: str
+    limit: int = Field(default=10, ge=1, le=100)
+
+
+class BranchAgingPriorityRequest(BaseModel):
+    branch_id: str
+    assignee_agent_id: str | None = None
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class BranchIssueEscalationRequest(BaseModel):
+    branch_id: str
+    note: str = Field(default="Escalated from branch cockpit", max_length=255)
 
 
 class RouteOptimizationRequest(BaseModel):
@@ -2206,8 +2229,10 @@ async def get_branch_performance(
 @router.get("/logistics/branch-dashboard/snapshot")
 async def get_branch_dashboard_snapshot(
     branch_id: str | None = None,
+    zone_id: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    timezone: str = Query(default="UTC"),
     agent_id: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -2218,16 +2243,20 @@ async def get_branch_dashboard_snapshot(
         branch_id=decode_id_or_404(branch_id) if branch_id else None,
         allowed_branch_ids=allowed_branch_ids,
         agent_id=decode_id_or_404(agent_id) if agent_id else None,
+        zone_id=decode_id_or_404(zone_id) if zone_id else None,
         date_from=date_from,
         date_to=date_to,
+        timezone_name=timezone,
     )
 
 
 @router.get("/logistics/branch-dashboard/drilldown")
 async def get_branch_dashboard_drilldown(
     branch_id: str | None = None,
+    zone_id: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    timezone: str = Query(default="UTC"),
     agent_id: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -2238,16 +2267,20 @@ async def get_branch_dashboard_drilldown(
         branch_id=decode_id_or_404(branch_id) if branch_id else None,
         allowed_branch_ids=allowed_branch_ids,
         agent_id=decode_id_or_404(agent_id) if agent_id else None,
+        zone_id=decode_id_or_404(zone_id) if zone_id else None,
         date_from=date_from,
         date_to=date_to,
+        timezone_name=timezone,
     )
 
 
 @router.get("/logistics/branch-dashboard/export")
 async def export_branch_dashboard_snapshot(
     branch_id: str | None = None,
+    zone_id: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    timezone: str = Query(default="UTC"),
     agent_id: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -2258,8 +2291,10 @@ async def export_branch_dashboard_snapshot(
         branch_id=decode_id_or_404(branch_id) if branch_id else None,
         allowed_branch_ids=allowed_branch_ids,
         agent_id=decode_id_or_404(agent_id) if agent_id else None,
+        zone_id=decode_id_or_404(zone_id) if zone_id else None,
         date_from=date_from,
         date_to=date_to,
+        timezone_name=timezone,
     )
     buffer = io.StringIO()
     writer = csv.writer(buffer)
@@ -2271,6 +2306,126 @@ async def export_branch_dashboard_snapshot(
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="branch-dashboard-kpis.csv"'},
     )
+
+
+@router.get("/logistics/branch-dashboard/alerts")
+async def get_branch_dashboard_alerts(
+    branch_id: str | None = None,
+    zone_id: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    timezone: str = Query(default="UTC"),
+    agent_id: str | None = None,
+    backlog_threshold: int = Query(default=25, ge=1),
+    low_staff_threshold: int = Query(default=2, ge=0),
+    failure_rate_threshold: float = Query(default=20.0, ge=0, le=100),
+    sla_breach_threshold: int = Query(default=1, ge=1),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    allowed_branch_ids = await resolve_user_branch_scope(current_user, db)
+    return await list_branch_dashboard_alerts(
+        db=db,
+        branch_id=decode_id_or_404(branch_id) if branch_id else None,
+        allowed_branch_ids=allowed_branch_ids,
+        agent_id=decode_id_or_404(agent_id) if agent_id else None,
+        zone_id=decode_id_or_404(zone_id) if zone_id else None,
+        date_from=date_from,
+        date_to=date_to,
+        timezone_name=timezone,
+        backlog_threshold=backlog_threshold,
+        low_staff_threshold=low_staff_threshold,
+        failure_rate_threshold=failure_rate_threshold,
+        sla_breach_threshold=sla_breach_threshold,
+    )
+
+
+@router.post("/logistics/branch-dashboard/actions/reassign-load")
+async def post_branch_dashboard_reassign_load(
+    payload: BranchLoadReassignRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    allowed_branch_ids = await resolve_user_branch_scope(current_user, db)
+    branch_id = decode_id_or_404(payload.branch_id)
+    ensure_branch_scope_access(allowed_branch_ids=allowed_branch_ids, requested_branch_id=branch_id)
+    result = await reassign_branch_load(
+        db=db,
+        branch_id=branch_id,
+        from_agent_id=decode_id_or_404(payload.from_agent_id),
+        to_agent_id=decode_id_or_404(payload.to_agent_id),
+        limit=payload.limit,
+    )
+    await db.commit()
+    return result
+
+
+@router.post("/logistics/branch-dashboard/actions/prioritize-aging")
+async def post_branch_dashboard_prioritize_aging(
+    payload: BranchAgingPriorityRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    allowed_branch_ids = await resolve_user_branch_scope(current_user, db)
+    branch_id = decode_id_or_404(payload.branch_id)
+    ensure_branch_scope_access(allowed_branch_ids=allowed_branch_ids, requested_branch_id=branch_id)
+    result = await prioritize_aging_shipments(
+        db=db,
+        branch_id=branch_id,
+        assignee_agent_id=decode_id_or_404(payload.assignee_agent_id) if payload.assignee_agent_id else None,
+        limit=payload.limit,
+    )
+    await db.commit()
+    return result
+
+
+@router.post("/logistics/branch-dashboard/actions/escalate-issues")
+async def post_branch_dashboard_escalate_issues(
+    payload: BranchIssueEscalationRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    allowed_branch_ids = await resolve_user_branch_scope(current_user, db)
+    branch_id = decode_id_or_404(payload.branch_id)
+    ensure_branch_scope_access(allowed_branch_ids=allowed_branch_ids, requested_branch_id=branch_id)
+    result = await escalate_branch_issues(db=db, branch_id=branch_id, note=payload.note)
+    await db.commit()
+    return result
+
+
+@router.get("/logistics/branch-dashboard/weekly-review")
+async def get_branch_dashboard_weekly_review(
+    branch_id: str | None = None,
+    zone_id: str | None = None,
+    week_ending: date | None = None,
+    timezone: str = Query(default="UTC"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    end = week_ending or utc_now().date()
+    start = end.fromordinal(end.toordinal() - 6)
+    allowed_branch_ids = await resolve_user_branch_scope(current_user, db)
+    snapshot = await build_branch_kpi_snapshot(
+        db=db,
+        branch_id=decode_id_or_404(branch_id) if branch_id else None,
+        allowed_branch_ids=allowed_branch_ids,
+        agent_id=None,
+        zone_id=decode_id_or_404(zone_id) if zone_id else None,
+        date_from=start,
+        date_to=end,
+        timezone_name=timezone,
+    )
+    alerts = await list_branch_dashboard_alerts(
+        db=db,
+        branch_id=decode_id_or_404(branch_id) if branch_id else None,
+        allowed_branch_ids=allowed_branch_ids,
+        agent_id=None,
+        zone_id=decode_id_or_404(zone_id) if zone_id else None,
+        date_from=start,
+        date_to=end,
+        timezone_name=timezone,
+    )
+    return {"week_start": start.isoformat(), "week_end": end.isoformat(), "snapshot": snapshot["snapshot"], "alerts": alerts["alerts"]}
 
 
 @router.get("/logistics/hubs/{hub_id}/performance")
