@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from src.apps.commerce.models import Address
+from src.apps.analytics import get_analytics
 from src.apps.core.time import utc_now
 from src.apps.iam.utils.hashid import encode_id
 from src.apps.logistics.models import (
@@ -1271,23 +1272,43 @@ async def build_branch_kpi_snapshot(
     rto_count = len([item for item in exceptions if item.status == DeliveryExceptionStatus.RTO_INITIATED])
     pending_jobs = [job for job in pickup_jobs if job.status in {PickupJobStatus.PENDING, PickupJobStatus.ASSIGNED}]
     now = utc_now()
+    analytics = get_analytics()
+    inventory_health = analytics.build_branch_inventory_health(
+        inventory_on_hand_units=sum(item.quantity for item in inventory_rows),
+        items_at_risk=len([item for item in inventory_rows if item.quantity <= 0]),
+        total_items=len(inventory_rows),
+    )
+    aging_buckets = analytics.build_branch_undelivered_aging_buckets(
+        over_2h=len([job for job in pending_jobs if (now - job.created_at).total_seconds() >= 2 * 3600]),
+        over_6h=len([job for job in pending_jobs if (now - job.created_at).total_seconds() >= 6 * 3600]),
+        over_12h=len([job for job in pending_jobs if (now - job.created_at).total_seconds() >= 12 * 3600]),
+    )
+    attempt_and_exception_metrics = analytics.build_branch_attempt_and_exception_metrics(
+        first_attempt_successes=success_attempts,
+        total_attempts=total_attempts,
+        rto_count=rto_count,
+        open_exceptions=len([item for item in exceptions if item.status in {DeliveryExceptionStatus.OPEN, DeliveryExceptionStatus.RESCHEDULED}]),
+    )
+    avg_utilization = (
+        sum(((agent.current_load / agent.capacity) * 100) if agent.capacity else 0 for agent in agents) / len(agents)
+        if agents
+        else 0.0
+    )
+    agent_utilization = analytics.build_branch_agent_utilization(
+        assigned_agents=len([agent for agent in agents if agent.status == DeliveryAgentStatus.ASSIGNED]),
+        active_agents=len([agent for agent in agents if agent.status == DeliveryAgentStatus.AVAILABLE]),
+        average_utilization_percent=avg_utilization,
+    )
+
     snapshot.update(
         {
             "attempt_success_rate_percent": round((success_attempts / total_attempts) * 100, 2) if total_attempts else 0.0,
             "attempt_failure_rate_percent": round((failed_attempts / total_attempts) * 100, 2) if total_attempts else 0.0,
             "rto_rate_percent": round((rto_count / len(exceptions)) * 100, 2) if exceptions else 0.0,
-            "assigned_agents": len([agent for agent in agents if agent.status == DeliveryAgentStatus.ASSIGNED]),
-            "avg_agent_utilization_percent": round(
-                sum(((agent.current_load / agent.capacity) * 100) if agent.capacity else 0 for agent in agents) / len(agents),
-                2,
-            )
-            if agents
-            else 0.0,
-            "aging_queue_over_2h": len([job for job in pending_jobs if (now - job.created_at).total_seconds() >= 2 * 3600]),
-            "aging_queue_over_6h": len([job for job in pending_jobs if (now - job.created_at).total_seconds() >= 6 * 3600]),
-            "aging_queue_over_12h": len([job for job in pending_jobs if (now - job.created_at).total_seconds() >= 12 * 3600]),
-            "inventory_on_hand_units": sum(item.quantity for item in inventory_rows),
-            "inventory_posture": "healthy" if len([item for item in inventory_rows if item.quantity <= 0]) == 0 else "at_risk",
+            **inventory_health,
+            **aging_buckets,
+            **attempt_and_exception_metrics,
+            **agent_utilization,
         }
     )
     branch_code_map: dict[int, str] = {}
@@ -1399,6 +1420,44 @@ async def build_branch_kpi_drilldown(
             "open_exceptions": len([item for item in exceptions if item.status in {DeliveryExceptionStatus.OPEN, DeliveryExceptionStatus.RESCHEDULED}]),
         },
         "inventory_flow": movement_totals,
+        "actionable_queues": {
+            "reassign_agent": [
+                {
+                    "agent_id": encode_id(agent_key),
+                    "agent_name": agent_names.get(agent_key, f"Agent {agent_key}"),
+                    "assigned": totals["assigned"],
+                    "recommended_target": "lower_load_agent",
+                }
+                for agent_key, totals in sorted(productivity.items(), key=lambda item: item[1]["assigned"], reverse=True)[:5]
+            ],
+            "escalate_delayed": [
+                {
+                    "exception_id": encode_id(item.id or 0),
+                    "shipment_id": encode_id(item.shipment_id) if item.shipment_id else None,
+                    "agent_id": encode_id(item.agent_id) if item.agent_id else None,
+                    "age_hours": round((utc_now() - item.created_at).total_seconds() / 3600, 2),
+                }
+                for item in sorted(
+                    [
+                        exception
+                        for exception in exceptions
+                        if exception.status in {DeliveryExceptionStatus.OPEN, DeliveryExceptionStatus.RESCHEDULED}
+                    ],
+                    key=lambda exception: exception.created_at,
+                )[:20]
+            ],
+            "prioritize_aging": [
+                {
+                    "pickup_job_id": encode_id(job.id or 0),
+                    "shipment_id": encode_id(job.shipment_id) if job.shipment_id else None,
+                    "age_hours": round((utc_now() - job.created_at).total_seconds() / 3600, 2),
+                }
+                for job in sorted(
+                    [job for job in pickups if job.status in {PickupJobStatus.PENDING, PickupJobStatus.ASSIGNED}],
+                    key=lambda item: item.created_at,
+                )[:20]
+            ],
+        },
         "timezone": timezone_name,
     }
 
@@ -1438,7 +1497,24 @@ async def list_branch_dashboard_alerts(
         alerts.append({"code": "high_failure", "severity": "high", "message": "Failure rate exceeded threshold."})
     if int(snapshot.get("open_exceptions", 0)) >= sla_breach_threshold:
         alerts.append({"code": "sla_violation", "severity": "high", "message": "SLA violation threshold breached."})
-    return {"alerts": alerts, "thresholds": {"backlog": backlog_threshold, "low_staff": low_staff_threshold, "failure_rate": failure_rate_threshold, "sla_breach": sla_breach_threshold}}
+    escalation_hooks = []
+    for alert in alerts:
+        if alert["code"] == "backlog":
+            escalation_hooks.append({"action": "prioritize_aging", "path": "/logistics/branch-dashboard/actions/prioritize-aging"})
+        if alert["code"] == "sla_violation":
+            escalation_hooks.append({"action": "escalate_issues", "path": "/logistics/branch-dashboard/actions/escalate-issues"})
+        if alert["code"] == "high_failure":
+            escalation_hooks.append({"action": "reassign_load", "path": "/logistics/branch-dashboard/actions/reassign-load"})
+    return {
+        "alerts": alerts,
+        "thresholds": {
+            "backlog": backlog_threshold,
+            "low_staff": low_staff_threshold,
+            "failure_rate": failure_rate_threshold,
+            "sla_breach": sla_breach_threshold,
+        },
+        "escalation_hooks": escalation_hooks,
+    }
 
 
 async def reassign_branch_load(*, db: AsyncSession, branch_id: int, from_agent_id: int, to_agent_id: int, limit: int = 10) -> dict[str, int]:

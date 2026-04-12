@@ -182,3 +182,61 @@ class AnalyticsService:
             "top_exception_category": ranked[0][0] if ranked else None,
             "total_exception_shipments": total,
         }
+
+    def build_branch_inventory_health(
+        self,
+        *,
+        inventory_on_hand_units: int,
+        items_at_risk: int,
+        total_items: int,
+    ) -> dict[str, int | float | str]:
+        risk_ratio = round((items_at_risk / total_items) * 100, 2) if total_items else 0.0
+        return {
+            "inventory_on_hand_units": inventory_on_hand_units,
+            "items_at_risk": items_at_risk,
+            "inventory_risk_ratio_percent": risk_ratio,
+            "inventory_posture": "at_risk" if items_at_risk else "healthy",
+        }
+
+    def build_branch_undelivered_aging_buckets(
+        self,
+        *,
+        over_2h: int,
+        over_6h: int,
+        over_12h: int,
+    ) -> dict[str, int]:
+        return {
+            "aging_queue_over_2h": over_2h,
+            "aging_queue_over_6h": over_6h,
+            "aging_queue_over_12h": over_12h,
+        }
+
+    def build_branch_attempt_and_exception_metrics(
+        self,
+        *,
+        first_attempt_successes: int,
+        total_attempts: int,
+        rto_count: int,
+        open_exceptions: int,
+    ) -> dict[str, int | float]:
+        first_attempt_success_rate = round((first_attempt_successes / total_attempts) * 100, 2) if total_attempts else 0.0
+        rto_rate = round((rto_count / open_exceptions) * 100, 2) if open_exceptions else 0.0
+        return {
+            "first_attempt_success_rate_percent": first_attempt_success_rate,
+            "rto_rate_percent": rto_rate,
+            "open_exceptions": open_exceptions,
+            "rto_count": rto_count,
+        }
+
+    def build_branch_agent_utilization(
+        self,
+        *,
+        assigned_agents: int,
+        active_agents: int,
+        average_utilization_percent: float,
+    ) -> dict[str, int | float]:
+        return {
+            "assigned_agents": assigned_agents,
+            "active_agent_count": active_agents,
+            "avg_agent_utilization_percent": round(average_utilization_percent, 2),
+        }

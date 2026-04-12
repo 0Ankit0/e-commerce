@@ -170,7 +170,10 @@ export function useBranchDashboardAlerts(filters: BranchDashboardFilters) {
   return useQuery({
     queryKey: ['branch-dashboard-alerts', filters],
     queryFn: async () => {
-      const response = await apiClient.get<{ alerts: Array<{ code: string; severity: string; message: string }> }>('/logistics/branch-dashboard/alerts', {
+      const response = await apiClient.get<{
+        alerts: Array<{ code: string; severity: string; message: string }>;
+        escalation_hooks?: Array<{ action: string; path: string }>;
+      }>('/logistics/branch-dashboard/alerts', {
         params: filters,
       });
       return response.data;
