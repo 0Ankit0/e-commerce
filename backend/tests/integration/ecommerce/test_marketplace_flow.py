@@ -556,8 +556,8 @@ async def test_line_haul_planner_draft_save_and_apply_flow(client: AsyncClient, 
     assert validate_resp.status_code == 200, validate_resp.text
     assert validate_resp.json()["is_valid"] is False
     error_codes = {err["code"] for err in validate_resp.json()["errors"]}
-    assert "over_capacity" in error_codes
-    assert "duplicate_assignment" in error_codes
+    assert "LOG_PLANNER_OVER_CAPACITY" in error_codes
+    assert "LOG_PLANNER_DUPLICATE_ASSIGNMENT" in error_codes
 
     save_resp = await client.post(
         "/api/v1/logistics/line-haul-planner/drafts",
@@ -578,7 +578,7 @@ async def test_line_haul_planner_draft_save_and_apply_flow(client: AsyncClient, 
     assert save_resp.json()["validation"]["is_valid"] is False
 
     apply_conflicting_resp = await client.post(
-        f"/api/v1/logistics/line-haul-planner/drafts/{draft_id}/apply",
+        f"/api/v1/logistics/line-haul-planner/drafts/{draft_id}/apply?expected_version={save_resp.json()['version']}",
         headers=admin_headers,
     )
     assert apply_conflicting_resp.status_code == 409, apply_conflicting_resp.text
@@ -601,15 +601,68 @@ async def test_line_haul_planner_draft_save_and_apply_flow(client: AsyncClient, 
     valid_draft_id = valid_save_resp.json()["draft_id"]
 
     apply_valid_resp = await client.post(
-        f"/api/v1/logistics/line-haul-planner/drafts/{valid_draft_id}/apply",
+        f"/api/v1/logistics/line-haul-planner/drafts/{valid_draft_id}/apply?expected_version={valid_save_resp.json()['version']}",
         headers=admin_headers,
     )
     assert apply_valid_resp.status_code == 200, apply_valid_resp.text
-    assert apply_valid_resp.json()["status"] == "finalized"
+    assert apply_valid_resp.json()["status"] == "published"
 
     list_drafts_resp = await client.get("/api/v1/logistics/line-haul-planner/drafts", headers=admin_headers)
     assert list_drafts_resp.status_code == 200, list_drafts_resp.text
     assert len(list_drafts_resp.json()["items"]) >= 2
+
+
+@pytest.mark.asyncio
+async def test_line_haul_planner_draft_lifecycle_with_versioning_and_manifest_generation(client: AsyncClient, db_session: AsyncSession):
+    _, admin_headers = await _create_user_headers(
+        db_session,
+        username="planner_lifecycle_admin",
+        email="planner-lifecycle-admin@example.com",
+        is_superuser=True,
+    )
+
+    create_resp = await client.post(
+        "/api/v1/logistics/line-haul-planner/drafts",
+        headers=admin_headers,
+        json={
+            "name": "Lifecycle draft",
+            "status": "draft",
+            "routes": [{"route_id": "KTM-PKR", "origin_hub": "KTM", "destination_hub": "PKR", "demand_units": 10}],
+            "vehicles": [{"vehicle_id": "TRUCK-1", "hub_code": "KTM", "capacity_units": 20}],
+            "connectivity": {"KTM": ["PKR"], "PKR": ["KTM"]},
+            "locked_assignments": [],
+            "assignments": [],
+            "optimizer_metadata": {},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    draft = create_resp.json()
+
+    conflict_resp = await client.post(
+        f"/api/v1/logistics/line-haul-planner/drafts/{draft['draft_id']}/apply?expected_version=999",
+        headers=admin_headers,
+    )
+    assert conflict_resp.status_code == 409, conflict_resp.text
+
+    optimize_resp = await client.post(
+        f"/api/v1/logistics/line-haul-planner/drafts/{draft['draft_id']}/optimize?expected_version={draft['version']}&random_seed=7",
+        headers=admin_headers,
+    )
+    assert optimize_resp.status_code == 200, optimize_resp.text
+    optimized = optimize_resp.json()
+    assert optimized["validation"]["is_valid"] is True
+
+    publish_resp = await client.post(
+        f"/api/v1/logistics/line-haul-planner/drafts/{draft['draft_id']}/apply?expected_version={optimized['version']}",
+        headers=admin_headers,
+    )
+    assert publish_resp.status_code == 200, publish_resp.text
+    published = publish_resp.json()
+    assert published["status"] == "published"
+    assert len(published["generated_manifest_ids"]) == 1
+
+    manifest_db = await db_session.get(ShipmentManifest, decode_id_or_404(published["generated_manifest_ids"][0]))
+    assert manifest_db is not None
 
 
 @pytest.mark.asyncio

@@ -41,6 +41,7 @@ from src.apps.logistics.models import (
     ShipmentManifestStatus,
     ShippingOption,
 )
+from src.apps.logistics.planner import LockedAssignment, PlannerInput, RouteDefinition, VehicleCapacity, run_line_haul_optimizer
 from src.apps.orders.models import Order, OrderStatus, ReturnRequest, Shipment, ShipmentTracking, VendorOrder, VendorOrderStatus
 from src.apps.iam.models.user import User
 
@@ -51,17 +52,29 @@ ALLOWED_SHIPMENT_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.OUT_FOR_DELIVERY: {OrderStatus.DELIVERED, OrderStatus.RETURNED},
 }
 
+PLANNER_ERROR_UNKNOWN_ROUTE = "LOG_PLANNER_UNKNOWN_ROUTE"
+PLANNER_ERROR_UNKNOWN_VEHICLE = "LOG_PLANNER_UNKNOWN_VEHICLE"
+PLANNER_ERROR_DUPLICATE_ASSIGNMENT = "LOG_PLANNER_DUPLICATE_ASSIGNMENT"
+PLANNER_ERROR_OVER_CAPACITY = "LOG_PLANNER_OVER_CAPACITY"
+PLANNER_ERROR_ROUTE_INCOMPATIBLE = "LOG_PLANNER_ROUTE_INCOMPATIBLE"
+PLANNER_ERROR_ROUTE_UNSCHEDULED = "LOG_PLANNER_ROUTE_UNSCHEDULED"
+
 
 def validate_line_haul_assignments(
     *,
     routes: list[dict[str, object]],
     vehicles: list[dict[str, object]],
     assignments: list[dict[str, object]],
+    connectivity: dict[str, list[str]] | None = None,
 ) -> dict[str, object]:
+    network = connectivity or {}
     route_ids = {str(route.get("route_id") or "") for route in routes}
+    route_lookup = {str(route.get("route_id") or ""): route for route in routes}
     vehicle_caps = {str(vehicle.get("vehicle_id") or ""): max(int(vehicle.get("capacity_units") or 0), 0) for vehicle in vehicles}
+    vehicle_hubs = {str(vehicle.get("vehicle_id") or ""): str(vehicle.get("hub_code") or "") for vehicle in vehicles}
     vehicle_loads: dict[str, int] = defaultdict(int)
     duplicate_pairs: dict[tuple[str, str], int] = defaultdict(int)
+    route_assigned_units: dict[str, int] = defaultdict(int)
     errors: list[dict[str, object]] = []
 
     for idx, assignment in enumerate(assignments):
@@ -71,11 +84,12 @@ def validate_line_haul_assignments(
 
         duplicate_pairs[(route_id, vehicle_id)] += 1
         vehicle_loads[vehicle_id] += assigned_units
+        route_assigned_units[route_id] += assigned_units
 
         if route_id not in route_ids:
             errors.append(
                 {
-                    "code": "unknown_route",
+                    "code": PLANNER_ERROR_UNKNOWN_ROUTE,
                     "message": f"Assignment row {idx + 1} references unknown route '{route_id}'.",
                     "field": "route_id",
                     "route_id": route_id,
@@ -85,19 +99,37 @@ def validate_line_haul_assignments(
         if vehicle_id not in vehicle_caps:
             errors.append(
                 {
-                    "code": "unknown_vehicle",
+                    "code": PLANNER_ERROR_UNKNOWN_VEHICLE,
                     "message": f"Assignment row {idx + 1} references unknown vehicle '{vehicle_id}'.",
                     "field": "vehicle_id",
                     "route_id": route_id,
                     "vehicle_id": vehicle_id,
                 }
             )
+        if route_id in route_lookup and vehicle_id in vehicle_hubs:
+            route = route_lookup[route_id]
+            origin_hub = str(route.get("origin_hub") or "")
+            destination_hub = str(route.get("destination_hub") or "")
+            vehicle_hub = vehicle_hubs[vehicle_id]
+            reachable = set(network.get(vehicle_hub, []))
+            if vehicle_hub != origin_hub or (destination_hub and destination_hub not in reachable):
+                errors.append(
+                    {
+                        "code": PLANNER_ERROR_ROUTE_INCOMPATIBLE,
+                        "message": f"Vehicle '{vehicle_id}' cannot serve route '{route_id}' from hub '{vehicle_hub}'.",
+                        "field": "route_id",
+                        "route_id": route_id,
+                        "vehicle_id": vehicle_id,
+                        "origin_hub": origin_hub,
+                        "destination_hub": destination_hub,
+                    }
+                )
 
     for (route_id, vehicle_id), count in sorted(duplicate_pairs.items()):
         if count > 1:
             errors.append(
                 {
-                    "code": "duplicate_assignment",
+                    "code": PLANNER_ERROR_DUPLICATE_ASSIGNMENT,
                     "message": f"Route '{route_id}' is assigned to vehicle '{vehicle_id}' {count} times.",
                     "field": "assignments",
                     "route_id": route_id,
@@ -113,12 +145,26 @@ def validate_line_haul_assignments(
         if used_units > capacity_units:
             errors.append(
                 {
-                    "code": "over_capacity",
+                    "code": PLANNER_ERROR_OVER_CAPACITY,
                     "message": f"Vehicle '{vehicle_id}' is overloaded by {used_units - capacity_units} units.",
                     "field": "assigned_units",
                     "vehicle_id": vehicle_id,
                     "capacity_units": capacity_units,
                     "assigned_units": used_units,
+                }
+            )
+    for route_id, route in sorted(route_lookup.items()):
+        demand_units = max(int(route.get("demand_units") or 0), 0)
+        assigned_units = route_assigned_units.get(route_id, 0)
+        if assigned_units < demand_units:
+            errors.append(
+                {
+                    "code": PLANNER_ERROR_ROUTE_UNSCHEDULED,
+                    "message": f"Route '{route_id}' is short by {demand_units - assigned_units} units.",
+                    "field": "assigned_units",
+                    "route_id": route_id,
+                    "demand_units": demand_units,
+                    "assigned_units": assigned_units,
                 }
             )
 
@@ -140,6 +186,53 @@ def validate_line_haul_assignments(
             "utilization": utilization,
         },
     }
+
+
+def optimize_line_haul_plan_assignments(
+    *,
+    routes: list[dict[str, object]],
+    vehicles: list[dict[str, object]],
+    connectivity: dict[str, list[str]],
+    locked_assignments: list[dict[str, object]],
+    random_seed: int,
+) -> dict[str, object]:
+    result = run_line_haul_optimizer(
+        PlannerInput(
+            routes=[
+                RouteDefinition(
+                    route_id=str(route.get("route_id") or ""),
+                    origin_hub=str(route.get("origin_hub") or ""),
+                    destination_hub=str(route.get("destination_hub") or ""),
+                    demand_units=max(int(route.get("demand_units") or 0), 0),
+                )
+                for route in routes
+            ],
+            vehicles=[
+                VehicleCapacity(
+                    vehicle_id=str(vehicle.get("vehicle_id") or ""),
+                    hub_code=str(vehicle.get("hub_code") or ""),
+                    capacity_units=max(int(vehicle.get("capacity_units") or 0), 0),
+                )
+                for vehicle in vehicles
+            ],
+            connectivity=connectivity,
+            locked_assignments=[
+                LockedAssignment(
+                    route_id=str(item.get("route_id") or ""),
+                    vehicle_id=str(item.get("vehicle_id") or ""),
+                    lock_units=item.get("lock_units") if item.get("lock_units") is None else max(int(item.get("lock_units") or 0), 0),
+                    override_units=item.get("override_units") if item.get("override_units") is None else max(int(item.get("override_units") or 0), 0),
+                )
+                for item in locked_assignments
+            ],
+            random_seed=random_seed,
+        )
+    )
+    assignment_rows = [
+        {"route_id": item.route_id, "vehicle_id": item.vehicle_id, "assigned_units": item.assigned_units}
+        for item in result.assignments
+    ]
+    return {"assignments": assignment_rows, "unassigned_routes": result.unassigned_routes, "metadata": result.metadata}
 
 
 async def get_zone_by_pincode(pincode: str, db: AsyncSession) -> DeliveryZone | None:
