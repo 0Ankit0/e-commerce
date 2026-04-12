@@ -15,6 +15,7 @@ import type {
   NotificationTemplatePerformance,
   SecurityIncident,
   SecurityIncidentStatusUpdate,
+  HubOperationalReportsResponse,
 } from '@/types';
 
 export interface ObservabilityLogFilters {
@@ -217,5 +218,18 @@ export function useNotificationDeliveryDashboard(lookbackDays = 7) {
       return response.data;
     },
     staleTime: 15_000,
+  });
+}
+
+export function useHubOperationalReports(hubId: string | null) {
+  return useQuery({
+    queryKey: ['hub-operational-reports', hubId],
+    queryFn: async () => {
+      const response = await apiClient.get<HubOperationalReportsResponse>(`/logistics/hubs/${hubId}/operational-reports`);
+      return response.data;
+    },
+    enabled: Boolean(hubId),
+    staleTime: 10_000,
+    refetchInterval: 10_000,
   });
 }

@@ -6,6 +6,8 @@ import { apiClient } from '@/lib/api-client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { useCurrentUser } from '@/hooks/use-users';
+import { useHubOperationalReports } from '@/hooks/use-observability';
 
 type WorkbenchQueue = {
   queue_id: string;
@@ -39,6 +41,8 @@ type HubWorkbenchResponse = {
   selected_queue_id: string | null;
   queues: WorkbenchQueue[];
   inbound_items: WorkbenchItem[];
+  hold_exception_items?: WorkbenchItem[];
+  sorting_lanes?: Array<{ lane: string; items: WorkbenchItem[] }>;
   outbound_items: WorkbenchItem[];
   timeline: WorkbenchEvent[];
 };
@@ -52,6 +56,9 @@ export default function HubOperationsPage() {
   const [workbench, setWorkbench] = useState<HubWorkbenchResponse | null>(null);
   const [statusMessage, setStatusMessage] = useState('Load a hub to start inbound/outbound sort operations.');
   const [loading, setLoading] = useState(false);
+  const { data: currentUser } = useCurrentUser();
+  const canRunBulkActions = Boolean(currentUser?.is_superuser || currentUser?.roles?.includes('hub_supervisor'));
+  const { data: operationalReports } = useHubOperationalReports(hubId || null);
 
   const shipmentIds = useMemo(
     () => shipmentIdsCsv.split(',').map((entry) => entry.trim()).filter(Boolean),
@@ -80,13 +87,17 @@ export default function HubOperationsPage() {
     }
   };
 
-  const runBulkAction = async (path: 'bulk-scan' | 'bulk-assign' | 'bulk-move-next-leg') => {
+  const runBulkAction = async (path: 'bulk-scan' | 'bulk-assign' | 'bulk-move-next-leg' | 'bulk-actions') => {
     if (!hubId.trim() || !activeQueueId) {
       setStatusMessage('Hub ID and queue ID are required.');
       return;
     }
     if (shipmentIds.length === 0) {
       setStatusMessage('Enter at least one shipment ID.');
+      return;
+    }
+    if ((path === 'bulk-assign' || path === 'bulk-move-next-leg' || path === 'bulk-actions') && !canRunBulkActions) {
+      setStatusMessage('You need hub supervisor/admin role for bulk operational actions.');
       return;
     }
     setLoading(true);
@@ -116,6 +127,15 @@ export default function HubOperationsPage() {
         });
         setStatusMessage(`Bulk dispatch done: ${response.data.moved_count} moved, ${response.data.already_moved_count} already moved.`);
       }
+      if (path === 'bulk-actions') {
+        const response = await apiClient.post(`/logistics/hubs/${hubId.trim()}/sort-queues/${activeQueueId}/bulk-actions`, {
+          shipment_ids: shipmentIds,
+          action: 'hold',
+          exception_code: 'manual_hold',
+          notes: 'Held from admin hub console',
+        });
+        setStatusMessage(`Bulk hold done for ${response.data.updated_count} shipments.`);
+      }
       await refreshWorkbench(activeQueueId);
     } catch {
       setStatusMessage('Bulk action failed.');
@@ -130,7 +150,7 @@ export default function HubOperationsPage() {
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-muted)]">Admin Console</p>
           <h1 className="mt-2 text-3xl font-semibold text-[var(--text-primary)]">Hub inbound/outbound sort workbench</h1>
-          <p className="mt-1 text-sm text-[var(--text-secondary)]">Operate hub scans, sorting assignments, and dispatch with timeline visibility.</p>
+          <p className="mt-1 text-sm text-[var(--text-secondary)]">Operate inbound queue, lanes, missorts, and dispatch groups in real time.</p>
         </div>
         <Button variant="outline" onClick={() => refreshWorkbench(activeQueueId)} disabled={loading}>
           <RefreshCcw className="mr-2 h-4 w-4" /> Refresh
@@ -158,6 +178,7 @@ export default function HubOperationsPage() {
             <Button onClick={() => runBulkAction('bulk-scan')} disabled={loading}>Bulk scan</Button>
             <Button variant="outline" onClick={() => runBulkAction('bulk-assign')} disabled={loading}>Bulk sort/assign</Button>
             <Button variant="secondary" onClick={() => runBulkAction('bulk-move-next-leg')} disabled={loading}>Bulk dispatch</Button>
+            <Button variant="destructive" onClick={() => runBulkAction('bulk-actions')} disabled={loading}>Bulk hold</Button>
           </div>
           <p className="text-sm text-[var(--text-secondary)] md:col-span-2 lg:col-span-4">{statusMessage}</p>
         </CardContent>
@@ -185,7 +206,7 @@ export default function HubOperationsPage() {
         <Card>
           <CardHeader>
             <CardTitle>Inbound</CardTitle>
-            <CardDescription>Scanned and exception items.</CardDescription>
+            <CardDescription>Inbound queue and blocked parcels.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             {workbench?.inbound_items.map((item) => (
@@ -200,11 +221,17 @@ export default function HubOperationsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Outbound + timeline</CardTitle>
-            <CardDescription>Assigned/moved items and latest events.</CardDescription>
+            <CardTitle>Active lanes + timeline</CardTitle>
+            <CardDescription>Lane/bin assignments, dispatch groups, and latest events.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
-            {(workbench?.outbound_items ?? []).slice(0, 4).map((item) => (
+            {(workbench?.sorting_lanes ?? []).slice(0, 3).map((lane) => (
+              <div key={lane.lane as string} className="rounded-lg border border-[var(--border-color)] px-3 py-2">
+                <p className="font-medium">{lane.lane as string}</p>
+                <p className="text-xs text-[var(--text-muted)]">{(lane.items as WorkbenchItem[]).length} parcels</p>
+              </div>
+            ))}
+            {(workbench?.outbound_items ?? []).slice(0, 3).map((item) => (
               <div key={item.queue_item_id} className="rounded-lg border border-[var(--border-color)] px-3 py-2">
                 <p className="font-medium">{item.shipment_id}</p>
                 <p>{item.status}</p>
@@ -218,6 +245,12 @@ export default function HubOperationsPage() {
             </div>
           </CardContent>
         </Card>
+      </div>
+      <div className="grid gap-4 lg:grid-cols-4">
+        <Card><CardHeader><CardTitle>Dwell time</CardTitle></CardHeader><CardContent>{operationalReports?.dwell_time_minutes ?? 0} min</CardContent></Card>
+        <Card><CardHeader><CardTitle>Lane throughput</CardTitle></CardHeader><CardContent>{JSON.stringify(operationalReports?.lane_throughput ?? {})}</CardContent></Card>
+        <Card><CardHeader><CardTitle>SLA breaches</CardTitle></CardHeader><CardContent>{operationalReports?.sla_breach_shipments ?? 0}</CardContent></Card>
+        <Card><CardHeader><CardTitle>Top exception</CardTitle></CardHeader><CardContent>{operationalReports?.top_exception_category ?? 'n/a'}</CardContent></Card>
       </div>
     </div>
   );

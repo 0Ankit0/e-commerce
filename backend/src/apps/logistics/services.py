@@ -59,6 +59,13 @@ PLANNER_ERROR_OVER_CAPACITY = "LOG_PLANNER_OVER_CAPACITY"
 PLANNER_ERROR_ROUTE_INCOMPATIBLE = "LOG_PLANNER_ROUTE_INCOMPATIBLE"
 PLANNER_ERROR_ROUTE_UNSCHEDULED = "LOG_PLANNER_ROUTE_UNSCHEDULED"
 
+ALLOWED_HUB_ITEM_TRANSITIONS: dict[HubSortItemStatus, set[HubSortItemStatus]] = {
+    HubSortItemStatus.SCANNED: {HubSortItemStatus.ASSIGNED, HubSortItemStatus.EXCEPTION},
+    HubSortItemStatus.ASSIGNED: {HubSortItemStatus.MOVED_TO_NEXT_LEG, HubSortItemStatus.EXCEPTION},
+    HubSortItemStatus.MOVED_TO_NEXT_LEG: set(),
+    HubSortItemStatus.EXCEPTION: {HubSortItemStatus.SCANNED},
+}
+
 
 def validate_line_haul_assignments(
     *,
@@ -365,6 +372,45 @@ async def append_hub_operation_event(
     return event
 
 
+async def transition_hub_item_state(
+    *,
+    item: HubSortQueueItem,
+    queue: HubSortQueue,
+    hub_id: int,
+    to_status: HubSortItemStatus,
+    actor_id: int | None,
+    operation_type: str,
+    db: AsyncSession,
+    payload: dict[str, object] | None = None,
+) -> HubSortQueueItem:
+    from_status = item.status
+    if to_status != from_status and to_status not in ALLOWED_HUB_ITEM_TRANSITIONS.get(from_status, set()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Illegal hub item transition: {from_status.value} -> {to_status.value}",
+        )
+    item.status = to_status
+    item.updated_at = utc_now()
+    await append_hub_operation_event(
+        hub_id=hub_id,
+        operation_type=operation_type,
+        queue_id=queue.id,
+        queue_item_id=item.id,
+        shipment_id=item.shipment_id,
+        manifest_id=queue.manifest_id,
+        actor_type="admin",
+        actor_id=actor_id,
+        payload={
+            "from_status": from_status.value,
+            "to_status": to_status.value,
+            "operator_action": operation_type,
+            **(payload or {}),
+        },
+        db=db,
+    )
+    return item
+
+
 async def create_hub_sort_queue(
     *,
     hub_id: int,
@@ -452,24 +498,20 @@ async def assign_sort_bucket(
 ) -> HubSortQueueItem:
     if item.status == HubSortItemStatus.EXCEPTION:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot assign shipment with unresolved exception")
-    item.status = HubSortItemStatus.ASSIGNED
+    await transition_hub_item_state(
+        item=item,
+        queue=queue,
+        hub_id=hub_id,
+        to_status=HubSortItemStatus.ASSIGNED,
+        actor_id=actor_id,
+        operation_type="sort_bucket_assigned",
+        payload={"carrier": carrier, "vehicle_number": vehicle_number, "next_hub_id": next_hub_id},
+        db=db,
+    )
     item.assigned_next_hub_id = next_hub_id
     item.assigned_carrier = carrier
     item.assigned_vehicle_number = vehicle_number
     item.assigned_at = utc_now()
-    item.updated_at = utc_now()
-    await append_hub_operation_event(
-        hub_id=hub_id,
-        operation_type="sort_bucket_assigned",
-        queue_id=queue.id,
-        queue_item_id=item.id,
-        shipment_id=item.shipment_id,
-        manifest_id=queue.manifest_id,
-        actor_type="admin",
-        actor_id=actor_id,
-        payload={"carrier": carrier, "vehicle_number": vehicle_number, "next_hub_id": next_hub_id},
-        db=db,
-    )
     return item
 
 
@@ -487,21 +529,48 @@ async def stage_outbound_shipment(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Shipment must be assigned before outbound staging")
     if item.assigned_carrier != carrier or item.assigned_vehicle_number != vehicle_number:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assigned carrier/vehicle mismatch")
-    item.status = HubSortItemStatus.MOVED_TO_NEXT_LEG
-    item.moved_at = utc_now()
-    item.updated_at = utc_now()
-    await append_hub_operation_event(
+    await transition_hub_item_state(
+        item=item,
+        queue=queue,
         hub_id=hub_id,
-        operation_type="outbound_staged",
-        queue_id=queue.id,
-        queue_item_id=item.id,
-        shipment_id=item.shipment_id,
-        manifest_id=queue.manifest_id,
-        actor_type="admin",
+        to_status=HubSortItemStatus.MOVED_TO_NEXT_LEG,
         actor_id=actor_id,
+        operation_type="outbound_staged",
         payload={"carrier": carrier, "vehicle_number": vehicle_number},
         db=db,
     )
+    item.moved_at = utc_now()
+    return item
+
+
+async def recirculate_or_rework_hub_item(
+    *,
+    item: HubSortQueueItem,
+    queue: HubSortQueue,
+    hub_id: int,
+    actor_id: int | None,
+    exception_code: str,
+    notes: str,
+    requeue_for_sorting: bool,
+    db: AsyncSession,
+) -> HubSortQueueItem:
+    target_status = HubSortItemStatus.SCANNED if requeue_for_sorting else HubSortItemStatus.EXCEPTION
+    await transition_hub_item_state(
+        item=item,
+        queue=queue,
+        hub_id=hub_id,
+        to_status=target_status,
+        actor_id=actor_id,
+        operation_type="exception_requeued" if requeue_for_sorting else "hold_queue_updated",
+        payload={"exception_code": exception_code, "notes": notes},
+        db=db,
+    )
+    item.exception_code = exception_code
+    item.exception_notes = notes
+    if requeue_for_sorting:
+        item.assigned_carrier = ""
+        item.assigned_vehicle_number = ""
+        item.assigned_next_hub_id = None
     return item
 
 
