@@ -114,6 +114,11 @@ export interface BranchDashboardDrilldownResponse {
     open_exceptions: number;
   };
   inventory_flow: Record<string, number>;
+  actionable_queues?: {
+    reassign_agent: Array<{ agent_id: string; agent_name: string; assigned: number; recommended_target: string }>;
+    escalate_delayed: Array<{ exception_id: string; shipment_id?: string | null; agent_id?: string | null; age_hours: number }>;
+    prioritize_aging: Array<{ pickup_job_id: string; shipment_id?: string | null; age_hours: number }>;
+  };
 }
 
 export interface HubOperationalReportsResponse {

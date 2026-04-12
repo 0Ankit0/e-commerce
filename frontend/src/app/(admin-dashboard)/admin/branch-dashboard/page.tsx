@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { Download, ShieldAlert, Shuffle, TimerReset, TrendingDown, TrendingUp, Users } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -39,6 +40,7 @@ export default function AdminBranchDashboardPage() {
   const { data: snapshot, isLoading: snapshotLoading } = useBranchDashboardSnapshot(filters);
   const { data: drilldown, isLoading: drilldownLoading } = useBranchDashboardDrilldown(filters);
   const { data: alerts } = useBranchDashboardAlerts(filters);
+  const [selectedQueue, setSelectedQueue] = useState<'reassign' | 'escalate' | 'aging'>('aging');
 
   const handleExport = async () => {
     const response = await apiClient.get('/logistics/branch-dashboard/export', {
@@ -132,17 +134,20 @@ export default function AdminBranchDashboardPage() {
 
       <div className="grid gap-4 md:grid-cols-4">
         {[
-          ['Inventory posture', snapshot?.snapshot.inventory_posture ?? 'healthy'],
-          ['Attempt success', `${snapshot?.snapshot.attempt_success_rate_percent ?? 0}%`],
-          ['RTO rate', `${snapshot?.snapshot.rto_rate_percent ?? 0}%`],
-          ['Aging queue (6h+)', snapshot?.snapshot.aging_queue_over_6h ?? 0],
-        ].map(([label, value]) => (
-          <Card key={String(label)} className="rounded-[22px]">
-            <CardContent className="pt-4">
-              <p className="text-xs uppercase tracking-[0.16em] text-[var(--text-muted)]">{label}</p>
-              <p className="mt-1 text-3xl font-semibold text-[var(--text-primary)]">{String(value)}</p>
-            </CardContent>
-          </Card>
+          { label: 'Inventory posture', value: snapshot?.snapshot.inventory_posture ?? 'healthy', queue: 'aging' as const },
+          { label: 'First-attempt success', value: `${snapshot?.snapshot.first_attempt_success_rate_percent ?? 0}%`, queue: 'reassign' as const },
+          { label: 'RTO / exceptions', value: `${snapshot?.snapshot.rto_rate_percent ?? 0}%`, queue: 'escalate' as const },
+          { label: 'Aging queue (6h+)', value: snapshot?.snapshot.aging_queue_over_6h ?? 0, queue: 'aging' as const },
+        ].map((item) => (
+          <button key={item.label} type="button" onClick={() => setSelectedQueue(item.queue)} className="text-left">
+            <Card className="rounded-[22px] hover:border-[var(--text-primary)]">
+              <CardContent className="pt-4">
+                <p className="text-xs uppercase tracking-[0.16em] text-[var(--text-muted)]">{item.label}</p>
+                <p className="mt-1 text-3xl font-semibold text-[var(--text-primary)]">{String(item.value)}</p>
+                <p className="mt-2 text-xs text-[var(--text-muted)]">Open queue</p>
+              </CardContent>
+            </Card>
+          </button>
         ))}
       </div>
 
@@ -185,6 +190,58 @@ export default function AdminBranchDashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+
+      <Card className="rounded-[24px]">
+        <CardHeader>
+          <CardTitle>Actionable queue drilldown</CardTitle>
+          <CardDescription>KPI cards open the most relevant queue so branch managers can intervene immediately.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <div className="flex gap-2">
+            <Button variant={selectedQueue === 'reassign' ? 'default' : 'outline'} size="sm" onClick={() => setSelectedQueue('reassign')}>Reassign agent</Button>
+            <Button variant={selectedQueue === 'escalate' ? 'default' : 'outline'} size="sm" onClick={() => setSelectedQueue('escalate')}>Escalate delayed</Button>
+            <Button variant={selectedQueue === 'aging' ? 'default' : 'outline'} size="sm" onClick={() => setSelectedQueue('aging')}>Prioritize aging</Button>
+          </div>
+          {selectedQueue === 'reassign' && (
+            <ul className="space-y-2 text-sm">
+              {(drilldown?.actionable_queues?.reassign_agent ?? []).map((row) => (
+                <li key={row.agent_id} className="rounded-lg border p-2">
+                  {row.agent_name} · assigned {row.assigned}
+                </li>
+              ))}
+            </ul>
+          )}
+          {selectedQueue === 'escalate' && (
+            <ul className="space-y-2 text-sm">
+              {(drilldown?.actionable_queues?.escalate_delayed ?? []).map((row) => (
+                <li key={row.exception_id} className="rounded-lg border p-2">
+                  Shipment {row.shipment_id ?? 'n/a'} · {row.age_hours}h
+                </li>
+              ))}
+            </ul>
+          )}
+          {selectedQueue === 'aging' && (
+            <ul className="space-y-2 text-sm">
+              {(drilldown?.actionable_queues?.prioritize_aging ?? []).map((row) => (
+                <li key={row.pickup_job_id} className="rounded-lg border p-2">
+                  Pickup {row.pickup_job_id} · {row.age_hours}h
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-[24px]">
+        <CardHeader><CardTitle>Escalation hooks</CardTitle></CardHeader>
+        <CardContent className="text-sm">
+          <ul className="space-y-1">
+            {(alerts?.escalation_hooks ?? []).map((hook) => <li key={hook.action}><code>{hook.action}</code> → <code>{hook.path}</code></li>)}
+          </ul>
+          {!isAdmin && <p className="mt-3 text-xs text-[var(--text-muted)]">Need wider authority? <Link href="/admin/branch-dashboard" className="underline">Open admin view</Link>.</p>}
+        </CardContent>
+      </Card>
 
       <Card className="rounded-[24px]">
         <CardHeader>

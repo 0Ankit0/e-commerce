@@ -131,6 +131,7 @@ export const PORTAL_DEFINITIONS: Record<PortalKey, PortalDefinition> = {
       { label: 'Overview', href: '/agent/dashboard', icon: Gauge },
       { label: 'Assignments', href: '/agent/assignments', icon: Truck },
       { label: 'Delivery History', href: '/agent/history', icon: ScrollText },
+      { label: 'Branch Cockpit', href: '/agent/branch-cockpit', icon: Users },
     ],
   },
   admin: {

@@ -16,7 +16,15 @@ from src.apps.commerce.models import Address, WishlistShareLink
 from src.apps.iam.models.token_tracking import TokenTracking
 from src.apps.iam.models.user import User, UserProfile
 from src.apps.iam.utils.hashid import decode_id_or_404
-from src.apps.logistics.models import CourierLocationPing, DeliveryException, RouteOptimizationPlan, ShipmentManifest, ShipmentManifestStatus
+from src.apps.logistics.models import (
+    CourierLocationPing,
+    DeliveryAgent,
+    DeliveryAgentStatus,
+    DeliveryException,
+    RouteOptimizationPlan,
+    ShipmentManifest,
+    ShipmentManifestStatus,
+)
 from src.apps.messaging.models import ChatMessageEnvelope
 from src.apps.multitenancy.models.tenant import Tenant, TenantMember, TenantRole
 from src.apps.orders.models import Order, OrderStatus, ReturnRequest, Shipment, ShipmentTracking
@@ -2311,3 +2319,71 @@ async def test_line_haul_planning_full_lifecycle_with_conflict_resolution(client
     manifest_db = await db_session.get(ShipmentManifest, decode_id_or_404(execution_resp.json()["manifest_id"]))
     assert manifest_db is not None
     assert manifest_db.status == ShipmentManifestStatus.DISPATCHED
+
+
+@pytest.mark.asyncio
+async def test_branch_dashboard_scope_boundaries_are_enforced_integration(client: AsyncClient, db_session: AsyncSession):
+    _, admin_headers = await _create_user_headers(
+        db_session,
+        username="ops_scope_admin",
+        email="ops_scope_admin@example.com",
+        is_superuser=True,
+    )
+    scoped_user, scoped_headers = await _create_user_headers(
+        db_session,
+        username="branch_scope_user",
+        email="branch_scope_user@example.com",
+    )
+
+    await _create_delivery_zone(client, admin_headers, code="scope-zone")
+    zone_id = (await client.get("/api/v1/logistics/zones", headers=admin_headers)).json()["items"][0]["id"]
+    hub_resp = await client.post(
+        "/api/v1/logistics/hubs",
+        headers=admin_headers,
+        json={"name": "Scope Hub", "code": "HUB-SCOPE", "city": "Kathmandu"},
+    )
+    hub_id = hub_resp.json()["hub_id"]
+    first_branch_resp = await client.post(
+        "/api/v1/logistics/branches",
+        headers=admin_headers,
+        json={"hub_id": hub_id, "zone_id": zone_id, "name": "Scope A", "code": "BR-SCOPE-A"},
+    )
+    second_branch_resp = await client.post(
+        "/api/v1/logistics/branches",
+        headers=admin_headers,
+        json={"hub_id": hub_id, "zone_id": zone_id, "name": "Scope B", "code": "BR-SCOPE-B"},
+    )
+    first_branch_id = first_branch_resp.json()["branch_id"]
+    second_branch_id = second_branch_resp.json()["branch_id"]
+
+    scoped_agent = DeliveryAgent(
+        branch_id=decode_id_or_404(first_branch_id),
+        user_id=scoped_user.id,
+        name="Scoped Agent",
+        status=DeliveryAgentStatus.AVAILABLE,
+        capacity=12,
+        current_load=4,
+    )
+    db_session.add(scoped_agent)
+    await db_session.commit()
+
+    allowed_snapshot = await client.get(
+        "/api/v1/logistics/branch-dashboard/snapshot",
+        headers=scoped_headers,
+        params={"branch_id": first_branch_id},
+    )
+    assert allowed_snapshot.status_code == 200, allowed_snapshot.text
+
+    denied_snapshot = await client.get(
+        "/api/v1/logistics/branch-dashboard/snapshot",
+        headers=scoped_headers,
+        params={"branch_id": second_branch_id},
+    )
+    assert denied_snapshot.status_code == 403, denied_snapshot.text
+
+    denied_action = await client.post(
+        "/api/v1/logistics/branch-dashboard/actions/escalate-issues",
+        headers=scoped_headers,
+        json={"branch_id": second_branch_id, "note": "scope check"},
+    )
+    assert denied_action.status_code == 403, denied_action.text
