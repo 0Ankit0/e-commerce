@@ -230,9 +230,17 @@ export interface SmsQuotaConfig {
   id: number;
   provider: string;
   per_user_daily_limit: number | null;
+  per_tenant_daily_limit: number | null;
+  per_phone_window_limit: number | null;
+  phone_window_seconds: number;
   per_ip_window_limit: number | null;
   ip_window_seconds: number;
+  global_provider_soft_daily_limit: number | null;
   global_provider_daily_limit: number | null;
+  soft_throttle_action: 'delay' | 'block' | 'challenge';
+  hard_throttle_action: 'delay' | 'block' | 'challenge';
+  soft_throttle_delay_seconds: number;
+  hard_throttle_delay_seconds: number;
   privileged_override_enabled: boolean;
   updated_by_user_id: number | null;
   created_at: string;
@@ -245,12 +253,17 @@ export interface SmsQuotaViolationEvent {
   scope: string;
   provider: string | null;
   user_id: number | null;
+  tenant_id: number | null;
   ip_address: string | null;
+  phone_number_hash: string | null;
   limit_count: number;
   attempted_count: number;
   window_start: string;
   window_end: string;
   override_applied: boolean;
+  severity: 'soft' | 'hard';
+  throttle_action: 'delay' | 'block' | 'challenge';
+  delay_seconds: number;
   reason: string;
   created_at: string;
 }
@@ -263,5 +276,20 @@ export interface SmsQuotaDashboardResponse {
     override_violations: number;
   };
   usage_by_scope: Record<string, number>;
+  usage_trends: Array<{
+    window_start: string;
+    window_end: string;
+    scope: string;
+    usage_count: number;
+  }>;
+  top_offenders: Array<{
+    id: number;
+    scope: string;
+    usage_count: number;
+    user_id: number | null;
+    tenant_id: number | null;
+    ip_address: string | null;
+    phone_number_hash: string | null;
+  }>;
   active_counters: ChannelQuotaUsage[];
 }

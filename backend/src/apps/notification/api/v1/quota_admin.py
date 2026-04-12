@@ -19,9 +19,17 @@ router = APIRouter(prefix="/admin/sms-quotas", tags=["notification-quota-admin"]
 class SmsQuotaConfigPayload(BaseModel):
     provider: str = Field(default="default", max_length=64)
     per_user_daily_limit: int | None = Field(default=None, ge=1)
+    per_tenant_daily_limit: int | None = Field(default=None, ge=1)
+    per_phone_window_limit: int | None = Field(default=None, ge=1)
+    phone_window_seconds: int = Field(default=600, ge=1)
     per_ip_window_limit: int | None = Field(default=None, ge=1)
     ip_window_seconds: int = Field(default=300, ge=1)
+    global_provider_soft_daily_limit: int | None = Field(default=None, ge=1)
     global_provider_daily_limit: int | None = Field(default=None, ge=1)
+    soft_throttle_action: str = Field(default="delay", max_length=24)
+    hard_throttle_action: str = Field(default="block", max_length=24)
+    soft_throttle_delay_seconds: int = Field(default=30, ge=0)
+    hard_throttle_delay_seconds: int = Field(default=0, ge=0)
     privileged_override_enabled: bool = True
 
 
@@ -44,9 +52,17 @@ async def update_sms_quota_config(
 ) -> dict[str, Any]:
     config = await get_or_create_quota_config(db, provider=payload.provider)
     config.per_user_daily_limit = payload.per_user_daily_limit
+    config.per_tenant_daily_limit = payload.per_tenant_daily_limit
+    config.per_phone_window_limit = payload.per_phone_window_limit
+    config.phone_window_seconds = payload.phone_window_seconds
     config.per_ip_window_limit = payload.per_ip_window_limit
     config.ip_window_seconds = payload.ip_window_seconds
+    config.global_provider_soft_daily_limit = payload.global_provider_soft_daily_limit
     config.global_provider_daily_limit = payload.global_provider_daily_limit
+    config.soft_throttle_action = payload.soft_throttle_action
+    config.hard_throttle_action = payload.hard_throttle_action
+    config.soft_throttle_delay_seconds = payload.soft_throttle_delay_seconds
+    config.hard_throttle_delay_seconds = payload.hard_throttle_delay_seconds
     config.privileged_override_enabled = payload.privileged_override_enabled
     config.updated_by_user_id = current_user.id
     config.updated_at = datetime.now(UTC)
@@ -78,9 +94,17 @@ async def get_sms_quota_dashboard(
             .limit(200)
         )
     ).scalars().all()
-    grouped: dict[str, int] = {"user_daily": 0, "ip_window": 0, "provider_daily": 0}
+    grouped: dict[str, int] = {
+        "user_daily": 0,
+        "tenant_daily": 0,
+        "phone_window": 0,
+        "ip_window": 0,
+        "provider_daily_soft": 0,
+        "provider_daily": 0,
+    }
     for row in counters:
         grouped[row.scope] = grouped.get(row.scope, 0) + row.usage_count
+    top_offenders = sorted(counters, key=lambda row: row.usage_count, reverse=True)[:20]
     return {
         "provider": provider,
         "totals": {
@@ -89,6 +113,16 @@ async def get_sms_quota_dashboard(
             "override_violations": sum(1 for row in violations if row.override_applied),
         },
         "usage_by_scope": grouped,
+        "usage_trends": [
+            {
+                "window_start": row.window_start.isoformat(),
+                "window_end": row.window_end.isoformat(),
+                "scope": row.scope,
+                "usage_count": row.usage_count,
+            }
+            for row in counters[:50]
+        ],
+        "top_offenders": [row.model_dump() for row in top_offenders],
         "active_counters": [row.model_dump() for row in counters],
     }
 
@@ -106,6 +140,42 @@ async def list_sms_quota_violations(
         query = query.where(SmsQuotaViolationEvent.override_applied == override_applied)
     rows = (await db.execute(query.order_by(SmsQuotaViolationEvent.created_at.desc()).limit(limit))).scalars().all()
     return {"items": [row.model_dump() for row in rows], "count": len(rows)}
+
+
+@router.get("/incidents/export/")
+async def export_sms_quota_incidents(
+    provider: str = "default",
+    limit: int = Query(default=500, ge=1, le=2000),
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    rows = (
+        await db.execute(
+            select(SmsQuotaViolationEvent)
+            .where(SmsQuotaViolationEvent.provider == provider)
+            .order_by(SmsQuotaViolationEvent.created_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    incidents = [
+        {
+            "id": row.id,
+            "created_at": row.created_at.isoformat(),
+            "scope": row.scope,
+            "severity": row.severity,
+            "throttle_action": row.throttle_action,
+            "delay_seconds": row.delay_seconds,
+            "attempted_count": row.attempted_count,
+            "limit_count": row.limit_count,
+            "provider": row.provider,
+            "tenant_id": row.tenant_id,
+            "user_id": row.user_id,
+            "override_applied": row.override_applied,
+            "reason": row.reason,
+        }
+        for row in rows
+    ]
+    return {"provider": provider, "count": len(incidents), "items": incidents}
 
 
 @router.post("/counters/reset/")

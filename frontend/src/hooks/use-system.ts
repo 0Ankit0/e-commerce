@@ -195,11 +195,29 @@ export function useSmsQuotaViolations(provider = 'default') {
   });
 }
 
+export function useSmsQuotaIncidentExport(provider = 'default') {
+  return useQuery({
+    queryKey: ['sms-quota-incident-export', provider],
+    queryFn: async () => {
+      const response = await apiClient.get<{ provider: string; count: number; items: SmsQuotaViolationEvent[] }>(
+        '/notifications/admin/sms-quotas/incidents/export/',
+        { params: { provider } },
+      );
+      return response.data;
+    },
+  });
+}
+
 export function useResetSmsQuotaCounters() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (provider = 'default') => {
-      const response = await apiClient.post<{ deleted: number; provider: string }>('/notifications/admin/sms-quotas/counters/reset/', null, { params: { provider } });
+    mutationFn: async (provider?: string) => {
+      const resolvedProvider = provider ?? 'default';
+      const response = await apiClient.post<{ deleted: number; provider: string }>(
+        '/notifications/admin/sms-quotas/counters/reset/',
+        null,
+        { params: { provider: resolvedProvider } },
+      );
       return response.data;
     },
     onSuccess: (data) => {
