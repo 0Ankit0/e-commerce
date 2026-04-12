@@ -1,7 +1,7 @@
 'use client';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { useNotificationChannelPerformance, useNotificationTemplatePerformance } from '@/hooks/use-observability';
+import { useNotificationChannelPerformance, useNotificationDeliveryDashboard, useNotificationTemplatePerformance } from '@/hooks/use-observability';
 
 function asPercent(value: number): string {
   return `${(value * 100).toFixed(2)}%`;
@@ -15,9 +15,11 @@ function asMs(value: number): string {
 export default function NotificationAnalyticsPage() {
   const channelQuery = useNotificationChannelPerformance({ limit: 30 });
   const templateQuery = useNotificationTemplatePerformance({ limit: 30 });
+  const dashboardQuery = useNotificationDeliveryDashboard(7);
 
   const channelRows = channelQuery.data?.items ?? [];
   const templateRows = templateQuery.data?.items ?? [];
+  const dashboard = dashboardQuery.data;
 
   const totals = channelRows.reduce(
     (acc, row) => {
@@ -52,6 +54,37 @@ export default function NotificationAnalyticsPage() {
             <p className="text-xs text-[var(--text-muted)]">Average latency</p>
             <p className="text-2xl font-semibold">{asMs(latencyAvg)}</p>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>7-day comparison and drilldowns</CardTitle>
+          <CardDescription>
+            Compare against the previous window and drill into channel health without opening provider consoles.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-3">
+          <div className="rounded-xl border p-3">
+            <p className="text-xs text-[var(--text-muted)]">Delivery rate delta</p>
+            <p className="text-2xl font-semibold">{asPercent(dashboard?.comparison.delivery_rate_delta ?? 0)}</p>
+          </div>
+          <div className="rounded-xl border p-3">
+            <p className="text-xs text-[var(--text-muted)]">p95 latency delta</p>
+            <p className="text-2xl font-semibold">{asMs(dashboard?.comparison.p95_latency_delta_ms ?? 0)}</p>
+          </div>
+          <div className="rounded-xl border p-3">
+            <p className="text-xs text-[var(--text-muted)]">Failure count delta</p>
+            <p className="text-2xl font-semibold">{dashboard?.comparison.failed_delta ?? 0}</p>
+          </div>
+          {(dashboard?.drilldowns ?? []).map((row) => (
+            <div key={`drill-${row.channel}`} className="rounded-xl border p-3 md:col-span-1">
+              <p className="font-medium">{row.channel}</p>
+              <p className="text-xs text-[var(--text-muted)]">
+                Total {row.total} · Delivery {asPercent(row.delivery_rate)}
+              </p>
+            </div>
+          ))}
         </CardContent>
       </Card>
 

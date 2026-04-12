@@ -3,7 +3,7 @@
 Provides server-side feature-flag resolution so clients don't need to
 embed PostHog API keys.  All endpoints require authentication.
 """
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 from fastapi import APIRouter, Depends
 
@@ -22,6 +22,13 @@ from src.apps.notification.models.notification_delivery import NotificationDeliv
 from src.apps.notification.services.notification import (
     get_channel_delivery_trends,
     get_template_delivery_trends,
+)
+from src.apps.notification.services.delivery_analytics import (
+    evaluate_delivery_alerts,
+    get_notification_analytics_dashboard,
+    get_notification_delivery_analytics,
+    list_delivery_alerts,
+    summarize_and_prune_delivery_events,
 )
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
@@ -141,3 +148,58 @@ async def get_notification_template_performance(
         skip=skip,
         limit=limit,
     )
+
+
+@router.get("/notifications/delivery/analytics")
+async def get_notification_delivery_analytics_endpoint(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    channel: NotificationDeliveryChannel | None = None,
+    template: str | None = None,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    return await get_notification_delivery_analytics(
+        db=db,
+        date_from=datetime.combine(date_from, datetime.min.time()) if date_from else None,
+        date_to=datetime.combine(date_to, datetime.max.time()) if date_to else None,
+        channel=channel,
+        template=template,
+    )
+
+
+@router.get("/notifications/delivery/dashboard")
+async def get_notification_delivery_dashboard(
+    lookback_days: int = 7,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    return await get_notification_analytics_dashboard(db=db, lookback_days=max(1, min(lookback_days, 30)))
+
+
+@router.post("/notifications/delivery/alerts/evaluate")
+async def evaluate_notification_delivery_alerts(
+    lookback_minutes: int = 30,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    alerts = await evaluate_delivery_alerts(db=db, lookback_minutes=max(5, min(lookback_minutes, 240)))
+    return {"created": len(alerts)}
+
+
+@router.get("/notifications/delivery/alerts")
+async def get_notification_delivery_alerts(
+    limit: int = 50,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    alerts = await list_delivery_alerts(db, limit=max(1, min(limit, 200)))
+    return {"items": [alert.model_dump() for alert in alerts], "total": len(alerts)}
+
+
+@router.post("/notifications/delivery/events/retention")
+async def execute_notification_delivery_retention(
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, int]:
+    return await summarize_and_prune_delivery_events(db)
