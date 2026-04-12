@@ -1,4 +1,5 @@
 """Notification service — persistence plus multi-channel delivery."""
+from datetime import timedelta
 import hashlib
 import logging
 from typing import Optional
@@ -12,6 +13,7 @@ from src.apps.notification.models.notification import Notification
 from src.apps.notification.models.notification_delivery import (
     NotificationDelivery,
     NotificationDeliveryChannel,
+    NotificationDeliveryEvent,
     NotificationDeliveryStatus,
 )
 from src.apps.notification.models.notification_device import (
@@ -27,6 +29,46 @@ from src.apps.notification.services.delivery_analytics import record_delivery_ev
 from src.apps.notification.models.notification_delivery import NotificationDeliveryEventType
 
 log = logging.getLogger(__name__)
+
+
+def _percentile(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    idx = int(round((len(ordered) - 1) * q))
+    idx = min(max(idx, 0), len(ordered) - 1)
+    return float(ordered[idx])
+
+
+def _build_lifecycle_metadata(
+    *,
+    channel: NotificationDeliveryChannel,
+    event_type: NotificationDeliveryEventType,
+    status: NotificationDeliveryStatus,
+    target: str,
+    template: str,
+    provider_code: str | None = None,
+    retry_count: int = 0,
+    max_attempts: int = 1,
+    error_reason: str | None = None,
+) -> dict[str, object]:
+    from src.apps.communications import get_communications_service
+
+    retry = get_communications_service().classify_delivery_failure(
+        provider_code=provider_code,
+        error=error_reason,
+        retry_count=retry_count,
+        max_attempts=max_attempts,
+    )
+    return {
+        "channel": channel.value,
+        "event": event_type.value,
+        "status": status.value,
+        "target": target,
+        "template": template,
+        "provider_code": provider_code,
+        "retry": retry,
+    }
 
 
 async def get_or_create_preference(db: AsyncSession, user_id: int) -> NotificationPreference:
@@ -241,7 +283,15 @@ async def _enqueue_channel_delivery(
         event_type=NotificationDeliveryEventType.QUEUED,
         status_before=None,
         status_after=delivery.status,
-        metadata={"target": stable_target, "template": notification.type.value if hasattr(notification.type, "value") else str(notification.type)},
+        metadata=_build_lifecycle_metadata(
+            channel=delivery.channel,
+            event_type=NotificationDeliveryEventType.QUEUED,
+            status=delivery.status,
+            target=stable_target,
+            template=notification.type.value if hasattr(notification.type, "value") else str(notification.type),
+            retry_count=delivery.retry_count,
+            max_attempts=delivery.max_attempts,
+        ),
     )
     await db.commit()
     dispatch_notification_delivery_task.delay(delivery.id)
@@ -326,7 +376,17 @@ async def _record_ws_delivery(
         status_after=delivery.status,
         provider_code=delivery.last_error_code,
         error_reason=delivery.last_error_reason,
-        metadata={"target": target, "template": notification.type.value if hasattr(notification.type, "value") else str(notification.type)},
+        metadata=_build_lifecycle_metadata(
+            channel=delivery.channel,
+            event_type=NotificationDeliveryEventType.DELIVERED if success else NotificationDeliveryEventType.FAILED,
+            status=delivery.status,
+            target=target,
+            template=notification.type.value if hasattr(notification.type, "value") else str(notification.type),
+            provider_code=delivery.last_error_code,
+            retry_count=delivery.retry_count,
+            max_attempts=delivery.max_attempts,
+            error_reason=delivery.last_error_reason,
+        ),
     )
     await db.commit()
 
@@ -421,11 +481,37 @@ async def get_channel_delivery_trends(
         grouped = grouped.where(*filters)
 
     rows = (await db.execute(grouped)).all()
+    event_rows = (
+        await db.execute(
+            select(
+                func.date(NotificationDeliveryEvent.occurred_at).label("day"),
+                NotificationDeliveryEvent.channel,
+                NotificationDeliveryEvent.failure_bucket,
+                NotificationDeliveryEvent.event_type,
+                NotificationDeliveryEvent.latency_ms,
+                NotificationDeliveryEvent.attempt_count,
+            )
+        )
+    ).all()
     items = []
     for row in rows:
         total = int(row.total or 0)
         delivered = int(row.delivered or 0)
         failed = int(row.failed or 0)
+        correlated = [
+            evt
+            for evt in event_rows
+            if str(evt.day) == str(row.day) and evt.channel == row.channel
+        ]
+        latency_samples = [float(evt.latency_ms) for evt in correlated if evt.latency_ms is not None]
+        taxonomy: dict[str, int] = {}
+        retry_success_count = 0
+        for evt in correlated:
+            if evt.failure_bucket is not None:
+                key = evt.failure_bucket.value if hasattr(evt.failure_bucket, "value") else str(evt.failure_bucket)
+                taxonomy[key] = taxonomy.get(key, 0) + 1
+            if evt.event_type == NotificationDeliveryEventType.DELIVERED and int(evt.attempt_count or 0) > 1:
+                retry_success_count += 1
         items.append(
             {
                 "day": row.day,
@@ -436,6 +522,15 @@ async def get_channel_delivery_trends(
                 "delivery_rate": (delivered / total) if total else 0.0,
                 "failure_rate": (failed / total) if total else 0.0,
                 "avg_latency_ms": float(row.avg_latency_ms or 0.0),
+                "latency_percentiles_ms": {
+                    "p50": _percentile(latency_samples, 0.50),
+                    "p95": _percentile(latency_samples, 0.95),
+                },
+                "failure_taxonomy": taxonomy,
+                "retry_effectiveness": {
+                    "retry_successes": retry_success_count,
+                    "retry_success_rate": (retry_success_count / total) if total else 0.0,
+                },
             }
         )
 
@@ -486,11 +581,42 @@ async def get_template_delivery_trends(
         grouped = grouped.where(*filters)
 
     rows = (await db.execute(grouped)).all()
+    event_rows = (
+        await db.execute(
+            select(
+                func.date(NotificationDeliveryEvent.occurred_at).label("day"),
+                NotificationDelivery.channel,
+                Notification.type.label("template"),
+                NotificationDeliveryEvent.failure_bucket,
+                NotificationDeliveryEvent.event_type,
+                NotificationDeliveryEvent.latency_ms,
+                NotificationDeliveryEvent.attempt_count,
+            )
+            .join(NotificationDelivery, NotificationDelivery.id == NotificationDeliveryEvent.delivery_id)
+            .join(Notification, Notification.id == NotificationDelivery.notification_id)
+        )
+    ).all()
     items = []
     for row in rows:
         total = int(row.total or 0)
         delivered = int(row.delivered or 0)
         failed = int(row.failed or 0)
+        correlated = [
+            evt
+            for evt in event_rows
+            if str(evt.day) == str(row.day)
+            and evt.channel == row.channel
+            and str(evt.template) == str(row.template)
+        ]
+        latency_samples = [float(evt.latency_ms) for evt in correlated if evt.latency_ms is not None]
+        taxonomy: dict[str, int] = {}
+        retry_success_count = 0
+        for evt in correlated:
+            if evt.failure_bucket is not None:
+                key = evt.failure_bucket.value if hasattr(evt.failure_bucket, "value") else str(evt.failure_bucket)
+                taxonomy[key] = taxonomy.get(key, 0) + 1
+            if evt.event_type == NotificationDeliveryEventType.DELIVERED and int(evt.attempt_count or 0) > 1:
+                retry_success_count += 1
         items.append(
             {
                 "day": row.day,
@@ -501,6 +627,15 @@ async def get_template_delivery_trends(
                 "failed": failed,
                 "delivery_rate": (delivered / total) if total else 0.0,
                 "failure_rate": (failed / total) if total else 0.0,
+                "latency_percentiles_ms": {
+                    "p50": _percentile(latency_samples, 0.50),
+                    "p95": _percentile(latency_samples, 0.95),
+                },
+                "failure_taxonomy": taxonomy,
+                "retry_effectiveness": {
+                    "retry_successes": retry_success_count,
+                    "retry_success_rate": (retry_success_count / total) if total else 0.0,
+                },
             }
         )
 
@@ -513,6 +648,162 @@ async def get_template_delivery_trends(
         totals_query = totals_query.where(*filters)
     total_rows = (await db.execute(totals_query)).scalar_one()
     return {"items": items, "total": total_rows}
+
+
+async def get_admin_monitoring_dashboard(
+    db: AsyncSession,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, object]:
+    channel_series = await get_channel_delivery_trends(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        limit=365,
+    )
+    template_comparison = await get_template_delivery_trends(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        limit=200,
+    )
+    provider_rows = (
+        await db.execute(
+            select(
+                NotificationDelivery.provider,
+                NotificationDelivery.channel,
+                func.count().label("total"),
+                func.sum(case((NotificationDelivery.status == NotificationDeliveryStatus.DELIVERED, 1), else_=0)).label("delivered"),
+                func.sum(case((NotificationDelivery.status.in_([NotificationDeliveryStatus.FAILED, NotificationDeliveryStatus.DEAD_LETTER]), 1), else_=0)).label("failed"),
+            )
+            .group_by(NotificationDelivery.provider, NotificationDelivery.channel)
+            .order_by(func.count().desc())
+        )
+    ).all()
+    provider_breakdown = [
+        {
+            "provider": row.provider or "unknown",
+            "channel": row.channel.value if hasattr(row.channel, "value") else str(row.channel),
+            "total": int(row.total or 0),
+            "delivery_rate": (int(row.delivered or 0) / max(1, int(row.total or 0))),
+            "failed": int(row.failed or 0),
+        }
+        for row in provider_rows
+    ]
+    return {
+        "time_series": channel_series["items"],
+        "template_comparisons": template_comparison["items"],
+        "provider_breakdown": provider_breakdown,
+    }
+
+
+async def get_admin_monitoring_drilldown(
+    db: AsyncSession,
+    *,
+    template: str | None = None,
+    provider: str | None = None,
+    channel: NotificationDeliveryChannel | None = None,
+    limit: int = 100,
+) -> dict[str, object]:
+    query = (
+        select(
+            NotificationDelivery.id,
+            NotificationDelivery.channel,
+            NotificationDelivery.provider,
+            NotificationDelivery.status,
+            NotificationDelivery.retry_count,
+            NotificationDelivery.last_error_code,
+            NotificationDelivery.last_error_reason,
+            Notification.type.label("template"),
+            NotificationDelivery.updated_at,
+        )
+        .join(Notification, Notification.id == NotificationDelivery.notification_id)
+        .order_by(NotificationDelivery.updated_at.desc())
+        .limit(limit)
+    )
+    if template:
+        query = query.where(Notification.type == template)
+    if provider:
+        query = query.where(NotificationDelivery.provider == provider)
+    if channel is not None:
+        query = query.where(NotificationDelivery.channel == channel)
+
+    rows = (await db.execute(query)).all()
+    items = [
+        {
+            "delivery_id": row.id,
+            "channel": row.channel.value if hasattr(row.channel, "value") else str(row.channel),
+            "provider": row.provider or "unknown",
+            "template": row.template.value if hasattr(row.template, "value") else str(row.template),
+            "status": row.status.value if hasattr(row.status, "value") else str(row.status),
+            "retry_count": int(row.retry_count or 0),
+            "error_code": row.last_error_code,
+            "error_reason": row.last_error_reason,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+        for row in rows
+    ]
+    return {"items": items, "total": len(items)}
+
+
+async def detect_delivery_anomalies(
+    db: AsyncSession,
+    *,
+    lookback_hours: int = 24,
+    failure_spike_threshold: float = 0.35,
+    slow_delivery_threshold_ms: float = 15000.0,
+) -> dict[str, object]:
+    window_start = utc_now() - timedelta(hours=max(1, lookback_hours))
+    rows = (
+        await db.execute(
+            select(
+                NotificationDelivery.provider,
+                NotificationDelivery.channel,
+                func.count().label("total"),
+                func.sum(case((NotificationDelivery.status.in_([NotificationDeliveryStatus.FAILED, NotificationDeliveryStatus.DEAD_LETTER]), 1), else_=0)).label("failed"),
+                func.avg(
+                    case(
+                        (
+                            NotificationDelivery.delivered_at.is_not(None),
+                            (func.julianday(NotificationDelivery.delivered_at) - func.julianday(NotificationDelivery.queued_at)) * 86400000.0,
+                        ),
+                        else_=None,
+                    )
+                ).label("avg_latency_ms"),
+            )
+            .where(NotificationDelivery.updated_at >= window_start)
+            .group_by(NotificationDelivery.provider, NotificationDelivery.channel)
+        )
+    ).all()
+    anomalies: list[dict[str, object]] = []
+    for row in rows:
+        total = int(row.total or 0)
+        if total < 10:
+            continue
+        failure_rate = int(row.failed or 0) / total
+        avg_latency_ms = float(row.avg_latency_ms or 0.0)
+        if failure_rate >= failure_spike_threshold:
+            anomalies.append(
+                {
+                    "type": "failure_spike",
+                    "provider": row.provider or "unknown",
+                    "channel": row.channel.value if hasattr(row.channel, "value") else str(row.channel),
+                    "metric_value": failure_rate,
+                    "threshold": failure_spike_threshold,
+                }
+            )
+        if avg_latency_ms >= slow_delivery_threshold_ms:
+            anomalies.append(
+                {
+                    "type": "slow_delivery_degradation",
+                    "provider": row.provider or "unknown",
+                    "channel": row.channel.value if hasattr(row.channel, "value") else str(row.channel),
+                    "metric_value": avg_latency_ms,
+                    "threshold": slow_delivery_threshold_ms,
+                }
+            )
+    return {"window_start": window_start.isoformat(), "anomalies": anomalies}
 
 
 async def get_user_notifications(
