@@ -127,6 +127,23 @@ Verification accepts an HMAC-SHA256 signature of the raw request body using the 
 - Admin logins continue to work without mandatory OTP, but the login response now recommends OTP when a superuser account has not enabled it.
 - `GET /api/v1/auth/admin/security/admin-otp-status` exposes current OTP readiness plus the latest OTP audit event for admin accounts.
 
+## SMS quota rollout plan (safe defaults + monitoring)
+
+1. **Schema migration first**: apply `bb91d8e4c112_expand_sms_quota_policy_engine` to add multi-level counters (tenant/phone) and soft/hard throttle metadata.
+2. **Safe defaults enabled**:
+   - soft cap uses `delay` action with 30s pause,
+   - hard cap uses `block`,
+   - existing per-user/IP/global caps remain active.
+3. **Canary rollout**:
+   - keep `global_provider_soft_daily_limit` low in staging to validate trend/offender cards and incident exports,
+   - promote to production with conservative limits and privileged override enabled.
+4. **Monitoring**:
+   - poll `/api/v1/notifications/admin/sms-quotas/dashboard/` for usage trends and top offenders,
+   - poll `/api/v1/notifications/admin/sms-quotas/violations/` and `/incidents/export/` for compliance/security workflows.
+5. **Operational response**:
+   - tune per-tenant/per-phone limits to isolate abuse,
+   - switch `soft_throttle_action` (`delay` or `challenge`) before escalating hard blocks.
+
 ### Content And Reporting
 
 - Admin content endpoints manage banners and static pages.

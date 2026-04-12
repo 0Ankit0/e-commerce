@@ -78,8 +78,32 @@ def send_push_notification_task(payload: Dict[str, Any]) -> bool:
 
 @shared_task(name="send_sms_notification_task")
 def send_sms_notification_task(to_number: str, body: str) -> bool:
-    from src.apps.communications import get_communications_service
+    return asyncio.run(_send_transactional_sms_with_quota(to_number=to_number, body=body))
 
+
+async def _send_transactional_sms_with_quota(to_number: str, body: str) -> bool:
+    from src.apps.communications import get_communications_service
+    from src.apps.notification.services.sms_service import SmsQuotaCheckContext, SmsQuotaExceededError, enforce_sms_quota
+
+    async with async_session_factory() as db:
+        try:
+            decision = await enforce_sms_quota(
+                db,
+                context=SmsQuotaCheckContext(
+                    provider="default",
+                    phone_number=to_number,
+                    entry_point="transactional_sms",
+                ),
+            )
+            await db.commit()
+        except SmsQuotaExceededError:
+            await db.rollback()
+            return False
+    if decision.challenge_required:
+        logger.warning("SMS challenge action required for transactional SMS; skipping direct send")
+        return False
+    if decision.delay_seconds > 0:
+        await asyncio.sleep(min(decision.delay_seconds, 5))
     result = get_communications_service().send_sms(to_number=to_number, body=body)
     return result.success
 
@@ -213,11 +237,16 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
                         .order_by(TenantMember.joined_at.asc())
                     )
                 ).scalars().first()
-                _ = membership
                 try:
-                    await enforce_sms_quota(
+                    decision = await enforce_sms_quota(
                         db,
-                        context=SmsQuotaCheckContext(user_id=delivery.user_id, provider="default"),
+                        context=SmsQuotaCheckContext(
+                            user_id=delivery.user_id,
+                            tenant_id=membership.tenant_id if membership else None,
+                            phone_number=profile.phone,
+                            provider="default",
+                            entry_point="otp_sms" if notification.type == "otp" else "transactional_sms",
+                        ),
                     )
                 except SmsQuotaExceededError as quota_exc:
                     delivery.status = NotificationDeliveryStatus.FAILED
@@ -230,6 +259,16 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
                     db.add(delivery)
                     await db.commit()
                     return False
+                if decision.challenge_required:
+                    delivery.status = NotificationDeliveryStatus.SKIPPED
+                    delivery.last_error_code = "quota_challenge_required"
+                    delivery.last_error_reason = "SMS quota challenge action configured for this scope."
+                    delivery.updated_at = utc_now()
+                    db.add(delivery)
+                    await db.commit()
+                    return False
+                if decision.delay_seconds > 0:
+                    await asyncio.sleep(min(decision.delay_seconds, 5))
 
                 result = comms.send_sms(to_number=profile.phone, body=f"{notification.title}: {notification.body}")
             else:
