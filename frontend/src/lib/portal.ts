@@ -142,6 +142,7 @@ export const PORTAL_DEFINITIONS: Record<PortalKey, PortalDefinition> = {
     navigation: [
       { label: 'Overview', href: '/admin/dashboard', icon: LayoutDashboard },
       { label: 'Orders', href: '/admin/orders', icon: Receipt },
+      { label: 'Planner', href: '/admin/planner', icon: Truck },
       { label: 'Line-haul Planner', href: '/admin/line-haul-planner', icon: Truck },
       { label: 'Hub Ops', href: '/admin/hub-operations', icon: Warehouse },
       { label: 'Branch Ops', href: '/admin/branch-operations', icon: Users },

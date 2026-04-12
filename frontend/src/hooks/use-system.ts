@@ -20,6 +20,18 @@ import type {
   PushConfigResponse,
 } from '@/types';
 
+interface PlannerDraftPayload {
+  name: string;
+  status?: 'draft' | 'published' | 'frozen';
+  expected_version?: number;
+  routes: Array<{ route_id: string; origin_hub: string; destination_hub: string; demand_units: number }>;
+  vehicles: Array<{ vehicle_id: string; hub_code: string; capacity_units: number }>;
+  connectivity?: Record<string, string[]>;
+  locked_assignments?: Array<{ route_id: string; vehicle_id: string; lock_units?: number; override_units?: number }>;
+  assignments: Array<{ route_id: string; vehicle_id: string; assigned_units: number }>;
+  optimizer_metadata?: Record<string, unknown>;
+}
+
 export function useSystemCapabilities() {
   return useQuery({
     queryKey: ['system-capabilities'],
@@ -253,5 +265,67 @@ export function useEmailDeliveryDeadLetters() {
       const response = await apiClient.get<{ items: EmailDeliveryDeadLetter[] }>('/system/admin/communications/delivery/dead-letters/');
       return response.data.items;
     },
+  });
+}
+
+export function usePlannerDrafts() {
+  return useQuery({
+    queryKey: ['planner-drafts'],
+    queryFn: async () => {
+      const response = await apiClient.get<{ items: Array<Record<string, unknown>> }>('/logistics/line-haul-planner/drafts');
+      return response.data.items;
+    },
+  });
+}
+
+export function useCreatePlannerDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: PlannerDraftPayload) => {
+      const response = await apiClient.post('/logistics/line-haul-planner/drafts', payload);
+      return response.data;
+    },
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['planner-drafts'] }),
+  });
+}
+
+export function useUpdatePlannerDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ draftId, payload }: { draftId: string; payload: PlannerDraftPayload }) => {
+      const response = await apiClient.put(`/logistics/line-haul-planner/drafts/${draftId}`, payload);
+      return response.data;
+    },
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['planner-drafts'] }),
+  });
+}
+
+export function useOptimizePlannerDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ draftId, expectedVersion, randomSeed }: { draftId: string; expectedVersion: number; randomSeed: number }) => {
+      const response = await apiClient.post(
+        `/logistics/line-haul-planner/drafts/${draftId}/optimize`,
+        null,
+        { params: { expected_version: expectedVersion, random_seed: randomSeed } },
+      );
+      return response.data;
+    },
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['planner-drafts'] }),
+  });
+}
+
+export function usePublishPlannerDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ draftId, expectedVersion, freeze }: { draftId: string; expectedVersion: number; freeze?: boolean }) => {
+      const response = await apiClient.post(
+        `/logistics/line-haul-planner/drafts/${draftId}/apply`,
+        null,
+        { params: { expected_version: expectedVersion, freeze: freeze ?? false } },
+      );
+      return response.data;
+    },
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['planner-drafts'] }),
   });
 }
