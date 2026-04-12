@@ -68,4 +68,34 @@ if [[ ${#missing[@]} -gt 0 ]]; then
   exit 0
 fi
 
+if [[ "$store_file" != /* ]]; then
+  store_file="$ANDROID_DIR/$store_file"
+fi
+
+if [[ ! -f "$store_file" ]]; then
+  message="Android keystore file does not exist at path: $store_file"
+  if [[ "$strict_mode" == true ]]; then
+    echo "ERROR: $message" >&2
+    exit 1
+  fi
+
+  echo "WARN: $message"
+  exit 0
+fi
+
+if command -v keytool >/dev/null 2>&1; then
+  if ! keytool -list -keystore "$store_file" -storepass "$store_password" -alias "$key_alias" >/dev/null 2>&1; then
+    message="Unable to verify keystore/alias credentials with keytool. Check store password and alias."
+    if [[ "$strict_mode" == true ]]; then
+      echo "ERROR: $message" >&2
+      exit 1
+    fi
+
+    echo "WARN: $message"
+    exit 0
+  fi
+else
+  echo "WARN: keytool not found; skipping keystore/alias verification."
+fi
+
 echo "Android release signing configuration is complete."

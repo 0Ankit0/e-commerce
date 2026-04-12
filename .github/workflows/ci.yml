@@ -5,6 +5,12 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      mobile_android_release:
+        description: "Run signed Android release validation"
+        required: false
+        default: "false"
 
 jobs:
   docs:
@@ -76,7 +82,7 @@ jobs:
   mobile:
     runs-on: ubuntu-latest
     env:
-      MOBILE_ANDROID_RELEASE: "false"
+      MOBILE_ANDROID_RELEASE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mobile_android_release || 'false' }}
     defaults:
       run:
         working-directory: mobile
@@ -106,3 +112,11 @@ jobs:
           fi
           echo "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > android/app/upload-keystore.jks
           ./scripts/check_android_release_signing.sh --strict
+      - name: Android signed release bundle validation
+        if: ${{ env.MOBILE_ANDROID_RELEASE == 'true' }}
+        env:
+          ANDROID_KEYSTORE_PATH: app/upload-keystore.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: flutter build appbundle --flavor production --release
