@@ -53,12 +53,12 @@ ALLOWED_SHIPMENT_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.OUT_FOR_DELIVERY: {OrderStatus.DELIVERED, OrderStatus.RETURNED},
 }
 
-PLANNER_ERROR_UNKNOWN_ROUTE = "LOG_PLANNER_UNKNOWN_ROUTE"
-PLANNER_ERROR_UNKNOWN_VEHICLE = "LOG_PLANNER_UNKNOWN_VEHICLE"
+PLANNER_ERROR_UNKNOWN_ROUTE = "unknown_route"
+PLANNER_ERROR_MISSING_VEHICLE = "missing_vehicle"
 PLANNER_ERROR_DUPLICATE_ASSIGNMENT = "LOG_PLANNER_DUPLICATE_ASSIGNMENT"
-PLANNER_ERROR_OVER_CAPACITY = "LOG_PLANNER_OVER_CAPACITY"
-PLANNER_ERROR_ROUTE_INCOMPATIBLE = "LOG_PLANNER_ROUTE_INCOMPATIBLE"
-PLANNER_ERROR_ROUTE_UNSCHEDULED = "LOG_PLANNER_ROUTE_UNSCHEDULED"
+PLANNER_ERROR_OVER_CAPACITY = "over_capacity"
+PLANNER_ERROR_ROUTE_HUB_CHAIN_INCOMPATIBLE = "incompatible_route_hub_chain"
+PLANNER_ERROR_SCHEDULE_CUTOFF_VIOLATION = "schedule_cutoff_violation"
 
 ALLOWED_HUB_ITEM_TRANSITIONS: dict[HubSortItemStatus, set[HubSortItemStatus]] = {
     HubSortItemStatus.SCANNED: {HubSortItemStatus.ASSIGNED, HubSortItemStatus.EXCEPTION},
@@ -107,7 +107,7 @@ def validate_line_haul_assignments(
         if vehicle_id not in vehicle_caps:
             errors.append(
                 {
-                    "code": PLANNER_ERROR_UNKNOWN_VEHICLE,
+                    "code": PLANNER_ERROR_MISSING_VEHICLE,
                     "message": f"Assignment row {idx + 1} references unknown vehicle '{vehicle_id}'.",
                     "field": "vehicle_id",
                     "route_id": route_id,
@@ -123,7 +123,7 @@ def validate_line_haul_assignments(
             if vehicle_hub != origin_hub or (destination_hub and destination_hub not in reachable):
                 errors.append(
                     {
-                        "code": PLANNER_ERROR_ROUTE_INCOMPATIBLE,
+                        "code": PLANNER_ERROR_ROUTE_HUB_CHAIN_INCOMPATIBLE,
                         "message": f"Vehicle '{vehicle_id}' cannot serve route '{route_id}' from hub '{vehicle_hub}'.",
                         "field": "route_id",
                         "route_id": route_id,
@@ -167,7 +167,7 @@ def validate_line_haul_assignments(
         if assigned_units < demand_units:
             errors.append(
                 {
-                    "code": PLANNER_ERROR_ROUTE_UNSCHEDULED,
+                    "code": PLANNER_ERROR_SCHEDULE_CUTOFF_VIOLATION,
                     "message": f"Route '{route_id}' is short by {demand_units - assigned_units} units.",
                     "field": "assigned_units",
                     "route_id": route_id,
@@ -237,10 +237,26 @@ def optimize_line_haul_plan_assignments(
         )
     )
     assignment_rows = [
-        {"route_id": item.route_id, "vehicle_id": item.vehicle_id, "assigned_units": item.assigned_units}
+        {
+            "route_id": item.route_id,
+            "vehicle_id": item.vehicle_id,
+            "assigned_units": item.assigned_units,
+            "explainability": {"assignment_reason": item.reason},
+        }
         for item in result.assignments
     ]
-    return {"assignments": assignment_rows, "unassigned_routes": result.unassigned_routes, "metadata": result.metadata}
+    unassigned_rows = [
+        {
+            **item,
+            "explainability": {
+                "why_unassigned": "Route remained unassigned because no feasible vehicle capacity or hub chain was available."
+                if item.get("reason") == "insufficient_capacity"
+                else "Route remained unassigned because origin/destination hubs are disconnected in the planning graph."
+            },
+        }
+        for item in result.unassigned_routes
+    ]
+    return {"assignments": assignment_rows, "unassigned_routes": unassigned_rows, "metadata": result.metadata}
 
 
 async def get_zone_by_pincode(pincode: str, db: AsyncSession) -> DeliveryZone | None:

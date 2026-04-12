@@ -22,7 +22,7 @@ import type {
 
 interface PlannerDraftPayload {
   name: string;
-  status?: 'draft' | 'published' | 'frozen';
+  status?: 'draft' | 'locked' | 'finalized' | 'published';
   expected_version?: number;
   routes: Array<{ route_id: string; origin_hub: string; destination_hub: string; demand_units: number }>;
   vehicles: Array<{ vehicle_id: string; hub_code: string; capacity_units: number }>;
@@ -327,5 +327,73 @@ export function usePublishPlannerDraft() {
       return response.data;
     },
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['planner-drafts'] }),
+  });
+}
+
+export function useClonePlannerDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ draftId, name }: { draftId: string; name?: string }) => {
+      const response = await apiClient.post(`/logistics/line-haul-planner/drafts/${draftId}/clone`, { name });
+      return response.data;
+    },
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['planner-drafts'] }),
+  });
+}
+
+export function useLockPlannerDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ draftId, expectedVersion }: { draftId: string; expectedVersion: number }) => {
+      const response = await apiClient.post(`/logistics/line-haul-planner/drafts/${draftId}/lock`, null, {
+        params: { expected_version: expectedVersion },
+      });
+      return response.data;
+    },
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['planner-drafts'] }),
+  });
+}
+
+export function useFinalizePlannerDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ draftId, expectedVersion }: { draftId: string; expectedVersion: number }) => {
+      const response = await apiClient.post(`/logistics/line-haul-planner/drafts/${draftId}/finalize`, null, {
+        params: { expected_version: expectedVersion },
+      });
+      return response.data;
+    },
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['planner-drafts'] }),
+  });
+}
+
+export function usePublishQueue() {
+  return useQuery({
+    queryKey: ['planner-publish-queue'],
+    queryFn: async () => {
+      const response = await apiClient.get<{ items: Array<Record<string, unknown>> }>('/logistics/line-haul-planner/publish-queue');
+      return response.data.items;
+    },
+  });
+}
+
+export function usePlannerBacklogPool() {
+  return useQuery({
+    queryKey: ['planner-backlog-pool'],
+    queryFn: async () => (await apiClient.get('/logistics/line-haul-planner/backlog')).data,
+  });
+}
+
+export function usePlannerRouteCanvas() {
+  return useQuery({
+    queryKey: ['planner-route-canvas'],
+    queryFn: async () => (await apiClient.get('/logistics/line-haul-planner/route-canvas')).data,
+  });
+}
+
+export function usePlannerFleetCapacity() {
+  return useQuery({
+    queryKey: ['planner-fleet-capacity'],
+    queryFn: async () => (await apiClient.get('/logistics/line-haul-planner/fleet-capacity')).data,
   });
 }

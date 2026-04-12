@@ -45,6 +45,7 @@ class PlannerAssignment:
     assigned_units: int
     locked: bool = False
     overridden: bool = False
+    reason: str = "capacity_fit"
 
 
 @dataclass(slots=True)
@@ -127,6 +128,7 @@ def run_line_haul_optimizer(payload: PlannerInput) -> PlannerRunResult:
                 assigned_units=units,
                 locked=True,
                 overridden=lock.override_units is not None,
+                reason="manual_override" if lock.override_units is not None else "locked_assignment",
             )
         )
         remaining_demand[route.route_id] = max(remaining_demand[route.route_id] - units, 0)
@@ -157,6 +159,7 @@ def run_line_haul_optimizer(payload: PlannerInput) -> PlannerRunResult:
                     route_id=route.route_id,
                     vehicle_id=vehicle.vehicle_id,
                     assigned_units=chunk,
+                    reason="capacity_fit",
                 )
             )
             demand_left -= chunk
