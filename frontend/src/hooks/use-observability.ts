@@ -10,6 +10,7 @@ import type {
   BranchDashboardDrilldownResponse,
   BranchDashboardSnapshotResponse,
   NotificationChannelPerformance,
+  NotificationDeliveryDashboard,
   NotificationPerformanceResponse,
   NotificationTemplatePerformance,
   SecurityIncident,
@@ -198,6 +199,20 @@ export function useNotificationTemplatePerformance(filters: NotificationPerforma
       const response = await apiClient.get<NotificationPerformanceResponse<NotificationTemplatePerformance>>(
         '/analytics/notifications/templates/performance',
         { params: filters }
+      );
+      return response.data;
+    },
+    staleTime: 15_000,
+  });
+}
+
+export function useNotificationDeliveryDashboard(lookbackDays = 7) {
+  return useQuery({
+    queryKey: ['notification-delivery-dashboard', lookbackDays],
+    queryFn: async () => {
+      const response = await apiClient.get<NotificationDeliveryDashboard>(
+        '/analytics/notifications/delivery/dashboard',
+        { params: { lookback_days: lookbackDays } }
       );
       return response.data;
     },

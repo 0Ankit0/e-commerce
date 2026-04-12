@@ -4,6 +4,11 @@ from .notification_preference import NotificationPreference
 from .notification_delivery import (
     NotificationDelivery,
     NotificationDeliveryChannel,
+    NotificationDeliveryDailySummary,
+    NotificationDeliveryEvent,
+    NotificationDeliveryEventType,
+    NotificationDeliveryAlert,
+    NotificationFailureBucket,
     NotificationDeliveryStatus,
 )
 
@@ -16,6 +21,11 @@ __all__ = [
     "NotificationType",
     "NotificationDelivery",
     "NotificationDeliveryChannel",
+    "NotificationDeliveryEvent",
+    "NotificationDeliveryEventType",
+    "NotificationFailureBucket",
+    "NotificationDeliveryDailySummary",
+    "NotificationDeliveryAlert",
     "NotificationDeliveryStatus",
     "SmsQuotaConfig",
     "SmsQuotaCounter",

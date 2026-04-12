@@ -191,6 +191,40 @@ export interface NotificationPerformanceResponse<T> {
   total: number;
 }
 
+export interface NotificationDeliveryAnalyticsSummary {
+  total: number;
+  delivered: number;
+  failed: number;
+  delivery_rate: number;
+  p95_latency_ms: number;
+  retry_success_curve: Array<{
+    attempt: number;
+    sample_size: number;
+    success_count: number;
+    success_rate: number;
+  }>;
+  failure_root_causes: Array<{
+    bucket: string;
+    count: number;
+    share: number;
+  }>;
+}
+
+export interface NotificationDeliveryDashboard {
+  window: { from: string; to: string; days: number };
+  summary: NotificationDeliveryAnalyticsSummary;
+  comparison: {
+    delivery_rate_delta: number;
+    p95_latency_delta_ms: number;
+    failed_delta: number;
+  };
+  drilldowns: Array<{
+    channel: string;
+    total: number;
+    delivery_rate: number;
+  }>;
+}
+
 
 export interface SmsQuotaConfig {
   id: number;

@@ -160,6 +160,9 @@ class Settings(BaseSettings):
     LOG_OUTPUTS: list[str] = ["console", "database", "web"]
     LOG_FILE_PATH: str = "logs/application.log"
     LOG_RETENTION_DAYS: int = 7
+    NOTIFICATION_EVENT_RETENTION_DAYS: int = 30
+    NOTIFICATION_SUMMARY_RETENTION_DAYS: int = 365
+    NOTIFICATION_ALERT_FAILURE_RATE_THRESHOLD: float = 0.25
     LOG_SQL_QUERIES: bool = False
     FAILED_LOGIN_BURST_THRESHOLD: int = 5
     FAILED_LOGIN_BURST_WINDOW_MINUTES: int = 30

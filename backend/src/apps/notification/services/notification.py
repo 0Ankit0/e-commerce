@@ -23,6 +23,8 @@ from src.apps.notification.schemas.notification import NotificationCreate, Notif
 from src.apps.notification.schemas.notification_device import NotificationDeviceCreate
 from src.apps.notification.schemas.notification_preference import NotificationPreferenceRead
 from src.apps.notification.tasks import dispatch_notification_delivery_task
+from src.apps.notification.services.delivery_analytics import record_delivery_event
+from src.apps.notification.models.notification_delivery import NotificationDeliveryEventType
 
 log = logging.getLogger(__name__)
 
@@ -233,6 +235,15 @@ async def _enqueue_channel_delivery(
     db.add(delivery)
     await db.commit()
     await db.refresh(delivery)
+    await record_delivery_event(
+        db,
+        delivery=delivery,
+        event_type=NotificationDeliveryEventType.QUEUED,
+        status_before=None,
+        status_after=delivery.status,
+        metadata={"target": stable_target, "template": notification.type.value if hasattr(notification.type, "value") else str(notification.type)},
+    )
+    await db.commit()
     dispatch_notification_delivery_task.delay(delivery.id)
     return delivery
 
@@ -301,6 +312,22 @@ async def _record_ws_delivery(
         last_error_code="websocket_push_failed" if not success else None,
     )
     db.add(delivery)
+    await db.commit()
+    await db.refresh(delivery)
+    await record_delivery_event(
+        db,
+        delivery=delivery,
+        event_type=(
+            NotificationDeliveryEventType.DELIVERED
+            if success
+            else NotificationDeliveryEventType.FAILED
+        ),
+        status_before=None,
+        status_after=delivery.status,
+        provider_code=delivery.last_error_code,
+        error_reason=delivery.last_error_reason,
+        metadata={"target": target, "template": notification.type.value if hasattr(notification.type, "value") else str(notification.type)},
+    )
     await db.commit()
 
 

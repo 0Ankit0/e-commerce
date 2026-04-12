@@ -12,9 +12,11 @@ from src.apps.core.celery_app import celery_app  # noqa: F401 — bind tasks to 
 from src.apps.core.time import utc_now
 from src.apps.notification.models.notification_delivery import (
     NotificationDelivery,
+    NotificationDeliveryEventType,
     NotificationDeliveryStatus,
 )
 from src.apps.notification.models.notification_device import NotificationDevice
+from src.apps.notification.services.delivery_analytics import record_delivery_event
 from src.db.session import async_session_factory
 
 logger = logging.getLogger(__name__)
@@ -138,6 +140,15 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
         delivery.updated_at = utc_now()
         db.add(delivery)
         await db.commit()
+        await record_delivery_event(
+            db,
+            delivery=delivery,
+            event_type=NotificationDeliveryEventType.SENT,
+            status_before=NotificationDeliveryStatus.QUEUED,
+            status_after=delivery.status,
+            metadata={"phase": "attempt_started"},
+        )
+        await db.commit()
 
         try:
             comms = get_communications_service()
@@ -229,6 +240,7 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
             delivery.provider_response_payload = str(result.metadata)[:2048] if result.metadata else None
             delivery.status = NotificationDeliveryStatus.SENT
             delivery.sent_at = utc_now()
+            status_before = NotificationDeliveryStatus.QUEUED
 
             if not result.success:
                 delivery.status = NotificationDeliveryStatus.FAILED
@@ -236,10 +248,27 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
                 delivery.last_error_reason = (result.error or "Provider reported failure")[:1024]
                 delivery.updated_at = utc_now()
                 db.add(delivery)
+                await record_delivery_event(
+                    db,
+                    delivery=delivery,
+                    event_type=NotificationDeliveryEventType.FAILED,
+                    status_before=status_before,
+                    status_after=delivery.status,
+                    provider_code=delivery.provider_response_code,
+                    error_reason=delivery.last_error_reason,
+                )
                 await db.commit()
                 raise RuntimeError(delivery.last_error_reason)
 
             db.add(delivery)
+            await record_delivery_event(
+                db,
+                delivery=delivery,
+                event_type=NotificationDeliveryEventType.SENT,
+                status_before=status_before,
+                status_after=delivery.status,
+                provider_code=delivery.provider_response_code,
+            )
             await db.commit()
 
             delivery.status = NotificationDeliveryStatus.DELIVERED
@@ -249,6 +278,14 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
             delivery.next_attempt_at = None
             delivery.updated_at = utc_now()
             db.add(delivery)
+            await record_delivery_event(
+                db,
+                delivery=delivery,
+                event_type=NotificationDeliveryEventType.DELIVERED,
+                status_before=NotificationDeliveryStatus.SENT,
+                status_after=delivery.status,
+                provider_code=delivery.provider_response_code,
+            )
             await db.commit()
             return True
         except Exception as exc:
@@ -279,6 +316,16 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
                 delivery.status = NotificationDeliveryStatus.RETRYING
                 delivery.next_attempt_at = utc_now()
                 db.add(delivery)
+                await record_delivery_event(
+                    db,
+                    delivery=delivery,
+                    event_type=NotificationDeliveryEventType.RETRY_SCHEDULED,
+                    status_before=NotificationDeliveryStatus.FAILED,
+                    status_after=delivery.status,
+                    provider_code=delivery.provider_response_code,
+                    error_reason=delivery.last_error_reason,
+                    metadata={"countdown_seconds": countdown},
+                )
                 await db.commit()
                 dispatch_notification_delivery_task.apply_async(args=[delivery_id], countdown=countdown)
                 return False
@@ -287,6 +334,15 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
             delivery.dead_lettered_at = utc_now()
             delivery.next_attempt_at = None
             db.add(delivery)
+            await record_delivery_event(
+                db,
+                delivery=delivery,
+                event_type=NotificationDeliveryEventType.DEAD_LETTERED,
+                status_before=NotificationDeliveryStatus.FAILED,
+                status_after=delivery.status,
+                provider_code=delivery.provider_response_code,
+                error_reason=delivery.last_error_reason,
+            )
             await db.commit()
             logger.warning(
                 "Notification delivery dead-lettered id=%s notification=%s channel=%s reason=%s",
