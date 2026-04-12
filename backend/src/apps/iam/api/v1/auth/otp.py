@@ -33,6 +33,7 @@ from src.apps.observability.service import (
     record_successful_login_event,
     record_token_event,
 )
+from src.apps.notification.services.sms_service import SmsQuotaCheckContext, SmsQuotaExceededError, enforce_sms_quota
 
 router = APIRouter()
 
@@ -58,6 +59,14 @@ async def _record_admin_otp_audit(
             "otp_verified": user.otp_verified,
             "username": user.username,
         },
+    )
+
+
+def _resolve_device_fingerprint(request: Request) -> str:
+    return (
+        request.headers.get("x-device-fingerprint")
+        or request.headers.get("x-client-fingerprint")
+        or request.headers.get("user-agent", "unknown")
     )
 
 
@@ -284,6 +293,30 @@ async def validate_otp_login(
                         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                         detail=f"Too many login attempts. Try again in {remaining_minutes} minutes."
                     )
+        try:
+            decision = await enforce_sms_quota(
+                db,
+                context=SmsQuotaCheckContext(
+                    user_id=user.id,
+                    ip_address=ip_address,
+                    device_fingerprint=_resolve_device_fingerprint(request),
+                    provider="otp-auth",
+                    entry_point="otp_validate",
+                    trusted_flow=user.is_superuser,
+                ),
+            )
+            if decision.delay_seconds > 0:
+                await RedisCache.set(
+                    f"otp:throttle:{user.id}",
+                    {"delay_seconds": decision.delay_seconds, "scope": decision.scope},
+                    ttl=decision.delay_seconds,
+                )
+        except SmsQuotaExceededError as quota_exc:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"OTP validation throttled for {quota_exc.scope}. Retry in {quota_exc.retry_after_seconds} seconds.",
+            )
         
         if not user:
             raise HTTPException(
@@ -469,6 +502,33 @@ async def verify_otp_step_up(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="OTP must be enabled for this account")
 
     totp = pyotp.TOTP(current_user.otp_base32)
+    try:
+        await enforce_sms_quota(
+            db,
+            context=SmsQuotaCheckContext(
+                user_id=current_user.id,
+                ip_address=get_client_ip(request),
+                device_fingerprint=_resolve_device_fingerprint(request),
+                provider="otp-auth",
+                entry_point=f"otp_step_up:{action.value}",
+                trusted_flow=True,
+            ),
+        )
+    except SmsQuotaExceededError as quota_exc:
+        await record_privileged_action_audit(
+            db,
+            actor_user_id=current_user.id,
+            action=action.value,
+            outcome="failure",
+            request=request,
+            metadata={"reason": "quota_exceeded", "scope": quota_exc.scope},
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Step-up verification throttled. Retry in {quota_exc.retry_after_seconds} seconds.",
+        )
+
     if not totp.verify(payload.otp_code):
         await record_privileged_action_audit(
             db,
