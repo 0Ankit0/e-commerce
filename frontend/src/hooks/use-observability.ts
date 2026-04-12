@@ -224,7 +224,7 @@ export function useNotificationDeliveryDashboard(lookbackDays = 7) {
   });
 }
 
-export function useHubOperationalReports(hubId: string | null) {
+export function useHubOperationalReports(hubId: string | null, realtime = true) {
   return useQuery({
     queryKey: ['hub-operational-reports', hubId],
     queryFn: async () => {
@@ -232,7 +232,8 @@ export function useHubOperationalReports(hubId: string | null) {
       return response.data;
     },
     enabled: Boolean(hubId),
-    staleTime: 10_000,
-    refetchInterval: 10_000,
+    staleTime: 5_000,
+    refetchInterval: realtime ? 5_000 : false,
+    refetchIntervalInBackground: realtime,
   });
 }

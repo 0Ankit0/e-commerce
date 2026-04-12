@@ -139,6 +139,12 @@ async def test_hub_intake_to_dispatch_and_exception_paths(client: AsyncClient, d
         json={'shipment_id': shipment_id},
     )
     assert dispatch_resp.status_code == 200, dispatch_resp.text
+    retry_dispatch = await client.post(
+        f'/api/v1/logistics/hubs/{hub_id}/sort-queues/{queue_id}/execution/outbound-confirmation',
+        headers=headers,
+        json={'shipment_id': shipment_id, 'retry_token': 'retry-1'},
+    )
+    assert retry_dispatch.status_code == 200, retry_dispatch.text
 
     workbench_resp = await client.get(f'/api/v1/logistics/hubs/{hub_id}/sort-workbench', headers=headers, params={'queue_id': queue_id})
     assert workbench_resp.status_code == 200, workbench_resp.text
@@ -173,6 +179,12 @@ async def test_hub_exception_flows_cover_missort_damage_reroute_and_scan_mismatc
         json={'shipment_id': shipment_id},
     )
     assert duplicate_scan.status_code == 409, duplicate_scan.text
+    duplicate_retry = await client.post(
+        f'/api/v1/logistics/hubs/{hub_id}/sort-queues/{queue_id}/scan',
+        headers=headers,
+        json={'shipment_id': shipment_id, 'retry_token': 'scan-retry-1'},
+    )
+    assert duplicate_retry.status_code == 200, duplicate_retry.text
 
     hold_damaged = await client.post(
         f'/api/v1/logistics/hubs/{hub_id}/sort-queues/{queue_id}/recirculation-rework',

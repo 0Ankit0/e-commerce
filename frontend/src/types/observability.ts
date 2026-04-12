@@ -125,9 +125,19 @@ export interface HubOperationalReportsResponse {
   hub_id: string;
   throughput_by_shift: Record<string, number>;
   lane_throughput: Record<string, number>;
+  throughput_shipments?: number;
   dwell_time_minutes: number;
+  sort_error_rate_percent?: number;
   sla_breach_shipments: number;
   sla_breach_heatmap: Record<string, number>;
+  stale_dwell_alarm_threshold_minutes?: number;
+  stale_dwell_alarm_shipments?: number;
+  execution_metrics?: {
+    throughput_shipments: number;
+    dwell_time_minutes: number;
+    sort_error_rate_percent: number;
+    sla_breach_shipments: number;
+  };
   exception_causes: Record<string, number>;
   exception_categories: Array<{ category: string; count: number }>;
   top_exception_category: string | null;

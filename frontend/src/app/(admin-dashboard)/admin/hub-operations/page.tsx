@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshCcw } from 'lucide-react';
 import { apiClient } from '@/lib/api-client';
 import { Button } from '@/components/ui/button';
@@ -44,6 +44,13 @@ type HubWorkbenchResponse = {
   hold_exception_items?: WorkbenchItem[];
   sorting_lanes?: Array<{ lane: string; items: WorkbenchItem[] }>;
   outbound_items: WorkbenchItem[];
+  outbound_readiness_board?: {
+    ready_to_dispatch_count: number;
+    dispatched_count: number;
+    hold_count: number;
+    stale_dwell_alarm_count?: number;
+  };
+  lane_capacity?: { threshold: number; lanes_at_risk: number };
   timeline: WorkbenchEvent[];
 };
 
@@ -67,7 +74,7 @@ export default function HubOperationsPage() {
 
   const activeQueueId = queueId || workbench?.selected_queue_id || '';
 
-  const refreshWorkbench = async (nextQueueId?: string) => {
+  const refreshWorkbench = useCallback(async (nextQueueId?: string) => {
     if (!hubId.trim()) {
       setStatusMessage('Hub ID is required.');
       return;
@@ -85,7 +92,15 @@ export default function HubOperationsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [hubId]);
+
+  useEffect(() => {
+    if (!hubId.trim()) return;
+    const interval = setInterval(() => {
+      void refreshWorkbench(activeQueueId || undefined);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [hubId, activeQueueId, refreshWorkbench]);
 
   const runBulkAction = async (path: 'bulk-scan' | 'bulk-assign' | 'bulk-move-next-leg' | 'bulk-actions') => {
     if (!hubId.trim() || !activeQueueId) {
@@ -251,6 +266,12 @@ export default function HubOperationsPage() {
         <Card><CardHeader><CardTitle>Lane throughput</CardTitle></CardHeader><CardContent>{JSON.stringify(operationalReports?.lane_throughput ?? {})}</CardContent></Card>
         <Card><CardHeader><CardTitle>SLA breaches</CardTitle></CardHeader><CardContent>{operationalReports?.sla_breach_shipments ?? 0}</CardContent></Card>
         <Card><CardHeader><CardTitle>Top exception</CardTitle></CardHeader><CardContent>{operationalReports?.top_exception_category ?? 'n/a'}</CardContent></Card>
+      </div>
+      <div className="grid gap-4 lg:grid-cols-4">
+        <Card><CardHeader><CardTitle>Exception queue</CardTitle></CardHeader><CardContent>{workbench?.hold_exception_items?.length ?? 0}</CardContent></Card>
+        <Card><CardHeader><CardTitle>Outbound-ready batches</CardTitle></CardHeader><CardContent>{workbench?.outbound_readiness_board?.ready_to_dispatch_count ?? 0}</CardContent></Card>
+        <Card><CardHeader><CardTitle>Sort error rate</CardTitle></CardHeader><CardContent>{operationalReports?.sort_error_rate_percent ?? 0}%</CardContent></Card>
+        <Card><CardHeader><CardTitle>Stale dwell alarms</CardTitle></CardHeader><CardContent>{operationalReports?.stale_dwell_alarm_shipments ?? 0}</CardContent></Card>
       </div>
     </div>
   );
