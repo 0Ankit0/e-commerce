@@ -7,8 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.apps.core import security
 from src.apps.core.config import settings
 from src.apps.notification.models.notification import Notification, NotificationType
+from src.apps.notification.models.notification_delivery import (
+    NotificationDeliveryChannel,
+    NotificationDeliveryEventType,
+    NotificationDeliveryStatus,
+)
 from src.apps.notification.schemas.notification import NotificationCreate
 from src.apps.notification.services.notification import (
+    _build_lifecycle_metadata,
+    _percentile,
     create_notification,
     delete_notification,
     get_notification,
@@ -135,6 +142,29 @@ class TestNotificationService:
         user = await _make_user(db_session, username="notifuser7", email="notif7@example.com")
         deleted = await delete_notification(db_session, 99999, user.id)
         assert deleted is False
+
+    def test_lifecycle_metadata_includes_normalized_retry_fields(self):
+        metadata = _build_lifecycle_metadata(
+            channel=NotificationDeliveryChannel.EMAIL,
+            event_type=NotificationDeliveryEventType.FAILED,
+            status=NotificationDeliveryStatus.FAILED,
+            target="user:10",
+            template="order_update",
+            provider_code="503",
+            retry_count=1,
+            max_attempts=4,
+            error_reason="timeout from provider",
+        )
+
+        assert metadata["provider_code"] == "503"
+        assert metadata["retry"]["retry_count"] == 1
+        assert metadata["retry"]["classification"] == "non_terminal"
+        assert metadata["event"] == "failed"
+
+    def test_percentile_aggregation_correctness(self):
+        samples = [10.0, 15.0, 40.0, 60.0, 100.0]
+        assert _percentile(samples, 0.50) == 40.0
+        assert _percentile(samples, 0.95) == 100.0
 
 
 # ── REST API tests ────────────────────────────────────────────────────────────

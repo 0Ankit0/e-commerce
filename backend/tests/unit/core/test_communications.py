@@ -95,3 +95,37 @@ def test_map_public_config_falls_back_when_google_not_configured(monkeypatch: py
 
     assert config["provider"] == "osm"
     assert config["providers"]["google"]["enabled"] is False
+
+
+@pytest.mark.unit
+def test_normalize_delivery_result_maps_provider_code_and_retry_classification() -> None:
+    service = CommunicationsService()
+    normalized = service.normalize_delivery_result(
+        result=DeliveryResult(
+            channel="sms",
+            provider="twilio",
+            success=False,
+            error="Temporary timeout from upstream",
+            metadata={"status_code": 503},
+        ),
+        retry_count=1,
+        max_attempts=4,
+    )
+
+    assert normalized["provider_code"] == "503"
+    assert normalized["retry"]["classification"] == "non_terminal"
+    assert normalized["retry"]["is_retryable"] is True
+
+
+@pytest.mark.unit
+def test_classify_delivery_failure_marks_terminal_for_invalid_recipient() -> None:
+    service = CommunicationsService()
+    classification = service.classify_delivery_failure(
+        provider_code="400",
+        error="Invalid recipient address",
+        retry_count=0,
+        max_attempts=4,
+    )
+
+    assert classification["is_terminal"] is True
+    assert classification["classification"] == "terminal"

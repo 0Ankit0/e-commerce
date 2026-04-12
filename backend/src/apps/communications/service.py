@@ -42,6 +42,85 @@ class CommunicationsService:
             "posthog": bool(settings.POSTHOG_API_KEY),
             "mixpanel": bool(settings.MIXPANEL_PROJECT_TOKEN),
         }
+        self._retryable_error_markers: tuple[str, ...] = (
+            "timeout",
+            "temporarily",
+            "503",
+            "502",
+            "connection",
+            "unavailable",
+            "rate limit",
+            "throttle",
+        )
+        self._terminal_error_markers: tuple[str, ...] = (
+            "invalid",
+            "unknown user",
+            "bad address",
+            "forbidden",
+            "unauthorized",
+            "auth",
+            "credential",
+            "policy",
+            "blocked",
+            "suppressed",
+        )
+
+    @staticmethod
+    def _extract_provider_code(metadata: dict[str, Any] | None) -> str | None:
+        if not metadata:
+            return None
+        for key in ("code", "error_code", "status", "status_code", "error"):
+            value = metadata.get(key)
+            if value is not None:
+                return str(value)[:128]
+        errors = metadata.get("errors")
+        if isinstance(errors, list) and errors:
+            return str(errors[0])[:128]
+        return None
+
+    def classify_delivery_failure(
+        self,
+        *,
+        provider_code: str | None,
+        error: str | None,
+        retry_count: int,
+        max_attempts: int,
+    ) -> dict[str, Any]:
+        signal = f"{provider_code or ''} {error or ''}".lower()
+        retryable = any(marker in signal for marker in self._retryable_error_markers)
+        terminal_by_signal = any(marker in signal for marker in self._terminal_error_markers)
+        terminal = terminal_by_signal or retry_count >= max(0, max_attempts - 1)
+        return {
+            "provider_code": provider_code,
+            "retry_count": retry_count,
+            "max_attempts": max_attempts,
+            "is_retryable": retryable and not terminal,
+            "is_terminal": terminal,
+            "classification": "terminal" if terminal else "non_terminal",
+        }
+
+    def normalize_delivery_result(
+        self,
+        *,
+        result: DeliveryResult,
+        retry_count: int = 0,
+        max_attempts: int = 1,
+    ) -> dict[str, Any]:
+        provider_code = self._extract_provider_code(result.metadata)
+        failure = self.classify_delivery_failure(
+            provider_code=provider_code,
+            error=result.error,
+            retry_count=retry_count,
+            max_attempts=max_attempts,
+        )
+        return {
+            "channel": result.channel,
+            "provider": result.provider,
+            "success": result.success,
+            "message_id": result.message_id,
+            "provider_code": provider_code,
+            "retry": failure,
+        }
 
     def _provider_chain(self, active: str, fallbacks: list[str], registry: dict[str, Any]) -> list[Any]:
         ordered: list[Any] = []

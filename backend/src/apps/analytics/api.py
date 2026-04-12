@@ -20,6 +20,9 @@ from src.apps.logistics.services import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.apps.notification.models.notification_delivery import NotificationDeliveryChannel
 from src.apps.notification.services.notification import (
+    detect_delivery_anomalies,
+    get_admin_monitoring_dashboard,
+    get_admin_monitoring_drilldown,
     get_channel_delivery_trends,
     get_template_delivery_trends,
 )
@@ -175,6 +178,54 @@ async def get_notification_delivery_dashboard(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
     return await get_notification_analytics_dashboard(db=db, lookback_days=max(1, min(lookback_days, 30)))
+
+
+@router.get("/notifications/delivery/monitoring/dashboard")
+async def get_notification_monitoring_dashboard(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    return await get_admin_monitoring_dashboard(
+        db=db,
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=date_to.isoformat() if date_to else None,
+    )
+
+
+@router.get("/notifications/delivery/monitoring/drilldown")
+async def get_notification_monitoring_drilldown(
+    template: str | None = None,
+    provider: str | None = None,
+    channel: NotificationDeliveryChannel | None = None,
+    limit: int = 100,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    return await get_admin_monitoring_drilldown(
+        db=db,
+        template=template,
+        provider=provider,
+        channel=channel,
+        limit=max(1, min(limit, 500)),
+    )
+
+
+@router.get("/notifications/delivery/anomalies")
+async def get_notification_delivery_anomalies(
+    lookback_hours: int = 24,
+    failure_spike_threshold: float = 0.35,
+    slow_delivery_threshold_ms: float = 15000.0,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    return await detect_delivery_anomalies(
+        db=db,
+        lookback_hours=max(1, min(lookback_hours, 168)),
+        failure_spike_threshold=max(0.01, min(failure_spike_threshold, 1.0)),
+        slow_delivery_threshold_ms=max(50.0, slow_delivery_threshold_ms),
+    )
 
 
 @router.post("/notifications/delivery/alerts/evaluate")
