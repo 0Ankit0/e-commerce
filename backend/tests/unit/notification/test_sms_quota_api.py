@@ -41,12 +41,18 @@ async def test_admin_can_update_quota_config_and_read_dashboard(client: AsyncCli
             "per_user_daily_limit": 2,
             "per_ip_window_limit": 3,
             "ip_window_seconds": 120,
+            "per_device_window_limit": 2,
+            "device_window_seconds": 60,
             "global_provider_daily_limit": 20,
+            "hard_throttle_action": "cooldown",
+            "hard_cooldown_seconds": 180,
+            "trusted_entry_points": ["otp_validate"],
             "privileged_override_enabled": True,
         },
     )
     assert update.status_code == 200, update.text
     assert update.json()["per_user_daily_limit"] == 2
+    assert update.json()["hard_throttle_action"] == "cooldown"
 
     dashboard = await client.get(
         "/api/v1/notifications/admin/sms-quotas/dashboard/",
@@ -54,3 +60,11 @@ async def test_admin_can_update_quota_config_and_read_dashboard(client: AsyncCli
     )
     assert dashboard.status_code == 200
     assert "totals" in dashboard.json()
+    assert "blocked_attempts" in dashboard.json()["totals"]
+
+    audit = await client.get(
+        "/api/v1/notifications/admin/sms-quotas/audit/",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert audit.status_code == 200
+    assert audit.json()["count"] >= 1

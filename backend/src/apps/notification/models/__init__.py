@@ -30,6 +30,7 @@ __all__ = [
     "SmsQuotaConfig",
     "SmsQuotaCounter",
     "SmsQuotaViolationEvent",
+    "SmsQuotaPolicyAuditEvent",
 ]
 
-from .sms_quota import SmsQuotaConfig, SmsQuotaCounter, SmsQuotaViolationEvent
+from .sms_quota import SmsQuotaConfig, SmsQuotaCounter, SmsQuotaPolicyAuditEvent, SmsQuotaViolationEvent

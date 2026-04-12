@@ -93,6 +93,7 @@ async def _send_transactional_sms_with_quota(to_number: str, body: str) -> bool:
                     provider="default",
                     phone_number=to_number,
                     entry_point="transactional_sms",
+                    trusted_flow=False,
                 ),
             )
             await db.commit()
@@ -244,8 +245,10 @@ async def _dispatch_notification_delivery(delivery_id: int) -> bool:
                             user_id=delivery.user_id,
                             tenant_id=membership.tenant_id if membership else None,
                             phone_number=profile.phone,
+                            device_fingerprint=delivery.target,
                             provider="default",
                             entry_point="otp_sms" if notification.type == "otp" else "transactional_sms",
+                            trusted_flow=False,
                         ),
                     )
                 except SmsQuotaExceededError as quota_exc:

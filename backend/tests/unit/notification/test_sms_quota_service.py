@@ -171,3 +171,91 @@ async def test_abuse_scenario_phone_window_blocks_repeated_target(db_session: As
     with pytest.raises(SmsQuotaExceededError) as exc:
         await enforce_sms_quota(db_session, context=SmsQuotaCheckContext(user_id=13, phone_number="+15551111111"), now=now)
     assert exc.value.scope == "phone_window"
+
+
+@pytest.mark.asyncio
+async def test_distributed_attempts_are_blocked_by_device_fingerprint(db_session: AsyncSession) -> None:
+    db_session.add(
+        SmsQuotaConfig(
+            provider="default",
+            per_user_daily_limit=None,
+            per_ip_window_limit=None,
+            per_device_window_limit=2,
+            device_window_seconds=300,
+            global_provider_soft_daily_limit=None,
+            global_provider_daily_limit=None,
+        )
+    )
+    await db_session.commit()
+    now = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
+
+    await enforce_sms_quota(
+        db_session,
+        context=SmsQuotaCheckContext(user_id=200, device_fingerprint="fp-1"),
+        now=now,
+    )
+    await enforce_sms_quota(
+        db_session,
+        context=SmsQuotaCheckContext(user_id=201, device_fingerprint="fp-1"),
+        now=now,
+    )
+    with pytest.raises(SmsQuotaExceededError) as exc:
+        await enforce_sms_quota(
+            db_session,
+            context=SmsQuotaCheckContext(user_id=202, device_fingerprint="fp-1"),
+            now=now,
+        )
+    assert exc.value.scope == "device_window"
+
+
+@pytest.mark.asyncio
+async def test_trusted_flow_avoids_hard_block_false_positive(db_session: AsyncSession) -> None:
+    db_session.add(
+        SmsQuotaConfig(
+            provider="default",
+            per_user_daily_limit=None,
+            per_ip_window_limit=1,
+            ip_window_seconds=300,
+            global_provider_soft_daily_limit=None,
+            global_provider_daily_limit=1,
+            soft_throttle_action="delay",
+            soft_throttle_delay_seconds=5,
+            trusted_entry_points_json={"allow": ["otp_step_up:delete_user"]},
+        )
+    )
+    await db_session.commit()
+    now = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
+
+    await enforce_sms_quota(
+        db_session,
+        context=SmsQuotaCheckContext(ip_address="10.0.0.9", entry_point="otp_step_up:delete_user"),
+        now=now,
+    )
+    decision = await enforce_sms_quota(
+        db_session,
+        context=SmsQuotaCheckContext(ip_address="10.0.0.9", entry_point="otp_step_up:delete_user"),
+        now=now,
+    )
+    assert decision.severity == "soft"
+    assert decision.delay_seconds == 5
+
+
+@pytest.mark.asyncio
+async def test_hard_cooldown_mode_returns_retry_after(db_session: AsyncSession) -> None:
+    db_session.add(
+        SmsQuotaConfig(
+            provider="default",
+            per_user_daily_limit=1,
+            per_ip_window_limit=None,
+            global_provider_soft_daily_limit=None,
+            global_provider_daily_limit=None,
+            hard_throttle_action="cooldown",
+            hard_cooldown_seconds=120,
+        )
+    )
+    await db_session.commit()
+    now = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
+    await enforce_sms_quota(db_session, context=SmsQuotaCheckContext(user_id=77), now=now)
+    with pytest.raises(SmsQuotaExceededError) as exc:
+        await enforce_sms_quota(db_session, context=SmsQuotaCheckContext(user_id=77), now=now)
+    assert exc.value.retry_after_seconds >= 120

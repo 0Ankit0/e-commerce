@@ -37,10 +37,12 @@ class SmsQuotaCheckContext:
     user_id: int | None = None
     tenant_id: int | None = None
     ip_address: str | None = None
+    device_fingerprint: str | None = None
     phone_number: str | None = None
     provider: str = "default"
     entry_point: str = "transactional_sms"
     privileged_override: bool = False
+    trusted_flow: bool = False
 
 
 @dataclass
@@ -52,6 +54,7 @@ class SmsQuotaDecision:
     scope: str | None = None
     severity: str | None = None
     action: str | None = None
+    cooldown_until: datetime | None = None
 
 
 def _daily_bounds(now: datetime) -> tuple[datetime, datetime]:
@@ -94,6 +97,7 @@ async def _increment_counter(
     tenant_id: int | None,
     ip_address: str | None,
     phone_number_hash: str | None,
+    device_fingerprint_hash: str | None,
     window_start: datetime,
     window_end: datetime,
     increment: int = 1,
@@ -120,6 +124,7 @@ async def _increment_counter(
                     tenant_id=tenant_id,
                     ip_address=ip_address,
                     phone_number_hash=phone_number_hash,
+                    device_fingerprint_hash=device_fingerprint_hash,
                     window_start=window_start,
                     window_end=window_end,
                     usage_count=0,
@@ -160,12 +165,14 @@ async def _record_violation(
     tenant_id: int | None,
     ip_address: str | None,
     phone_number_hash: str | None,
+    device_fingerprint_hash: str | None,
     provider: str,
     override_applied: bool,
     severity: str,
     throttle_action: str,
     delay_seconds: int,
     reason: str,
+    cooldown_until: datetime | None,
 ) -> None:
     db.add(
         SmsQuotaViolationEvent(
@@ -176,6 +183,7 @@ async def _record_violation(
             tenant_id=tenant_id,
             ip_address=ip_address,
             phone_number_hash=phone_number_hash,
+            device_fingerprint_hash=device_fingerprint_hash,
             limit_count=limit_count,
             attempted_count=attempted_count,
             window_start=window_start,
@@ -184,8 +192,13 @@ async def _record_violation(
             severity=severity,
             throttle_action=throttle_action,
             delay_seconds=delay_seconds,
+            cooldown_until=cooldown_until,
             reason=reason,
-            metadata_json={"action": throttle_action, "delay_seconds": delay_seconds},
+            metadata_json={
+                "action": throttle_action,
+                "delay_seconds": delay_seconds,
+                "cooldown_until": cooldown_until.isoformat() if cooldown_until else None,
+            },
         )
     )
     await db.flush()
@@ -202,9 +215,12 @@ async def enforce_sms_quota(
     config = await get_or_create_quota_config(db, provider=context.provider)
     decision = SmsQuotaDecision()
 
-    checks: list[tuple[str, int, str, datetime, datetime, int | None, int | None, str | None, str | None, str]] = []
     daily_start, daily_end = _daily_bounds(current)
     phone_hash = sha256((context.phone_number or "").encode("utf-8")).hexdigest() if context.phone_number else None
+    device_hash = sha256((context.device_fingerprint or "").encode("utf-8")).hexdigest() if context.device_fingerprint else None
+    trusted_entries = set((config.trusted_entry_points_json or {}).get("allow", []))
+    trusted_context = context.trusted_flow or context.entry_point in trusted_entries
+    checks: list[tuple[str, int, str, datetime, datetime, int | None, int | None, str | None, str | None, str | None, str]] = []
 
     if config.per_user_daily_limit is not None and context.user_id is not None:
         checks.append(
@@ -216,6 +232,7 @@ async def enforce_sms_quota(
                 daily_end,
                 context.user_id,
                 context.tenant_id,
+                None,
                 None,
                 None,
                 "hard",
@@ -231,6 +248,7 @@ async def enforce_sms_quota(
                 daily_end,
                 None,
                 context.tenant_id,
+                None,
                 None,
                 None,
                 "hard",
@@ -249,6 +267,7 @@ async def enforce_sms_quota(
                 None,
                 None,
                 phone_hash,
+                None,
                 "hard",
             )
         )
@@ -266,6 +285,25 @@ async def enforce_sms_quota(
                 None,
                 context.ip_address,
                 None,
+                None,
+                "hard" if not trusted_context else "soft",
+            )
+        )
+
+    if config.per_device_window_limit is not None and device_hash:
+        device_start, device_end = _window_bounds(current, config.device_window_seconds)
+        checks.append(
+            (
+                "device_window",
+                config.per_device_window_limit,
+                f"device:{device_hash}:{device_start.isoformat()}:{config.device_window_seconds}",
+                device_start,
+                device_end,
+                None,
+                None,
+                None,
+                None,
+                device_hash,
                 "hard",
             )
         )
@@ -278,6 +316,7 @@ async def enforce_sms_quota(
                 f"provider-soft:{context.provider}:{daily_start.date().isoformat()}",
                 daily_start,
                 daily_end,
+                None,
                 None,
                 None,
                 None,
@@ -297,11 +336,24 @@ async def enforce_sms_quota(
                 None,
                 None,
                 None,
-                "hard",
+                None,
+                "hard" if not trusted_context else "soft",
             )
         )
 
-    for scope, limit_count, counter_key, window_start, window_end, user_id, tenant_id, ip_address, phone_number_hash, severity in checks:
+    for (
+        scope,
+        limit_count,
+        counter_key,
+        window_start,
+        window_end,
+        user_id,
+        tenant_id,
+        ip_address,
+        phone_number_hash,
+        device_fingerprint_hash,
+        severity,
+    ) in checks:
         counter = await _increment_counter(
             db,
             counter_key=counter_key,
@@ -311,6 +363,7 @@ async def enforce_sms_quota(
             tenant_id=tenant_id,
             ip_address=ip_address,
             phone_number_hash=phone_number_hash,
+            device_fingerprint_hash=device_fingerprint_hash,
             window_start=window_start,
             window_end=window_end,
             increment=increment,
@@ -318,6 +371,11 @@ async def enforce_sms_quota(
         if counter.usage_count > limit_count:
             action = config.hard_throttle_action if severity == "hard" else config.soft_throttle_action
             delay_seconds = config.hard_throttle_delay_seconds if severity == "hard" else config.soft_throttle_delay_seconds
+            cooldown_until = (
+                current + timedelta(seconds=config.hard_cooldown_seconds)
+                if action == "cooldown" and config.hard_cooldown_seconds > 0
+                else None
+            )
             override = bool(context.privileged_override and config.privileged_override_enabled)
             await _record_violation(
                 db,
@@ -331,12 +389,14 @@ async def enforce_sms_quota(
                 tenant_id=context.tenant_id,
                 ip_address=context.ip_address,
                 phone_number_hash=phone_hash,
+                device_fingerprint_hash=device_hash,
                 provider=context.provider,
                 override_applied=override,
                 severity=severity,
                 throttle_action=action,
                 delay_seconds=delay_seconds,
                 reason="privileged_override" if override else "quota_exceeded",
+                cooldown_until=cooldown_until,
             )
             if override:
                 return decision
@@ -348,11 +408,15 @@ async def enforce_sms_quota(
             decision.scope = scope
             decision.severity = severity
             decision.action = action
+            decision.cooldown_until = cooldown_until
 
-            if action == "block":
+            if action in {"block", "cooldown"}:
+                retry_after = max(1, int((window_end - current).total_seconds()))
+                if cooldown_until is not None:
+                    retry_after = max(retry_after, int((cooldown_until - current).total_seconds()))
                 raise SmsQuotaExceededError(
                     scope=scope,
-                    retry_after_seconds=max(1, int((window_end - current).total_seconds())),
+                    retry_after_seconds=retry_after,
                     limit_count=limit_count,
                     attempted_count=counter.usage_count,
                 )
