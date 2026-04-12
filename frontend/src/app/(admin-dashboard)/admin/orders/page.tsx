@@ -5,6 +5,11 @@ import { Plus, ShoppingBag, X } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  isSupportedOrderReference,
+  normalizeOrderReference,
+  ORDER_REFERENCE_PLACEHOLDER,
+} from '@/lib/order-reference';
 
 type OrderStatus = 'pending' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
 
@@ -37,9 +42,15 @@ const STATUS_STYLES: Record<OrderStatus, string> = {
 function AddOrderNoteModal({ onClose }: { onClose: () => void }) {
   const [orderId, setOrderId] = useState('');
   const [note, setNote] = useState('');
+  const [error, setError] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isSupportedOrderReference(orderId)) {
+      setError('Use an order number (current/legacy) or hashid.');
+      return;
+    }
+    setError('');
     onClose();
   };
 
@@ -53,7 +64,13 @@ function AddOrderNoteModal({ onClose }: { onClose: () => void }) {
         <form onSubmit={handleSubmit} className="mt-5 space-y-4">
           <div className="space-y-1.5">
             <label className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">Order number</label>
-            <Input value={orderId} onChange={(e) => setOrderId(e.target.value)} placeholder="ORD-2025-XXXX" required />
+            <Input
+              value={orderId}
+              onChange={(e) => setOrderId(normalizeOrderReference(e.target.value))}
+              placeholder={ORDER_REFERENCE_PLACEHOLDER}
+              required
+            />
+            {error && <p className="text-xs text-red-600">{error}</p>}
           </div>
           <div className="space-y-1.5">
             <label className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">Admin note</label>
@@ -80,8 +97,20 @@ export default function AdminOrdersPage() {
   const [orders] = useState<OrderItem[]>(INITIAL_ORDERS);
   const [showAdd, setShowAdd] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'all' | OrderStatus>('all');
+  const [searchTerm, setSearchTerm] = useState('');
 
-  const filtered = statusFilter === 'all' ? orders : orders.filter((o) => o.status === statusFilter);
+  const normalizedSearch = searchTerm.trim();
+  const filteredByStatus = statusFilter === 'all' ? orders : orders.filter((o) => o.status === statusFilter);
+  const filtered = !normalizedSearch
+    ? filteredByStatus
+    : filteredByStatus.filter((order) => {
+        const normalizedOrderNumber = order.orderNumber.toUpperCase();
+        if (isSupportedOrderReference(normalizedSearch)) {
+          const normalizedRef = normalizeOrderReference(normalizedSearch);
+          return normalizedOrderNumber === normalizedRef || order.id === normalizedRef;
+        }
+        return normalizedOrderNumber.includes(normalizedSearch.toUpperCase());
+      });
 
   const activeCount = orders.filter((o) => !['delivered', 'cancelled'].includes(o.status)).length;
 
@@ -123,6 +152,12 @@ export default function AdminOrdersPage() {
               <CardTitle>Order queue</CardTitle>
               <CardDescription className="mt-1">Monitor and intervene on active orders across all vendors.</CardDescription>
             </div>
+            <Input
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder={ORDER_REFERENCE_PLACEHOLDER}
+              className="w-full sm:w-72"
+            />
             <div className="flex flex-wrap rounded-xl border border-[var(--border-color)] bg-white p-1">
               {(['all', 'pending', 'processing', 'shipped', 'delivered', 'cancelled'] as const).map((f) => (
                 <button
@@ -177,4 +212,3 @@ export default function AdminOrdersPage() {
     </div>
   );
 }
-

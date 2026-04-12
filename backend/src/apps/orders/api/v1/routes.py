@@ -5,8 +5,9 @@ import io
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -47,6 +48,7 @@ from src.apps.orders.services import (
     serialize_order,
     update_return_request_status,
 )
+from src.apps.orders.references import is_supported_order_reference, parse_order_reference
 from src.apps.notification.services.commerce_events import notify_order_event, notify_return_event
 from src.apps.recommendations.models import RecommendationEventType
 from src.apps.recommendations.services import record_recommendation_event
@@ -658,10 +660,23 @@ async def reject_vendor_order(
 
 @router.get("/admin/orders")
 async def list_all_orders(
+    q: str | None = Query(default=None, min_length=1, max_length=64),
     _: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    orders = (await db.execute(select(Order).order_by(Order.created_at.desc()))).scalars().all()
+    stmt = select(Order).order_by(Order.created_at.desc())
+    if q:
+        parsed = parse_order_reference(q)
+        criteria = []
+        if parsed.is_order_number:
+            criteria.append(Order.order_number == parsed.normalized)
+        if parsed.order_id is not None:
+            criteria.append(Order.id == parsed.order_id)
+        if criteria:
+            stmt = stmt.where(or_(*criteria))
+        else:
+            stmt = stmt.where(Order.id == -1)
+    orders = (await db.execute(stmt)).scalars().all()
     return {"items": [await serialize_order(order, db) for order in orders], "total": len(orders)}
 
 
@@ -830,7 +845,16 @@ async def create_admin_order_note(
     current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
-    order = await db.get(Order, decode_id_or_404(order_id))
+    if not is_supported_order_reference(order_id):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported order reference format")
+    parsed = parse_order_reference(order_id)
+    order = None
+    if parsed.order_id is not None:
+        order = await db.get(Order, parsed.order_id)
+    if order is None and parsed.is_order_number:
+        order = (
+            await db.execute(select(Order).where(Order.order_number == parsed.normalized))
+        ).scalars().first()
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
     note = await add_order_note(
