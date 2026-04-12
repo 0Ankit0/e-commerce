@@ -84,6 +84,8 @@ from src.apps.logistics.services import (
     resolve_user_branch_scope,
     ensure_branch_scope_access,
     optimize_line_haul_plan_assignments,
+    HUB_LANE_CAPACITY_LIMIT,
+    HUB_STALE_DWELL_ALARM_MINUTES,
 )
 from src.apps.orders.models import Order, OrderStatus, ReturnRequest, ReturnStatus, Shipment, ShipmentTracking, VendorOrder
 from src.apps.notification.services.commerce_events import notify_delivery_exception, notify_order_event, notify_return_event
@@ -289,6 +291,7 @@ class HubSortScanRequest(BaseModel):
     shipment_id: str
     scan_code: str = Field(default="inbound_scan", min_length=3, max_length=80)
     notes: str = ""
+    retry_token: str | None = Field(default=None, max_length=120)
 
 
 class HubSortAssignRequest(BaseModel):
@@ -296,6 +299,7 @@ class HubSortAssignRequest(BaseModel):
     next_hub_id: str | None = None
     carrier: str = Field(min_length=2, max_length=80)
     vehicle_number: str = Field(min_length=2, max_length=64)
+    retry_token: str | None = Field(default=None, max_length=120)
 
 
 class HubBulkMoveNextLegRequest(BaseModel):
@@ -310,6 +314,7 @@ class HubBulkScanRequest(BaseModel):
     shipment_ids: list[str] = Field(default_factory=list, min_length=1)
     scan_code: str = Field(default="inbound_scan", min_length=3, max_length=80)
     notes: str = ""
+    allow_duplicate_retry: bool = True
 
 
 class HubBulkAssignRequest(BaseModel):
@@ -321,6 +326,7 @@ class HubBulkAssignRequest(BaseModel):
 
 class DispatchConfirmRequest(BaseModel):
     shipment_id: str
+    retry_token: str | None = Field(default=None, max_length=120)
 
 
 class HubExceptionUpdateRequest(BaseModel):
@@ -807,10 +813,12 @@ async def scan_hub_sort_item(
             manifest_id=queue.manifest_id,
             actor_type="admin",
             actor_id=current_user.id,
-            payload={"scan_code": payload.scan_code},
+            payload={"scan_code": payload.scan_code, "retry_token": payload.retry_token},
             db=db,
         )
         await db.commit()
+        if payload.retry_token:
+            return _serialize_sort_queue_item(existing_item)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Duplicate scan")
 
     expected_hub_id = await _find_expected_hub_for_shipment(shipment.id or 0, db)
@@ -1015,11 +1023,23 @@ async def confirm_hub_dispatch(
     ).scalars().first()
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment scan not found in queue")
+    latest_dispatch_event = (
+        await db.execute(
+            select(HubOperationEvent)
+            .where(HubOperationEvent.queue_item_id == item.id, HubOperationEvent.operation_type == "dispatch_confirmed")
+            .order_by(HubOperationEvent.created_at.desc())
+        )
+    ).scalars().first()
+    if latest_dispatch_event and payload.retry_token:
+        prior_payload = json.loads(latest_dispatch_event.payload_json or "{}")
+        if prior_payload.get("retry_token") == payload.retry_token:
+            return {"success": True, "idempotent_retry": True}
     await confirm_dispatch(
         item=item,
         queue=queue,
         hub_id=decoded_hub_id,
         actor_id=current_user.id,
+        retry_token=payload.retry_token,
         db=db,
     )
     shipment = await db.get(Shipment, item.shipment_id)
@@ -1047,11 +1067,66 @@ async def confirm_hub_dispatch(
             )
         )
     await db.commit()
-    return {"success": True}
+    return {"success": True, "idempotent_retry": False}
 
 
 @router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/dispatch-scan-out")
 async def dispatch_scan_out_hub_shipment(
+    hub_id: str,
+    queue_id: str,
+    payload: DispatchConfirmRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    return await confirm_hub_dispatch(hub_id, queue_id, payload, current_user, db)
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/execution/inbound-intake", status_code=status.HTTP_201_CREATED)
+async def execution_inbound_intake(
+    hub_id: str,
+    queue_id: str,
+    payload: HubSortScanRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    return await intake_hub_shipment(hub_id, queue_id, payload, current_user, db)
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/execution/lane-assignment")
+async def execution_lane_assignment(
+    hub_id: str,
+    queue_id: str,
+    payload: HubSortAssignRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    return await assign_hub_sort_item(hub_id, queue_id, payload, current_user, db)
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/execution/relane")
+async def execution_relane(
+    hub_id: str,
+    queue_id: str,
+    payload: HubSortAssignRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    return await assign_hub_sort_item(hub_id, queue_id, payload, current_user, db)
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/execution/hold-rework")
+async def execution_hold_rework(
+    hub_id: str,
+    queue_id: str,
+    payload: HubExceptionUpdateRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    return await update_hub_exception_queue(hub_id, queue_id, payload, current_user, db)
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/execution/outbound-confirmation")
+async def execution_outbound_confirmation(
     hub_id: str,
     queue_id: str,
     payload: DispatchConfirmRequest,
@@ -1145,6 +1220,8 @@ async def bulk_scan_hub_sort_items(
         except HTTPException as exc:
             if exc.status_code != status.HTTP_409_CONFLICT or exc.detail != "Duplicate scan":
                 raise
+            if not payload.allow_duplicate_retry:
+                raise
             duplicate_count += 1
             decoded_shipment_id = decode_id_or_404(shipment_id)
             existing = (
@@ -1210,6 +1287,15 @@ async def bulk_assign_hub_sort_items(
     assigned_count = 0
     idempotent_skip_count = 0
     decoded_next_hub_id = decode_id_or_404(payload.next_hub_id) if payload.next_hub_id else None
+    lane_assigned_count = len(
+        [
+            item
+            for item in items
+            if item.assigned_carrier == payload.carrier
+            and item.assigned_vehicle_number == payload.vehicle_number
+            and item.status in {HubSortItemStatus.ASSIGNED, HubSortItemStatus.MOVED_TO_NEXT_LEG}
+        ]
+    )
     async with db.begin_nested():
         for shipment_id in decoded_shipment_ids:
             item = found_by_shipment_id[shipment_id]
@@ -1224,6 +1310,8 @@ async def bulk_assign_hub_sort_items(
             if same_assignment:
                 idempotent_skip_count += 1
                 continue
+            if lane_assigned_count >= HUB_LANE_CAPACITY_LIMIT:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Lane capacity threshold exceeded")
             item.status = HubSortItemStatus.ASSIGNED
             item.assigned_next_hub_id = decoded_next_hub_id
             item.assigned_carrier = payload.carrier
@@ -1231,6 +1319,7 @@ async def bulk_assign_hub_sort_items(
             item.assigned_at = utc_now()
             item.updated_at = utc_now()
             assigned_count += 1
+            lane_assigned_count += 1
             await append_hub_operation_event(
                 hub_id=decoded_hub_id,
                 operation_type="next_leg_assigned",
@@ -1460,6 +1549,12 @@ async def get_hub_sort_workbench(
     dwell_samples = [sample for sample in dwell_samples if sample is not None]
     sort_latency_samples = [sample for sample in sort_latency_samples if sample is not None]
     alerts = _serialize_hub_alerts(items=queue_items, now=now)
+    stale_dwell_items = [
+        item
+        for item in queue_items
+        if item.status in {HubSortItemStatus.SCANNED, HubSortItemStatus.ASSIGNED}
+        and (now - item.scanned_at).total_seconds() / 60 >= HUB_STALE_DWELL_ALARM_MINUTES
+    ]
     timeline_events = (
         await db.execute(
             select(HubOperationEvent)
@@ -1490,6 +1585,7 @@ async def get_hub_sort_workbench(
             "ready_to_dispatch_count": len(outbound_ready),
             "dispatched_count": len(dispatch_completed),
             "hold_count": len(hold_items),
+            "stale_dwell_alarm_count": len(stale_dwell_items),
         },
         "sla_timers": {
             "average_dwell_minutes": round(sum(dwell_samples) / len(dwell_samples), 2) if dwell_samples else 0.0,
@@ -1503,6 +1599,10 @@ async def get_hub_sort_workbench(
             ),
         },
         "alerts": alerts,
+        "lane_capacity": {
+            "threshold": HUB_LANE_CAPACITY_LIMIT,
+            "lanes_at_risk": len([lane_items for lane_items in sorting_lanes.values() if len(lane_items) >= HUB_LANE_CAPACITY_LIMIT]),
+        },
         "timeline": [
             {
                 "event_id": encode_id(event.id or 0),
@@ -2975,6 +3075,12 @@ async def get_hub_operational_reports(
         exception_shipments=len([item for item in items if item.status == HubSortItemStatus.EXCEPTION]),
     )
     exception_analytics = analytics.build_hub_exception_analytics(exception_causes=exception_causes)
+    execution_metrics = analytics.build_hub_execution_analytics(
+        throughput_shipments=int(metrics["throughput_shipments"]),
+        average_dwell_time_minutes=float(metrics["average_dwell_time_minutes"]),
+        sort_error_rate_percent=float(metrics["mis_sort_rate_percent"]),
+        sla_breach_shipments=int(metrics["sla_breach_shipments"]),
+    )
 
     return {
         "hub_id": hub_id,
@@ -2984,5 +3090,10 @@ async def get_hub_operational_reports(
         "sla_breach_shipments": metrics["sla_breach_shipments"],
         "sla_breach_heatmap": breach_heatmap,
         "exception_causes": exception_causes,
+        "sort_error_rate_percent": metrics["mis_sort_rate_percent"],
+        "throughput_shipments": metrics["throughput_shipments"],
+        "stale_dwell_alarm_threshold_minutes": HUB_STALE_DWELL_ALARM_MINUTES,
+        "stale_dwell_alarm_shipments": len([item for item in items if item.status != HubSortItemStatus.MOVED_TO_NEXT_LEG and _minutes_between(item.scanned_at, utc_now()) and (_minutes_between(item.scanned_at, utc_now()) or 0) >= HUB_STALE_DWELL_ALARM_MINUTES]),
+        "execution_metrics": execution_metrics,
         **exception_analytics,
     }

@@ -66,6 +66,8 @@ ALLOWED_HUB_ITEM_TRANSITIONS: dict[HubSortItemStatus, set[HubSortItemStatus]] = 
     HubSortItemStatus.MOVED_TO_NEXT_LEG: set(),
     HubSortItemStatus.EXCEPTION: {HubSortItemStatus.SCANNED},
 }
+HUB_LANE_CAPACITY_LIMIT = 50
+HUB_STALE_DWELL_ALARM_MINUTES = 90
 
 
 def validate_line_haul_assignments(
@@ -401,6 +403,8 @@ async def transition_hub_item_state(
     payload: dict[str, object] | None = None,
 ) -> HubSortQueueItem:
     from_status = item.status
+    if queue.status == HubSortQueueStatus.CLOSED:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Hub sort queue is closed")
     if to_status != from_status and to_status not in ALLOWED_HUB_ITEM_TRANSITIONS.get(from_status, set()):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -478,6 +482,16 @@ async def record_hub_intake_scan(
     notes: str,
     db: AsyncSession,
 ) -> HubSortQueueItem:
+    existing_item = (
+        await db.execute(
+            select(HubSortQueueItem).where(
+                HubSortQueueItem.queue_id == queue.id,
+                HubSortQueueItem.shipment_id == shipment_id,
+            )
+        )
+    ).scalars().first()
+    if existing_item is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Duplicate scan")
     item = HubSortQueueItem(
         queue_id=queue.id or 0,
         shipment_id=shipment_id,
@@ -515,6 +529,18 @@ async def assign_sort_bucket(
 ) -> HubSortQueueItem:
     if item.status == HubSortItemStatus.EXCEPTION:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot assign shipment with unresolved exception")
+    lane_count = (
+        await db.execute(
+            select(HubSortQueueItem).where(
+                HubSortQueueItem.queue_id == queue.id,
+                HubSortQueueItem.assigned_carrier == carrier,
+                HubSortQueueItem.assigned_vehicle_number == vehicle_number,
+                HubSortQueueItem.status.in_([HubSortItemStatus.ASSIGNED, HubSortItemStatus.MOVED_TO_NEXT_LEG]),
+            )
+        )
+    ).scalars().all()
+    if item.status not in {HubSortItemStatus.ASSIGNED, HubSortItemStatus.MOVED_TO_NEXT_LEG} and len(lane_count) >= HUB_LANE_CAPACITY_LIMIT:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Lane capacity threshold exceeded")
     await transition_hub_item_state(
         item=item,
         queue=queue,
@@ -597,6 +623,7 @@ async def confirm_dispatch(
     queue: HubSortQueue,
     hub_id: int,
     actor_id: int | None,
+    retry_token: str | None = None,
     db: AsyncSession,
 ) -> None:
     if item.status != HubSortItemStatus.MOVED_TO_NEXT_LEG:
@@ -610,7 +637,7 @@ async def confirm_dispatch(
         manifest_id=queue.manifest_id,
         actor_type="admin",
         actor_id=actor_id,
-        payload={"confirmed_at": utc_now().isoformat()},
+        payload={"confirmed_at": utc_now().isoformat(), "retry_token": retry_token},
         db=db,
     )
 

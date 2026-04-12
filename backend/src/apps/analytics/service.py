@@ -183,6 +183,21 @@ class AnalyticsService:
             "total_exception_shipments": total,
         }
 
+    def build_hub_execution_analytics(
+        self,
+        *,
+        throughput_shipments: int,
+        average_dwell_time_minutes: float,
+        sort_error_rate_percent: float,
+        sla_breach_shipments: int,
+    ) -> dict[str, int | float]:
+        return {
+            "throughput_shipments": throughput_shipments,
+            "dwell_time_minutes": round(average_dwell_time_minutes, 2),
+            "sort_error_rate_percent": round(sort_error_rate_percent, 2),
+            "sla_breach_shipments": sla_breach_shipments,
+        }
+
     def build_branch_inventory_health(
         self,
         *,
