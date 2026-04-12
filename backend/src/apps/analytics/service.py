@@ -169,3 +169,16 @@ class AnalyticsService:
             "sla_breach_shipments": sla_breaches,
             "sla_target_minutes": sla_minutes,
         }
+
+    def build_hub_exception_analytics(
+        self,
+        *,
+        exception_causes: dict[str, int],
+    ) -> dict[str, object]:
+        ranked = sorted(exception_causes.items(), key=lambda item: item[1], reverse=True)
+        total = sum(exception_causes.values())
+        return {
+            "exception_categories": [{"category": key, "count": value} for key, value in ranked],
+            "top_exception_category": ranked[0][0] if ranked else None,
+            "total_exception_shipments": total,
+        }

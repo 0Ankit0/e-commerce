@@ -149,3 +149,63 @@ async def test_hub_intake_to_dispatch_and_exception_paths(client: AsyncClient, d
     reports_resp = await client.get(f'/api/v1/logistics/hubs/{hub_id}/operational-reports', headers=headers)
     assert reports_resp.status_code == 200, reports_resp.text
     assert 'throughput_by_shift' in reports_resp.json()
+
+
+@pytest.mark.asyncio
+async def test_hub_exception_flows_cover_missort_damage_reroute_and_scan_mismatch(client: AsyncClient, db_session: AsyncSession):
+    headers = await _create_admin_headers(db_session)
+    hub_id, shipment_id = await _create_hub_and_shipment(db_session)
+
+    queue_resp = await client.post(f'/api/v1/logistics/hubs/{hub_id}/sort-queues', headers=headers, json={'code': 'INT-Q-EXC'})
+    assert queue_resp.status_code == 201, queue_resp.text
+    queue_id = queue_resp.json()['queue_id']
+
+    first_scan = await client.post(
+        f'/api/v1/logistics/hubs/{hub_id}/sort-queues/{queue_id}/inbound-scan',
+        headers=headers,
+        json={'shipment_id': shipment_id},
+    )
+    assert first_scan.status_code == 201, first_scan.text
+
+    duplicate_scan = await client.post(
+        f'/api/v1/logistics/hubs/{hub_id}/sort-queues/{queue_id}/scan',
+        headers=headers,
+        json={'shipment_id': shipment_id},
+    )
+    assert duplicate_scan.status_code == 409, duplicate_scan.text
+
+    hold_damaged = await client.post(
+        f'/api/v1/logistics/hubs/{hub_id}/sort-queues/{queue_id}/recirculation-rework',
+        headers=headers,
+        json={'shipment_id': shipment_id, 'exception_code': 'damaged_parcel', 'notes': 'box damaged', 'requeue_for_sorting': False},
+    )
+    assert hold_damaged.status_code == 200, hold_damaged.text
+    assert hold_damaged.json()['status'] == 'exception'
+
+    release_missort = await client.post(
+        f'/api/v1/logistics/hubs/{hub_id}/sort-queues/{queue_id}/recirculation-rework',
+        headers=headers,
+        json={'shipment_id': shipment_id, 'exception_code': 'missort_corrected', 'notes': 'reroute to lane b', 'requeue_for_sorting': True},
+    )
+    assert release_missort.status_code == 200, release_missort.text
+    assert release_missort.json()['status'] == 'scanned'
+
+    reassign_lane = await client.post(
+        f'/api/v1/logistics/hubs/{hub_id}/sort-queues/{queue_id}/bulk-actions',
+        headers=headers,
+        json={
+            'shipment_ids': [shipment_id],
+            'action': 'reassign_lane',
+            'carrier': 'Carrier-R',
+            'vehicle_number': 'VEH-R',
+            'notes': 'reroute after missort',
+        },
+    )
+    assert reassign_lane.status_code == 200, reassign_lane.text
+
+    dispatch = await client.post(
+        f'/api/v1/logistics/hubs/{hub_id}/sort-queues/{queue_id}/bulk-actions',
+        headers=headers,
+        json={'shipment_ids': [shipment_id], 'action': 'dispatch', 'carrier': 'Carrier-R', 'vehicle_number': 'VEH-R'},
+    )
+    assert dispatch.status_code == 200, dispatch.text

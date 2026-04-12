@@ -80,6 +80,7 @@ from src.apps.logistics.services import (
     escalate_branch_issues,
     stage_outbound_shipment,
     confirm_dispatch,
+    recirculate_or_rework_hub_item,
     resolve_user_branch_scope,
     ensure_branch_scope_access,
     optimize_line_haul_plan_assignments,
@@ -325,6 +326,16 @@ class HubExceptionUpdateRequest(BaseModel):
     requeue_for_sorting: bool = False
 
 
+class HubBulkActionRequest(BaseModel):
+    shipment_ids: list[str] = Field(default_factory=list, min_length=1)
+    action: str = Field(min_length=3, max_length=32)
+    carrier: str | None = None
+    vehicle_number: str | None = None
+    next_hub_id: str | None = None
+    exception_code: str = "manual_hold"
+    notes: str = ""
+
+
 def _serialize_sort_queue_item(item: HubSortQueueItem) -> dict[str, object]:
     return {
         "queue_item_id": encode_id(item.id or 0),
@@ -413,6 +424,15 @@ async def _ensure_sort_action_allowed(queue: HubSortQueue, db: AsyncSession) -> 
         manifest = await db.get(ShipmentManifest, queue.manifest_id)
         if manifest and manifest.status == ShipmentManifestStatus.RECONCILED:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Manifest closed during sort action")
+
+
+def _ensure_bulk_operator(current_user: User) -> None:
+    roles = {role.lower() for role in (current_user.roles if hasattr(current_user, "roles") else [])}
+    if current_user.is_superuser:
+        return
+    if {"hub_ops_admin", "logistics_ops_admin", "hub_supervisor"} & roles:
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bulk operations require hub supervisor role")
 
 
 def _minutes_between(started_at: datetime | None, ended_at: datetime | None) -> float | None:
@@ -822,6 +842,17 @@ async def assign_sort_bucket_route(
     return await assign_hub_sort_item(hub_id, queue_id, payload, current_user, db)
 
 
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/lane-bin-assignment")
+async def lane_bin_assignment_route(
+    hub_id: str,
+    queue_id: str,
+    payload: HubSortAssignRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    return await assign_hub_sort_item(hub_id, queue_id, payload, current_user, db)
+
+
 @router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/intake", status_code=status.HTTP_201_CREATED)
 async def intake_hub_shipment(
     hub_id: str,
@@ -849,6 +880,17 @@ async def intake_hub_shipment(
     )
     await db.commit()
     return _serialize_sort_queue_item(item)
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/inbound-scan", status_code=status.HTTP_201_CREATED)
+async def inbound_scan_hub_shipment(
+    hub_id: str,
+    queue_id: str,
+    payload: HubSortScanRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    return await intake_hub_shipment(hub_id, queue_id, payload, current_user, db)
 
 
 @router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/outbound-stage")
@@ -992,24 +1034,29 @@ async def update_hub_exception_queue(
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment scan not found in queue")
 
-    item.exception_code = payload.exception_code
-    item.exception_notes = payload.notes
-    item.status = HubSortItemStatus.SCANNED if payload.requeue_for_sorting else HubSortItemStatus.EXCEPTION
-    item.updated_at = utc_now()
-    await append_hub_operation_event(
+    await recirculate_or_rework_hub_item(
+        item=item,
+        queue=queue,
         hub_id=decoded_hub_id,
-        operation_type="exception_requeued" if payload.requeue_for_sorting else "hold_queue_updated",
-        queue_id=queue.id,
-        queue_item_id=item.id,
-        shipment_id=item.shipment_id,
-        manifest_id=queue.manifest_id,
-        actor_type="admin",
         actor_id=current_user.id,
-        payload={"exception_code": payload.exception_code, "notes": payload.notes},
+        exception_code=payload.exception_code,
+        notes=payload.notes,
+        requeue_for_sorting=payload.requeue_for_sorting,
         db=db,
     )
     await db.commit()
     return _serialize_sort_queue_item(item)
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/recirculation-rework")
+async def recirculation_rework_hub_shipment(
+    hub_id: str,
+    queue_id: str,
+    payload: HubExceptionUpdateRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    return await update_hub_exception_queue(hub_id, queue_id, payload, current_user, db)
 
 
 @router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/bulk-scan")
@@ -1020,6 +1067,7 @@ async def bulk_scan_hub_sort_items(
     current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
+    _ensure_bulk_operator(current_user)
     decoded_hub_id = decode_id_or_404(hub_id)
     queue = await get_hub_sort_queue_or_404(decode_id_or_404(queue_id), db)
     if queue.hub_id != decoded_hub_id:
@@ -1092,6 +1140,7 @@ async def bulk_assign_hub_sort_items(
     current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
+    _ensure_bulk_operator(current_user)
     decoded_hub_id = decode_id_or_404(hub_id)
     queue = await get_hub_sort_queue_or_404(decode_id_or_404(queue_id), db)
     if queue.hub_id != decoded_hub_id:
@@ -1110,38 +1159,39 @@ async def bulk_assign_hub_sort_items(
     assigned_count = 0
     idempotent_skip_count = 0
     decoded_next_hub_id = decode_id_or_404(payload.next_hub_id) if payload.next_hub_id else None
-    for shipment_id in decoded_shipment_ids:
-        item = found_by_shipment_id[shipment_id]
-        if item.status == HubSortItemStatus.EXCEPTION:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot assign shipment with unresolved exception")
-        same_assignment = (
-            item.status in {HubSortItemStatus.ASSIGNED, HubSortItemStatus.MOVED_TO_NEXT_LEG}
-            and item.assigned_next_hub_id == decoded_next_hub_id
-            and item.assigned_carrier == payload.carrier
-            and item.assigned_vehicle_number == payload.vehicle_number
-        )
-        if same_assignment:
-            idempotent_skip_count += 1
-            continue
-        item.status = HubSortItemStatus.ASSIGNED
-        item.assigned_next_hub_id = decoded_next_hub_id
-        item.assigned_carrier = payload.carrier
-        item.assigned_vehicle_number = payload.vehicle_number
-        item.assigned_at = utc_now()
-        item.updated_at = utc_now()
-        assigned_count += 1
-        await append_hub_operation_event(
-            hub_id=decoded_hub_id,
-            operation_type="next_leg_assigned",
-            queue_id=queue.id,
-            queue_item_id=item.id,
-            shipment_id=item.shipment_id,
-            manifest_id=queue.manifest_id,
-            actor_type="admin",
-            actor_id=current_user.id,
-            payload={"carrier": payload.carrier, "vehicle_number": payload.vehicle_number, "bulk_operation": True},
-            db=db,
-        )
+    async with db.begin_nested():
+        for shipment_id in decoded_shipment_ids:
+            item = found_by_shipment_id[shipment_id]
+            if item.status == HubSortItemStatus.EXCEPTION:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot assign shipment with unresolved exception")
+            same_assignment = (
+                item.status in {HubSortItemStatus.ASSIGNED, HubSortItemStatus.MOVED_TO_NEXT_LEG}
+                and item.assigned_next_hub_id == decoded_next_hub_id
+                and item.assigned_carrier == payload.carrier
+                and item.assigned_vehicle_number == payload.vehicle_number
+            )
+            if same_assignment:
+                idempotent_skip_count += 1
+                continue
+            item.status = HubSortItemStatus.ASSIGNED
+            item.assigned_next_hub_id = decoded_next_hub_id
+            item.assigned_carrier = payload.carrier
+            item.assigned_vehicle_number = payload.vehicle_number
+            item.assigned_at = utc_now()
+            item.updated_at = utc_now()
+            assigned_count += 1
+            await append_hub_operation_event(
+                hub_id=decoded_hub_id,
+                operation_type="next_leg_assigned",
+                queue_id=queue.id,
+                queue_item_id=item.id,
+                shipment_id=item.shipment_id,
+                manifest_id=queue.manifest_id,
+                actor_type="admin",
+                actor_id=current_user.id,
+                payload={"carrier": payload.carrier, "vehicle_number": payload.vehicle_number, "bulk_operation": True},
+                db=db,
+            )
     await append_hub_operation_event(
         hub_id=decoded_hub_id,
         operation_type="bulk_assign_completed",
@@ -1168,6 +1218,7 @@ async def bulk_move_to_next_leg(
     current_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
+    _ensure_bulk_operator(current_user)
     decoded_hub_id = decode_id_or_404(hub_id)
     queue = await get_hub_sort_queue_or_404(decode_id_or_404(queue_id), db)
     if queue.hub_id != decoded_hub_id:
@@ -1187,34 +1238,35 @@ async def bulk_move_to_next_leg(
 
     moved = 0
     already_moved = 0
-    for item in items:
-        if item.status == HubSortItemStatus.MOVED_TO_NEXT_LEG:
-            already_moved += 1
-            continue
-        if item.status != HubSortItemStatus.ASSIGNED:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="All shipments must be assigned before bulk move")
-        if item.assigned_carrier != payload.carrier or item.assigned_vehicle_number != payload.vehicle_number:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assigned carrier/vehicle mismatch")
-        item.status = HubSortItemStatus.MOVED_TO_NEXT_LEG
-        item.moved_at = utc_now()
-        item.updated_at = utc_now()
-        shipment = await db.get(Shipment, item.shipment_id)
-        if shipment:
-            shipment.current_location = f"Departed {hub_id} via {payload.carrier} / {payload.vehicle_number}"
-            shipment.updated_at = utc_now()
-        await append_hub_operation_event(
-            hub_id=decoded_hub_id,
-            operation_type="moved_to_next_leg",
-            queue_id=queue.id,
-            queue_item_id=item.id,
-            shipment_id=item.shipment_id,
-            manifest_id=queue.manifest_id,
-            actor_type="admin",
-            actor_id=current_user.id,
-            payload={"carrier": payload.carrier, "vehicle_number": payload.vehicle_number},
-            db=db,
-        )
-        moved += 1
+    async with db.begin_nested():
+        for item in items:
+            if item.status == HubSortItemStatus.MOVED_TO_NEXT_LEG:
+                already_moved += 1
+                continue
+            if item.status != HubSortItemStatus.ASSIGNED:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="All shipments must be assigned before bulk move")
+            if item.assigned_carrier != payload.carrier or item.assigned_vehicle_number != payload.vehicle_number:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assigned carrier/vehicle mismatch")
+            item.status = HubSortItemStatus.MOVED_TO_NEXT_LEG
+            item.moved_at = utc_now()
+            item.updated_at = utc_now()
+            shipment = await db.get(Shipment, item.shipment_id)
+            if shipment:
+                shipment.current_location = f"Departed {hub_id} via {payload.carrier} / {payload.vehicle_number}"
+                shipment.updated_at = utc_now()
+            await append_hub_operation_event(
+                hub_id=decoded_hub_id,
+                operation_type="moved_to_next_leg",
+                queue_id=queue.id,
+                queue_item_id=item.id,
+                shipment_id=item.shipment_id,
+                manifest_id=queue.manifest_id,
+                actor_type="admin",
+                actor_id=current_user.id,
+                payload={"carrier": payload.carrier, "vehicle_number": payload.vehicle_number},
+                db=db,
+            )
+            moved += 1
     await append_hub_operation_event(
         hub_id=decoded_hub_id,
         operation_type="bulk_dispatch_completed",
@@ -1233,6 +1285,74 @@ async def bulk_move_to_next_leg(
     )
     await db.commit()
     return {"moved_count": moved, "already_moved_count": already_moved}
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/bulk-actions")
+async def bulk_hub_actions(
+    hub_id: str,
+    queue_id: str,
+    payload: HubBulkActionRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    _ensure_bulk_operator(current_user)
+    action = payload.action.lower()
+    if action == "dispatch":
+        if not payload.carrier or not payload.vehicle_number:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="carrier and vehicle_number are required")
+        return await bulk_move_to_next_leg(
+            hub_id,
+            queue_id,
+            HubBulkMoveNextLegRequest(
+                shipment_ids=payload.shipment_ids,
+                carrier=payload.carrier,
+                vehicle_number=payload.vehicle_number,
+                carrier_ready=True,
+                vehicle_ready=True,
+            ),
+            current_user,
+            db,
+        )
+    if action == "reassign_lane":
+        if not payload.carrier or not payload.vehicle_number:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="carrier and vehicle_number are required")
+        return await bulk_assign_hub_sort_items(
+            hub_id,
+            queue_id,
+            HubBulkAssignRequest(
+                shipment_ids=payload.shipment_ids,
+                next_hub_id=payload.next_hub_id,
+                carrier=payload.carrier,
+                vehicle_number=payload.vehicle_number,
+            ),
+            current_user,
+            db,
+        )
+    if action not in {"hold", "release"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported bulk action")
+
+    decoded_hub_id = decode_id_or_404(hub_id)
+    queue = await get_hub_sort_queue_or_404(decode_id_or_404(queue_id), db)
+    shipment_ids = [decode_id_or_404(item) for item in payload.shipment_ids]
+    items = (
+        await db.execute(select(HubSortQueueItem).where(HubSortQueueItem.queue_id == queue.id, HubSortQueueItem.shipment_id.in_(shipment_ids)))
+    ).scalars().all()
+    if len(items) != len(shipment_ids):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Some shipments are missing in queue")
+    async with db.begin_nested():
+        for item in items:
+            await recirculate_or_rework_hub_item(
+                item=item,
+                queue=queue,
+                hub_id=decoded_hub_id,
+                actor_id=current_user.id,
+                exception_code=payload.exception_code,
+                notes=payload.notes,
+                requeue_for_sorting=action == "release",
+                db=db,
+            )
+    await db.commit()
+    return {"updated_count": len(items), "action": action}
 
 
 @router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/close")
@@ -2621,6 +2741,7 @@ async def get_hub_operational_reports(
     hub_id: str,
     _: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
+    analytics: AnalyticsService = Depends(get_analytics),
 ):
     decoded_hub_id = decode_id_or_404(hub_id)
     queues = (await db.execute(select(HubSortQueue).where(HubSortQueue.hub_id == decoded_hub_id))).scalars().all()
@@ -2647,10 +2768,23 @@ async def get_hub_operational_reports(
             breach_heatmap[hour_key] = breach_heatmap.get(hour_key, 0) + 1
             cause = item.exception_code or "unknown"
             exception_causes[cause] = exception_causes.get(cause, 0) + 1
+    moved_items = [item for item in items if item.status == HubSortItemStatus.MOVED_TO_NEXT_LEG and item.moved_at is not None]
+    dwell_samples = [max((item.moved_at - item.scanned_at).total_seconds(), 0) / 60 for item in moved_items if item.moved_at is not None]
+    metrics = analytics.build_hub_operational_metrics(
+        scanned_shipments=len(items),
+        throughput_shipments=len(moved_items),
+        dwell_samples_minutes=dwell_samples,
+        exception_shipments=len([item for item in items if item.status == HubSortItemStatus.EXCEPTION]),
+    )
+    exception_analytics = analytics.build_hub_exception_analytics(exception_causes=exception_causes)
 
     return {
         "hub_id": hub_id,
         "throughput_by_shift": throughput_by_shift,
+        "lane_throughput": throughput_by_shift,
+        "dwell_time_minutes": metrics["average_dwell_time_minutes"],
+        "sla_breach_shipments": metrics["sla_breach_shipments"],
         "sla_breach_heatmap": breach_heatmap,
         "exception_causes": exception_causes,
+        **exception_analytics,
     }

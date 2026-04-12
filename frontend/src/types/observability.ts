@@ -115,3 +115,16 @@ export interface BranchDashboardDrilldownResponse {
   };
   inventory_flow: Record<string, number>;
 }
+
+export interface HubOperationalReportsResponse {
+  hub_id: string;
+  throughput_by_shift: Record<string, number>;
+  lane_throughput: Record<string, number>;
+  dwell_time_minutes: number;
+  sla_breach_shipments: number;
+  sla_breach_heatmap: Record<string, number>;
+  exception_causes: Record<string, number>;
+  exception_categories: Array<{ category: string; count: number }>;
+  top_exception_category: string | null;
+  total_exception_shipments: number;
+}

@@ -124,4 +124,5 @@ export {
   useUpdateSecurityIncident,
   useBranchDashboardSnapshot,
   useBranchDashboardDrilldown,
+  useHubOperationalReports,
 } from './use-observability';
