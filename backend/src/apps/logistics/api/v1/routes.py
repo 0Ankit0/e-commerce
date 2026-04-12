@@ -300,6 +300,13 @@ class DispatchConfirmRequest(BaseModel):
     shipment_id: str
 
 
+class HubExceptionUpdateRequest(BaseModel):
+    shipment_id: str
+    exception_code: str = Field(min_length=2, max_length=80)
+    notes: str = Field(default="", max_length=500)
+    requeue_for_sorting: bool = False
+
+
 def _serialize_sort_queue_item(item: HubSortQueueItem) -> dict[str, object]:
     return {
         "queue_item_id": encode_id(item.id or 0),
@@ -377,6 +384,45 @@ async def _ensure_sort_action_allowed(queue: HubSortQueue, db: AsyncSession) -> 
         manifest = await db.get(ShipmentManifest, queue.manifest_id)
         if manifest and manifest.status == ShipmentManifestStatus.RECONCILED:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Manifest closed during sort action")
+
+
+def _minutes_between(started_at: datetime | None, ended_at: datetime | None) -> float | None:
+    if started_at is None or ended_at is None:
+        return None
+    return max((ended_at - started_at).total_seconds(), 0) / 60
+
+
+def _serialize_hub_alerts(*, items: list[HubSortQueueItem], now: datetime) -> list[dict[str, object]]:
+    alerts: list[dict[str, object]] = []
+    dwell_breach = [
+        item
+        for item in items
+        if item.status in {HubSortItemStatus.SCANNED, HubSortItemStatus.ASSIGNED}
+        and _minutes_between(item.scanned_at, now) is not None
+        and (_minutes_between(item.scanned_at, now) or 0) > 90
+    ]
+    sort_latency_breach = [
+        item
+        for item in items
+        if item.status in {HubSortItemStatus.ASSIGNED, HubSortItemStatus.MOVED_TO_NEXT_LEG}
+        and _minutes_between(item.scanned_at, item.assigned_at) is not None
+        and (_minutes_between(item.scanned_at, item.assigned_at) or 0) > 30
+    ]
+    cutoff_miss = [
+        item
+        for item in items
+        if item.status != HubSortItemStatus.MOVED_TO_NEXT_LEG
+        and item.scanned_at.hour >= 18
+        and _minutes_between(item.scanned_at, now) is not None
+        and (_minutes_between(item.scanned_at, now) or 0) > 120
+    ]
+    if dwell_breach:
+        alerts.append({"type": "dwell_breach", "severity": "high", "count": len(dwell_breach)})
+    if sort_latency_breach:
+        alerts.append({"type": "sort_latency_breach", "severity": "medium", "count": len(sort_latency_breach)})
+    if cutoff_miss:
+        alerts.append({"type": "cutoff_miss", "severity": "high", "count": len(cutoff_miss)})
+    return alerts
 
 
 def _build_label_payload(
@@ -807,6 +853,20 @@ async def outbound_stage_hub_shipment(
         vehicle_number=payload.vehicle_number,
         db=db,
     )
+    shipment = await db.get(Shipment, item.shipment_id)
+    if shipment is not None:
+        db.add(
+            ShipmentTracking(
+                shipment_id=shipment.id or 0,
+                from_status=shipment.status,
+                status=shipment.status,
+                location=f"Hub {hub_id} outbound staging",
+                remarks="Shipment sorted and staged for dispatch",
+                actor_type="hub_ops",
+                actor_id=current_user.id,
+                context_json=json.dumps({"event": "hub_outbound_staged", "queue_id": queue.id, "queue_item_id": item.id}),
+            )
+        )
     await db.commit()
     return {"success": True}
 
@@ -840,8 +900,87 @@ async def confirm_hub_dispatch(
         actor_id=current_user.id,
         db=db,
     )
+    shipment = await db.get(Shipment, item.shipment_id)
+    if shipment is not None:
+        eta_impact_minutes = 0
+        if shipment.eta is not None:
+            eta_impact_minutes = max(int((utc_now() - shipment.eta).total_seconds() / 60), 0)
+        db.add(
+            ShipmentTracking(
+                shipment_id=shipment.id or 0,
+                from_status=shipment.status,
+                status=shipment.status,
+                location=f"Departed hub {hub_id}",
+                remarks="Outbound dispatch scan-out confirmed",
+                actor_type="hub_ops",
+                actor_id=current_user.id,
+                context_json=json.dumps(
+                    {
+                        "event": "hub_dispatch_scan_out",
+                        "queue_id": queue.id,
+                        "queue_item_id": item.id,
+                        "eta_impact_minutes": eta_impact_minutes,
+                    }
+                ),
+            )
+        )
     await db.commit()
     return {"success": True}
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/dispatch-scan-out")
+async def dispatch_scan_out_hub_shipment(
+    hub_id: str,
+    queue_id: str,
+    payload: DispatchConfirmRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    return await confirm_hub_dispatch(hub_id, queue_id, payload, current_user, db)
+
+
+@router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/exception-queue")
+async def update_hub_exception_queue(
+    hub_id: str,
+    queue_id: str,
+    payload: HubExceptionUpdateRequest,
+    current_user: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    decoded_hub_id = decode_id_or_404(hub_id)
+    queue = await get_hub_sort_queue_or_404(decode_id_or_404(queue_id), db)
+    if queue.hub_id != decoded_hub_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Queue does not belong to hub")
+    decoded_shipment_id = decode_id_or_404(payload.shipment_id)
+    item = (
+        await db.execute(
+            select(HubSortQueueItem).where(
+                HubSortQueueItem.queue_id == queue.id,
+                HubSortQueueItem.shipment_id == decoded_shipment_id,
+            )
+        )
+    ).scalars().first()
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment scan not found in queue")
+
+    item.exception_code = payload.exception_code
+    item.exception_notes = payload.notes
+    item.status = HubSortItemStatus.SCANNED if payload.requeue_for_sorting else HubSortItemStatus.EXCEPTION
+    item.updated_at = utc_now()
+    await append_hub_operation_event(
+        hub_id=decoded_hub_id,
+        operation_type="exception_requeued" if payload.requeue_for_sorting else "hold_queue_updated",
+        queue_id=queue.id,
+        queue_item_id=item.id,
+        shipment_id=item.shipment_id,
+        manifest_id=queue.manifest_id,
+        actor_type="admin",
+        actor_id=current_user.id,
+        payload={"exception_code": payload.exception_code, "notes": payload.notes},
+        db=db,
+    )
+    await db.commit()
+    return _serialize_sort_queue_item(item)
 
 
 @router.post("/logistics/hubs/{hub_id}/sort-queues/{queue_id}/bulk-scan")
@@ -1106,8 +1245,21 @@ async def get_hub_sort_workbench(
         queue_items = (
             await db.execute(select(HubSortQueueItem).where(HubSortQueueItem.queue_id == selected_queue.id).order_by(HubSortQueueItem.updated_at.desc()))
         ).scalars().all()
-    inbound_items = [item for item in queue_items if item.status in {HubSortItemStatus.SCANNED, HubSortItemStatus.EXCEPTION}]
+    inbound_items = [item for item in queue_items if item.status == HubSortItemStatus.SCANNED]
+    hold_items = [item for item in queue_items if item.status == HubSortItemStatus.EXCEPTION]
     outbound_items = [item for item in queue_items if item.status in {HubSortItemStatus.ASSIGNED, HubSortItemStatus.MOVED_TO_NEXT_LEG}]
+    sorting_lanes: dict[str, list[dict[str, object]]] = {}
+    for item in outbound_items:
+        lane_key = f"{item.assigned_carrier or 'UNASSIGNED'}::{item.assigned_vehicle_number or 'NA'}"
+        sorting_lanes.setdefault(lane_key, []).append(_serialize_sort_queue_item(item))
+    now = utc_now()
+    outbound_ready = [item for item in outbound_items if item.status == HubSortItemStatus.ASSIGNED]
+    dispatch_completed = [item for item in outbound_items if item.status == HubSortItemStatus.MOVED_TO_NEXT_LEG]
+    dwell_samples = [_minutes_between(item.scanned_at, item.moved_at or now) for item in queue_items]
+    sort_latency_samples = [_minutes_between(item.scanned_at, item.assigned_at) for item in queue_items]
+    dwell_samples = [sample for sample in dwell_samples if sample is not None]
+    sort_latency_samples = [sample for sample in sort_latency_samples if sample is not None]
+    alerts = _serialize_hub_alerts(items=queue_items, now=now)
     timeline_events = (
         await db.execute(
             select(HubOperationEvent)
@@ -1131,7 +1283,26 @@ async def get_hub_sort_workbench(
             for queue in queues
         ],
         "inbound_items": [_serialize_sort_queue_item(item) for item in inbound_items],
+        "hold_exception_items": [_serialize_sort_queue_item(item) for item in hold_items],
+        "sorting_lanes": [{"lane": lane, "items": lane_items} for lane, lane_items in sorting_lanes.items()],
         "outbound_items": [_serialize_sort_queue_item(item) for item in outbound_items],
+        "outbound_readiness_board": {
+            "ready_to_dispatch_count": len(outbound_ready),
+            "dispatched_count": len(dispatch_completed),
+            "hold_count": len(hold_items),
+        },
+        "sla_timers": {
+            "average_dwell_minutes": round(sum(dwell_samples) / len(dwell_samples), 2) if dwell_samples else 0.0,
+            "average_sort_latency_minutes": round(sum(sort_latency_samples) / len(sort_latency_samples), 2) if sort_latency_samples else 0.0,
+            "cutoff_miss_shipments": len(
+                [
+                    item
+                    for item in queue_items
+                    if item.status != HubSortItemStatus.MOVED_TO_NEXT_LEG and item.scanned_at.hour >= 18 and (now - item.scanned_at).total_seconds() > 7200
+                ]
+            ),
+        },
+        "alerts": alerts,
         "timeline": [
             {
                 "event_id": encode_id(event.id or 0),
@@ -1140,6 +1311,7 @@ async def get_hub_sort_workbench(
                 "shipment_id": encode_id(event.shipment_id) if event.shipment_id else None,
                 "operation_type": event.operation_type,
                 "payload": json.loads(event.payload_json or "{}"),
+                "eta_impact_minutes": json.loads(event.payload_json or "{}").get("eta_impact_minutes"),
                 "created_at": event.created_at.isoformat(),
             }
             for event in timeline_events
@@ -2196,4 +2368,44 @@ async def get_hub_kpi_dashboard(
         "queue_count": len(queues),
         "scanned_shipments": len(items),
         **metrics,
+    }
+
+
+@router.get("/logistics/hubs/{hub_id}/operational-reports")
+async def get_hub_operational_reports(
+    hub_id: str,
+    _: User = Depends(get_current_active_superuser),
+    db: AsyncSession = Depends(get_db),
+):
+    decoded_hub_id = decode_id_or_404(hub_id)
+    queues = (await db.execute(select(HubSortQueue).where(HubSortQueue.hub_id == decoded_hub_id))).scalars().all()
+    queue_ids = [queue.id for queue in queues if queue.id is not None]
+    items: list[HubSortQueueItem] = []
+    if queue_ids:
+        items = (await db.execute(select(HubSortQueueItem).where(HubSortQueueItem.queue_id.in_(queue_ids)))).scalars().all()
+
+    throughput_by_shift: dict[str, int] = {"night": 0, "day": 0, "swing": 0}
+    for item in items:
+        event_time = item.moved_at or item.updated_at
+        if event_time.hour < 8:
+            throughput_by_shift["night"] += 1
+        elif event_time.hour < 16:
+            throughput_by_shift["day"] += 1
+        else:
+            throughput_by_shift["swing"] += 1
+
+    breach_heatmap: dict[str, int] = {}
+    exception_causes: dict[str, int] = {}
+    for item in items:
+        if item.status == HubSortItemStatus.EXCEPTION:
+            hour_key = str(item.updated_at.hour).zfill(2)
+            breach_heatmap[hour_key] = breach_heatmap.get(hour_key, 0) + 1
+            cause = item.exception_code or "unknown"
+            exception_causes[cause] = exception_causes.get(cause, 0) + 1
+
+    return {
+        "hub_id": hub_id,
+        "throughput_by_shift": throughput_by_shift,
+        "sla_breach_heatmap": breach_heatmap,
+        "exception_causes": exception_causes,
     }
