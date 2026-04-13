@@ -1337,11 +1337,13 @@ async def build_branch_kpi_snapshot(
         if agents
         else 0.0
     )
+    individual_loads = [((agent.current_load / agent.capacity) * 100) if agent.capacity else 0.0 for agent in agents]
     agent_utilization = analytics.build_branch_agent_utilization(
         assigned_agents=len([agent for agent in agents if agent.status == DeliveryAgentStatus.ASSIGNED]),
         active_agents=len([agent for agent in agents if agent.status == DeliveryAgentStatus.AVAILABLE]),
         average_utilization_percent=avg_utilization,
     )
+    load_balance_metrics = analytics.build_branch_load_balance_metrics(agent_loads=individual_loads)
 
     snapshot.update(
         {
@@ -1352,6 +1354,7 @@ async def build_branch_kpi_snapshot(
             **aging_buckets,
             **attempt_and_exception_metrics,
             **agent_utilization,
+            **load_balance_metrics,
         }
     )
     branch_code_map: dict[int, str] = {}
@@ -1519,6 +1522,9 @@ async def list_branch_dashboard_alerts(
     low_staff_threshold: int = 2,
     failure_rate_threshold: float = 20.0,
     sla_breach_threshold: int = 1,
+    first_attempt_threshold: float = 70.0,
+    rto_rate_threshold: float = 8.0,
+    load_spread_threshold: float = 45.0,
 ) -> dict[str, object]:
     payload = await build_branch_kpi_snapshot(
         db=db,
@@ -1540,6 +1546,12 @@ async def list_branch_dashboard_alerts(
         alerts.append({"code": "high_failure", "severity": "high", "message": "Failure rate exceeded threshold."})
     if int(snapshot.get("open_exceptions", 0)) >= sla_breach_threshold:
         alerts.append({"code": "sla_violation", "severity": "high", "message": "SLA violation threshold breached."})
+    if float(snapshot.get("first_attempt_success_rate_percent", 0.0)) < first_attempt_threshold:
+        alerts.append({"code": "first_attempt_drop", "severity": "high", "message": "First-attempt success dropped below threshold."})
+    if float(snapshot.get("rto_rate_percent", 0.0)) >= rto_rate_threshold:
+        alerts.append({"code": "rto_spike", "severity": "high", "message": "RTO rate exceeded threshold."})
+    if float(snapshot.get("load_balance_spread_percent", 0.0)) >= load_spread_threshold:
+        alerts.append({"code": "load_imbalance", "severity": "medium", "message": "Agent load imbalance exceeded threshold."})
     escalation_hooks = []
     for alert in alerts:
         if alert["code"] == "backlog":
@@ -1548,6 +1560,12 @@ async def list_branch_dashboard_alerts(
             escalation_hooks.append({"action": "escalate_issues", "path": "/logistics/branch-dashboard/actions/escalate-issues"})
         if alert["code"] == "high_failure":
             escalation_hooks.append({"action": "reassign_load", "path": "/logistics/branch-dashboard/actions/reassign-load"})
+        if alert["code"] == "first_attempt_drop":
+            escalation_hooks.append({"action": "reassign_load", "path": "/logistics/branch-dashboard/actions/reassign-load"})
+        if alert["code"] == "rto_spike":
+            escalation_hooks.append({"action": "escalate_issues", "path": "/logistics/branch-dashboard/actions/escalate-issues"})
+        if alert["code"] == "load_imbalance":
+            escalation_hooks.append({"action": "reassign_load", "path": "/logistics/branch-dashboard/actions/reassign-load"})
     return {
         "alerts": alerts,
         "thresholds": {
@@ -1555,12 +1573,24 @@ async def list_branch_dashboard_alerts(
             "low_staff": low_staff_threshold,
             "failure_rate": failure_rate_threshold,
             "sla_breach": sla_breach_threshold,
+            "first_attempt_success_rate": first_attempt_threshold,
+            "rto_rate": rto_rate_threshold,
+            "load_balance_spread": load_spread_threshold,
         },
         "escalation_hooks": escalation_hooks,
     }
 
 
+async def _ensure_agent_in_branch(*, db: AsyncSession, branch_id: int, agent_id: int) -> DeliveryAgent:
+    agent = await db.get(DeliveryAgent, agent_id)
+    if agent is None or agent.branch_id != branch_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Branch-scoped access denied")
+    return agent
+
+
 async def reassign_branch_load(*, db: AsyncSession, branch_id: int, from_agent_id: int, to_agent_id: int, limit: int = 10) -> dict[str, int]:
+    await _ensure_agent_in_branch(db=db, branch_id=branch_id, agent_id=from_agent_id)
+    await _ensure_agent_in_branch(db=db, branch_id=branch_id, agent_id=to_agent_id)
     jobs = (
         await db.execute(
             select(PickupJob)
@@ -1576,6 +1606,8 @@ async def reassign_branch_load(*, db: AsyncSession, branch_id: int, from_agent_i
 
 
 async def prioritize_aging_shipments(*, db: AsyncSession, branch_id: int, assignee_agent_id: int | None = None, limit: int = 20) -> dict[str, int]:
+    if assignee_agent_id is not None:
+        await _ensure_agent_in_branch(db=db, branch_id=branch_id, agent_id=assignee_agent_id)
     stale_jobs = (
         await db.execute(
             select(PickupJob)

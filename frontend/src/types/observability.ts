@@ -80,6 +80,10 @@ export interface BranchKpiSnapshot {
   rto_rate_percent?: number;
   assigned_agents?: number;
   avg_agent_utilization_percent?: number;
+  load_balance_spread_percent?: number;
+  load_balance_index?: number;
+  overloaded_agents?: number;
+  underutilized_agents?: number;
   aging_queue_over_2h?: number;
   aging_queue_over_6h?: number;
   aging_queue_over_12h?: number;

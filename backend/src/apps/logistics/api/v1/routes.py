@@ -2828,6 +2828,9 @@ async def get_branch_dashboard_alerts(
     low_staff_threshold: int = Query(default=2, ge=0),
     failure_rate_threshold: float = Query(default=20.0, ge=0, le=100),
     sla_breach_threshold: int = Query(default=1, ge=1),
+    first_attempt_threshold: float = Query(default=70.0, ge=0, le=100),
+    rto_rate_threshold: float = Query(default=8.0, ge=0, le=100),
+    load_spread_threshold: float = Query(default=45.0, ge=0, le=100),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -2845,6 +2848,9 @@ async def get_branch_dashboard_alerts(
         low_staff_threshold=low_staff_threshold,
         failure_rate_threshold=failure_rate_threshold,
         sla_breach_threshold=sla_breach_threshold,
+        first_attempt_threshold=first_attempt_threshold,
+        rto_rate_threshold=rto_rate_threshold,
+        load_spread_threshold=load_spread_threshold,
     )
 
 

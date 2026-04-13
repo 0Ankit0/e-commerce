@@ -255,3 +255,25 @@ class AnalyticsService:
             "active_agent_count": active_agents,
             "avg_agent_utilization_percent": round(average_utilization_percent, 2),
         }
+
+    def build_branch_load_balance_metrics(
+        self,
+        *,
+        agent_loads: list[float],
+    ) -> dict[str, int | float]:
+        if not agent_loads:
+            return {
+                "load_balance_spread_percent": 0.0,
+                "load_balance_index": 100.0,
+                "overloaded_agents": 0,
+                "underutilized_agents": 0,
+            }
+        normalized = [max(load, 0.0) for load in agent_loads]
+        spread = round(max(normalized) - min(normalized), 2)
+        balance_index = round(max(0.0, 100.0 - spread), 2)
+        return {
+            "load_balance_spread_percent": spread,
+            "load_balance_index": balance_index,
+            "overloaded_agents": len([load for load in normalized if load >= 85]),
+            "underutilized_agents": len([load for load in normalized if load <= 30]),
+        }
