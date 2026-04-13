@@ -21,6 +21,9 @@ from src.apps.logistics.services import (
     build_branch_kpi_snapshot,
     calculate_branch_kpi_snapshot,
     ensure_branch_scope_access,
+    list_branch_dashboard_alerts,
+    prioritize_aging_shipments,
+    reassign_branch_load,
     resolve_user_branch_scope,
 )
 
@@ -126,4 +129,84 @@ async def test_branch_snapshot_isolation_and_extended_metrics(db_session) -> Non
     assert branch_a_snapshot['snapshot']['inventory_on_hand_units'] == 20
     assert branch_a_snapshot['snapshot']['attempt_success_rate_percent'] == 50.0
     assert branch_a_snapshot['snapshot']['rto_rate_percent'] == 100.0
+    assert branch_a_snapshot['snapshot']['load_balance_spread_percent'] == 0.0
     assert network_snapshot['snapshot']['inventory_on_hand_units'] == 27
+
+
+@pytest.mark.asyncio
+async def test_branch_alerts_include_sla_deterioration_and_escalations(db_session) -> None:
+    hub = Hub(name='Hub Alert', code='HUB-A')
+    db_session.add(hub)
+    await db_session.flush()
+    branch = Branch(hub_id=hub.id or 0, name='Alert Branch', code='ALERT')
+    db_session.add(branch)
+    await db_session.flush()
+
+    overloaded = DeliveryAgent(branch_id=branch.id or 0, name='Overloaded', status=DeliveryAgentStatus.ASSIGNED, capacity=10, current_load=10)
+    underutilized = DeliveryAgent(branch_id=branch.id or 0, name='Underutilized', status=DeliveryAgentStatus.AVAILABLE, capacity=10, current_load=1)
+    db_session.add(overloaded)
+    db_session.add(underutilized)
+    await db_session.flush()
+
+    db_session.add(PickupJob(vendor_order_id=10, shipment_id=10, branch_id=branch.id, agent_id=overloaded.id, status=PickupJobStatus.FAILED))
+    db_session.add(DeliveryException(shipment_id=11, agent_id=overloaded.id, exception_type='failed_delivery', status=DeliveryExceptionStatus.OPEN))
+    db_session.add(DeliveryException(shipment_id=12, agent_id=overloaded.id, exception_type='failed_delivery', status=DeliveryExceptionStatus.RTO_INITIATED))
+    await db_session.commit()
+
+    payload = await list_branch_dashboard_alerts(
+        db=db_session,
+        branch_id=branch.id,
+        allowed_branch_ids={branch.id or 0},
+        agent_id=None,
+        zone_id=None,
+        date_from=None,
+        date_to=None,
+        timezone_name='UTC',
+        first_attempt_threshold=90.0,
+        rto_rate_threshold=10.0,
+        load_spread_threshold=20.0,
+    )
+    codes = {alert['code'] for alert in payload['alerts']}
+    hook_actions = {hook['action'] for hook in payload['escalation_hooks']}
+    assert 'first_attempt_drop' in codes
+    assert 'rto_spike' in codes
+    assert 'load_imbalance' in codes
+    assert 'reassign_load' in hook_actions
+    assert 'escalate_issues' in hook_actions
+
+
+@pytest.mark.asyncio
+async def test_intervention_actions_block_cross_branch_agent_access(db_session) -> None:
+    hub = Hub(name='Hub Scope', code='HUB-S')
+    db_session.add(hub)
+    await db_session.flush()
+    branch_a = Branch(hub_id=hub.id or 0, name='Scoped A', code='SCA')
+    branch_b = Branch(hub_id=hub.id or 0, name='Scoped B', code='SCB')
+    db_session.add(branch_a)
+    db_session.add(branch_b)
+    await db_session.flush()
+
+    branch_a_agent = DeliveryAgent(branch_id=branch_a.id or 0, name='A Agent', status=DeliveryAgentStatus.ASSIGNED, capacity=10, current_load=4)
+    branch_b_agent = DeliveryAgent(branch_id=branch_b.id or 0, name='B Agent', status=DeliveryAgentStatus.AVAILABLE, capacity=10, current_load=0)
+    db_session.add(branch_a_agent)
+    db_session.add(branch_b_agent)
+    await db_session.flush()
+    db_session.add(PickupJob(vendor_order_id=20, shipment_id=20, branch_id=branch_a.id, agent_id=branch_a_agent.id, status=PickupJobStatus.ASSIGNED))
+    await db_session.commit()
+
+    with pytest.raises(HTTPException, match='Branch-scoped access denied'):
+        await reassign_branch_load(
+            db=db_session,
+            branch_id=branch_a.id or 0,
+            from_agent_id=branch_a_agent.id or 0,
+            to_agent_id=branch_b_agent.id or 0,
+            limit=5,
+        )
+
+    with pytest.raises(HTTPException, match='Branch-scoped access denied'):
+        await prioritize_aging_shipments(
+            db=db_session,
+            branch_id=branch_a.id or 0,
+            assignee_agent_id=branch_b_agent.id,
+            limit=5,
+        )
