@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import csv
 import io
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
+from src.apps.analytics import get_analytics as get_analytics_service
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
 from src.apps.commerce.models import Address
@@ -495,7 +496,13 @@ def _ensure_bulk_operator(current_user: User) -> None:
 def _minutes_between(started_at: datetime | None, ended_at: datetime | None) -> float | None:
     if started_at is None or ended_at is None:
         return None
-    return max((ended_at - started_at).total_seconds(), 0) / 60
+
+    def _as_utc(value: datetime) -> datetime:
+        if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    return max((_as_utc(ended_at) - _as_utc(started_at)).total_seconds(), 0) / 60
 
 
 def _serialize_hub_alerts(*, items: list[HubSortQueueItem], now: datetime) -> list[dict[str, object]]:
@@ -802,7 +809,6 @@ async def scan_hub_sort_item(
         existing_item.scan_count += 1
         existing_item.exception_code = "duplicate_scan"
         existing_item.exception_notes = "Duplicate scan received for shipment in same queue."
-        existing_item.status = HubSortItemStatus.EXCEPTION
         existing_item.updated_at = utc_now()
         await append_hub_operation_event(
             hub_id=decoded_hub_id,
@@ -1046,7 +1052,7 @@ async def confirm_hub_dispatch(
     if shipment is not None:
         eta_impact_minutes = 0
         if shipment.eta is not None:
-            eta_impact_minutes = max(int((utc_now() - shipment.eta).total_seconds() / 60), 0)
+            eta_impact_minutes = int(_minutes_between(shipment.eta, utc_now()) or 0)
         db.add(
             ShipmentTracking(
                 shipment_id=shipment.id or 0,
@@ -1553,7 +1559,7 @@ async def get_hub_sort_workbench(
         item
         for item in queue_items
         if item.status in {HubSortItemStatus.SCANNED, HubSortItemStatus.ASSIGNED}
-        and (now - item.scanned_at).total_seconds() / 60 >= HUB_STALE_DWELL_ALARM_MINUTES
+        and (_minutes_between(item.scanned_at, now) or 0) >= HUB_STALE_DWELL_ALARM_MINUTES
     ]
     timeline_events = (
         await db.execute(
@@ -1594,7 +1600,9 @@ async def get_hub_sort_workbench(
                 [
                     item
                     for item in queue_items
-                    if item.status != HubSortItemStatus.MOVED_TO_NEXT_LEG and item.scanned_at.hour >= 18 and (now - item.scanned_at).total_seconds() > 7200
+                    if item.status != HubSortItemStatus.MOVED_TO_NEXT_LEG
+                    and item.scanned_at.hour >= 18
+                    and (_minutes_between(item.scanned_at, now) or 0) > 120
                 ]
             ),
         },
@@ -3013,6 +3021,8 @@ async def get_hub_kpi_dashboard(
     db: AsyncSession = Depends(get_db),
     analytics: AnalyticsService = Depends(get_analytics),
 ):
+    if not isinstance(analytics, AnalyticsService):
+        analytics = get_analytics_service()
     decoded_hub_id = decode_id_or_404(hub_id)
     queues = (await db.execute(select(HubSortQueue).where(HubSortQueue.hub_id == decoded_hub_id))).scalars().all()
     queue_ids = [queue.id for queue in queues if queue.id is not None]
@@ -3024,8 +3034,11 @@ async def get_hub_kpi_dashboard(
     moved_items = [item for item in items if item.status == HubSortItemStatus.MOVED_TO_NEXT_LEG and item.moved_at]
     exception_items = [item for item in items if item.status == HubSortItemStatus.EXCEPTION]
     dwell_samples_minutes = [
-        max((item.moved_at - item.scanned_at).total_seconds(), 0) / 60 for item in moved_items if item.scanned_at and item.moved_at
+        _minutes_between(item.scanned_at, item.moved_at)
+        for item in moved_items
+        if item.scanned_at and item.moved_at
     ]
+    dwell_samples_minutes = [sample for sample in dwell_samples_minutes if sample is not None]
     metrics = analytics.build_hub_operational_metrics(
         scanned_shipments=len(items),
         throughput_shipments=len(moved_items),
@@ -3047,6 +3060,8 @@ async def get_hub_operational_reports(
     db: AsyncSession = Depends(get_db),
     analytics: AnalyticsService = Depends(get_analytics),
 ):
+    if not isinstance(analytics, AnalyticsService):
+        analytics = get_analytics_service()
     decoded_hub_id = decode_id_or_404(hub_id)
     queues = (await db.execute(select(HubSortQueue).where(HubSortQueue.hub_id == decoded_hub_id))).scalars().all()
     queue_ids = [queue.id for queue in queues if queue.id is not None]
@@ -3073,7 +3088,12 @@ async def get_hub_operational_reports(
             cause = item.exception_code or "unknown"
             exception_causes[cause] = exception_causes.get(cause, 0) + 1
     moved_items = [item for item in items if item.status == HubSortItemStatus.MOVED_TO_NEXT_LEG and item.moved_at is not None]
-    dwell_samples = [max((item.moved_at - item.scanned_at).total_seconds(), 0) / 60 for item in moved_items if item.moved_at is not None]
+    dwell_samples = [
+        _minutes_between(item.scanned_at, item.moved_at)
+        for item in moved_items
+        if item.scanned_at and item.moved_at is not None
+    ]
+    dwell_samples = [sample for sample in dwell_samples if sample is not None]
     metrics = analytics.build_hub_operational_metrics(
         scanned_shipments=len(items),
         throughput_shipments=len(moved_items),

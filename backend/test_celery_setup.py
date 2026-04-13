@@ -67,9 +67,9 @@ def test_celery_imports():
         from src.apps.core.tasks import (
             send_email_task
         )
-        print("   ✓ All email tasks imported successfully")
+        print(f"   ✓ All email tasks imported successfully ({send_email_task.name})")
         
-        print(f"\n   Available tasks:")
+        print("\n   Available tasks:")
         for task_name in celery_app.tasks.keys():
             if not task_name.startswith('celery.'):
                 print(f"     - {task_name}")
@@ -86,7 +86,7 @@ def test_email_service():
     
     try:
         from src.apps.iam.services.email import EmailService
-        print("   ✓ EmailService imported successfully")
+        print(f"   ✓ {EmailService.__name__} imported successfully")
         print("   ✓ EmailService ready to queue email tasks via Celery")
         return True
     except Exception as e:

@@ -1,6 +1,7 @@
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
 from src.apps.iam.models.user import User
@@ -35,7 +36,7 @@ class TestCompleteAuthenticationFlow:
         
         # Verify user was created
         result = await db_session.execute(
-            select(User).where(User.username == "lifecycle_user")
+            select(User).options(selectinload(User.profile)).where(User.username == "lifecycle_user")
         )
         user = result.scalars().first()
         assert user is not None

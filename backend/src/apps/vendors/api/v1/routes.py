@@ -6,6 +6,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, func
 
@@ -21,7 +22,6 @@ from src.apps.orders.models import VendorOrder
 from src.apps.vendors.models import (
     BankAccount,
     BankAccountVerificationStatus,
-    CommissionTier,
     Vendor,
     VendorDocument,
     VendorDocumentStatus,
@@ -70,6 +70,54 @@ KYC_REASON_CODES = {
 }
 
 
+async def _apply_vendor_review_transition(
+    *,
+    vendor: Vendor,
+    status_value: VendorStatus,
+    kyc_status: VendorKYCStatus,
+    reviewer_user_id: int | None,
+    rejected_reason: str = "",
+    kyc_reason: str = "",
+    stale_detail: str,
+    db: AsyncSession,
+) -> Vendor:
+    transitioned_vendor = Vendor.model_validate(vendor.model_dump())
+    original_status = vendor.status
+    original_kyc_status = vendor.kyc_status
+    mark_vendor_status(transitioned_vendor, status_value, rejected_reason)
+    mark_vendor_kyc_status(
+        transitioned_vendor,
+        kyc_status=kyc_status,
+        reviewer_user_id=reviewer_user_id,
+        reason=kyc_reason,
+    )
+    update_result = await db.execute(
+        sa_update(Vendor)
+        .where(
+            Vendor.id == vendor.id,
+            Vendor.status == original_status,
+            Vendor.kyc_status == original_kyc_status,
+        )
+        .values(
+            status=transitioned_vendor.status,
+            rejected_reason=transitioned_vendor.rejected_reason,
+            updated_at=transitioned_vendor.updated_at,
+            approved_at=transitioned_vendor.approved_at,
+            onboarding_step=transitioned_vendor.onboarding_step,
+            kyc_status=transitioned_vendor.kyc_status,
+            kyc_submitted_at=transitioned_vendor.kyc_submitted_at,
+            kyc_review_started_at=transitioned_vendor.kyc_review_started_at,
+            kyc_reviewed_at=transitioned_vendor.kyc_reviewed_at,
+            kyc_last_reviewer_user_id=transitioned_vendor.kyc_last_reviewer_user_id,
+            kyc_review_reasons_json=transitioned_vendor.kyc_review_reasons_json,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if update_result.rowcount == 0:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=stale_detail)
+    return transitioned_vendor
+
+
 def _validate_reason_code(reason_code: str) -> str:
     normalized = reason_code.strip().lower()
     if normalized not in KYC_REASON_CODES:
@@ -89,7 +137,7 @@ class VendorCreateRequest(BaseModel):
 
 class VendorDecisionRequest(BaseModel):
     reason_code: str = Field(default="missing_information", min_length=2, max_length=80)
-    reason: str = Field(default="", max_length=500)
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class VendorKycPacketRequest(BaseModel):
@@ -693,7 +741,10 @@ async def list_admin_kyc_queue(
     rows: list[dict[str, object]] = []
     for vendor in vendors:
         checks = await validate_vendor_kyc_requirements(vendor, db)
-        age_hours = (now - vendor.kyc_submitted_at).total_seconds() / 3600 if vendor.kyc_submitted_at else 0
+        submitted_at = vendor.kyc_submitted_at
+        if submitted_at and submitted_at.tzinfo is None:
+            submitted_at = submitted_at.replace(tzinfo=now.tzinfo)
+        age_hours = (now - submitted_at).total_seconds() / 3600 if submitted_at else 0
         is_sla_breach = age_hours >= 48 and vendor.kyc_status in {
             VendorKYCStatus.SUBMITTED,
             VendorKYCStatus.UNDER_REVIEW,
@@ -754,12 +805,14 @@ async def approve_vendor(
     reason_code = _validate_reason_code(payload.reason_code) if payload else "approved"
     await ensure_vendor_kyc_ready_for_approval(vendor, db)
     assert_vendor_status_transition(vendor, VendorStatus.APPROVED)
-    mark_vendor_status(vendor, VendorStatus.APPROVED)
-    mark_vendor_kyc_status(
-        vendor,
+    transitioned_vendor = await _apply_vendor_review_transition(
+        vendor=vendor,
+        status_value=VendorStatus.APPROVED,
         kyc_status=VendorKYCStatus.APPROVED,
         reviewer_user_id=admin_user.id,
-        reason=f"{reason_code}:{(payload.reason if payload else 'approved') or 'approved'}",
+        kyc_reason=f"{reason_code}:{(payload.reason if payload else 'approved') or 'approved'}",
+        stale_detail="Vendor review decision is stale",
+        db=db,
     )
     await record_vendor_timeline_event(
         vendor=vendor,
@@ -769,17 +822,17 @@ async def approve_vendor(
         payload={"reason_code": reason_code, "reason": payload.reason if payload else ""},
         db=db,
     )
+    transitioned_vendor.verification_timeline_json = vendor.verification_timeline_json
     await notify_user(
         db=db,
         user_id=vendor.owner_user_id,
         title="KYC approved",
         body="Your KYC packet is approved.",
         event="vendor.kyc_approved",
-        extra_data={"vendor_id": encode_id(vendor.id), "status": vendor.kyc_status.value, "reason_code": reason_code},
+        extra_data={"vendor_id": encode_id(vendor.id), "status": transitioned_vendor.kyc_status.value, "reason_code": reason_code},
     )
     await db.commit()
-    await db.refresh(vendor)
-    return {"vendor": serialize_vendor(vendor)}
+    return {"vendor": serialize_vendor(transitioned_vendor)}
 
 
 @router.post("/admin/vendors/{vendor_id}/reject")
@@ -789,15 +842,20 @@ async def reject_vendor(
     admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
+    if not payload.reason.strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Reason is required")
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
     reason_code = _validate_reason_code(payload.reason_code)
     assert_vendor_status_transition(vendor, VendorStatus.REJECTED)
-    mark_vendor_status(vendor, VendorStatus.REJECTED, payload.reason)
-    mark_vendor_kyc_status(
-        vendor,
+    transitioned_vendor = await _apply_vendor_review_transition(
+        vendor=vendor,
+        status_value=VendorStatus.REJECTED,
         kyc_status=VendorKYCStatus.REJECTED,
         reviewer_user_id=admin_user.id,
-        reason=f"{reason_code}:{payload.reason}",
+        rejected_reason=payload.reason,
+        kyc_reason=f"{reason_code}:{payload.reason}",
+        stale_detail="Vendor review decision is stale",
+        db=db,
     )
     await record_vendor_timeline_event(
         vendor=vendor,
@@ -807,17 +865,17 @@ async def reject_vendor(
         actor_user_id=admin_user.id,
         db=db,
     )
+    transitioned_vendor.verification_timeline_json = vendor.verification_timeline_json
     await notify_user(
         db=db,
         user_id=vendor.owner_user_id,
         title="KYC rejected",
         body=payload.reason or "Your KYC packet was rejected.",
         event="vendor.kyc_rejected",
-        extra_data={"vendor_id": encode_id(vendor.id), "status": vendor.kyc_status.value, "reason_code": reason_code},
+        extra_data={"vendor_id": encode_id(vendor.id), "status": transitioned_vendor.kyc_status.value, "reason_code": reason_code},
     )
     await db.commit()
-    await db.refresh(vendor)
-    return {"vendor": serialize_vendor(vendor)}
+    return {"vendor": serialize_vendor(transitioned_vendor)}
 
 
 @router.post("/admin/vendors/{vendor_id}/suspend")
@@ -867,8 +925,14 @@ async def mark_vendor_under_review(
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
     await ensure_vendor_kyc_ready_for_review(vendor, db)
     assert_vendor_status_transition(vendor, VendorStatus.UNDER_REVIEW)
-    mark_vendor_status(vendor, VendorStatus.UNDER_REVIEW)
-    mark_vendor_kyc_status(vendor, kyc_status=VendorKYCStatus.UNDER_REVIEW, reviewer_user_id=admin_user.id)
+    transitioned_vendor = await _apply_vendor_review_transition(
+        vendor=vendor,
+        status_value=VendorStatus.UNDER_REVIEW,
+        kyc_status=VendorKYCStatus.UNDER_REVIEW,
+        reviewer_user_id=admin_user.id,
+        stale_detail="Vendor review state changed",
+        db=db,
+    )
     await record_vendor_timeline_event(
         vendor=vendor,
         event_type="vendor.under_review",
@@ -876,8 +940,9 @@ async def mark_vendor_under_review(
         actor_user_id=admin_user.id,
         db=db,
     )
+    transitioned_vendor.verification_timeline_json = vendor.verification_timeline_json
     await db.commit()
-    return {"vendor": serialize_vendor(vendor)}
+    return {"vendor": serialize_vendor(transitioned_vendor)}
 
 
 @router.post("/admin/vendors/{vendor_id}/request-resubmission")
@@ -887,15 +952,20 @@ async def request_vendor_resubmission(
     admin_user: User = Depends(get_current_active_superuser),
     db: AsyncSession = Depends(get_db),
 ):
+    if not payload.reason.strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Reason is required")
     vendor = await get_vendor_or_404(decode_id_or_404(vendor_id), db)
     reason_code = _validate_reason_code(payload.reason_code)
     assert_vendor_status_transition(vendor, VendorStatus.NEEDS_RESUBMISSION)
-    mark_vendor_status(vendor, VendorStatus.NEEDS_RESUBMISSION, payload.reason)
-    mark_vendor_kyc_status(
-        vendor,
+    transitioned_vendor = await _apply_vendor_review_transition(
+        vendor=vendor,
+        status_value=VendorStatus.NEEDS_RESUBMISSION,
         kyc_status=VendorKYCStatus.RESUBMISSION_REQUIRED,
         reviewer_user_id=admin_user.id,
-        reason=f"{reason_code}:{payload.reason}",
+        rejected_reason=payload.reason,
+        kyc_reason=f"{reason_code}:{payload.reason}",
+        stale_detail="Vendor review decision is stale",
+        db=db,
     )
     await record_vendor_timeline_event(
         vendor=vendor,
@@ -905,16 +975,17 @@ async def request_vendor_resubmission(
         actor_user_id=admin_user.id,
         db=db,
     )
+    transitioned_vendor.verification_timeline_json = vendor.verification_timeline_json
     await notify_user(
         db=db,
         user_id=vendor.owner_user_id,
         title="KYC resubmission requested",
         body=payload.reason or "Please resubmit KYC details.",
         event="vendor.kyc_resubmission_requested",
-        extra_data={"vendor_id": encode_id(vendor.id), "status": vendor.kyc_status.value, "reason_code": reason_code},
+        extra_data={"vendor_id": encode_id(vendor.id), "status": transitioned_vendor.kyc_status.value, "reason_code": reason_code},
     )
     await db.commit()
-    return {"vendor": serialize_vendor(vendor)}
+    return {"vendor": serialize_vendor(transitioned_vendor)}
 
 
 @router.post("/admin/vendors/{vendor_id}/kyc/approve")
@@ -1459,11 +1530,3 @@ async def export_vendor_settlement(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="vendor-settlements-{decoded_vendor_id}.csv"'},
     )
-
-
-def encode_id(value: int | None) -> str | None:
-    if value is None:
-        return None
-    from src.apps.iam.utils.hashid import encode_id as _encode_id
-
-    return _encode_id(value)

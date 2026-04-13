@@ -16,7 +16,6 @@ Flow:
   4. POST /payments/verify/ with provider=paypal, pidx=<paymentId>, extra oid=<PayerID>
 """
 import json
-from datetime import datetime
 
 import paypalrestsdk
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -50,7 +50,15 @@ async def _create_hub_and_shipment(db_session: AsyncSession) -> tuple[str, str]:
     db_session.add(buyer)
     await db_session.flush()
 
-    address = Address(user_id=buyer.id or 0, name='Hub Buyer', line1='Street 1', city='City', pincode='44600')
+    address = Address(
+        user_id=buyer.id or 0,
+        name='Hub Buyer',
+        phone='9800000000',
+        line1='Street 1',
+        city='City',
+        state='Bagmati',
+        pincode='44600',
+    )
     db_session.add(address)
     await db_session.flush()
 

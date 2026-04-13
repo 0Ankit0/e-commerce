@@ -148,7 +148,11 @@ def _route_ui_states(routes: list[dict[str, object]], assignments: list[dict[str
     for assignment in assignments:
         assigned_units[str(assignment.get("route_id") or "")] += int(assignment.get("assigned_units") or 0)
 
-    failed_routes = {str(conflict.get("route_id")) for conflict in conflicts if conflict.get("route_id")}
+    failed_routes = {
+        str(conflict.get("route_id"))
+        for conflict in conflicts
+        if conflict.get("route_id") and conflict.get("code") not in {"unscheduled", "optimizer_unassigned"}
+    }
     items: list[dict[str, str]] = []
     for route in routes:
         route_id = str(route.get("route_id") or "")

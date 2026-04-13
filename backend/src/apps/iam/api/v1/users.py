@@ -20,7 +20,7 @@ from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
 from src.apps.analytics.events import UserEvents
 from src.apps.iam.models.user import UserProfile
-from src.apps.observability.service import record_admin_privilege_change
+from src.apps.observability.service import record_admin_privilege_change, record_privileged_action_audit
 from src.apps.iam.security import PrivilegedAction, enforce_privileged_action
 
 router = APIRouter(prefix="/users")
@@ -310,12 +310,29 @@ async def update_user(
     user_id: str,
     user_update: UserUpdate,
     request: Request,
-    current_user: User = Depends(get_current_active_superuser),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Update user by ID (admin only)
     """
+    is_privilege_change = user_update.is_active is not None or user_update.is_superuser is not None
+    if not current_user.is_superuser:
+        if is_privilege_change:
+            await record_privileged_action_audit(
+                db,
+                actor_user_id=current_user.id,
+                action=PrivilegedAction.USER_STATUS_EDIT.value,
+                outcome="failure",
+                request=request,
+                metadata={"reason": "role_requirement_not_met"},
+            )
+            await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The user doesn't have enough privileges",
+        )
+
     uid = decode_id_or_404(user_id)
     result = await db.execute(
         select(User).options(
@@ -330,7 +347,7 @@ async def update_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    if user_update.is_active is not None or user_update.is_superuser is not None:
+    if is_privilege_change:
         await enforce_privileged_action(
             db=db,
             request=request,

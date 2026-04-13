@@ -39,7 +39,7 @@ from src.apps.catalog.services import (
 from src.apps.commerce.models import ProductVariantPriceHistory, WishlistItem
 from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
 from src.apps.iam.models.user import User
-from src.apps.iam.utils.hashid import decode_id_or_404, encode_id
+from src.apps.iam.utils.hashid import decode_id, decode_id_or_404, encode_id
 from src.apps.notification.services.commerce_events import notify_low_stock, notify_wishlist_price_drop
 from src.apps.recommendations.models import RecommendationEventType, UserProductEvent
 from src.apps.vendors.models import Vendor
@@ -561,7 +561,11 @@ async def reorder_categories(
 
     for item in payload.items:
         category = category_by_id[decode_id_or_404(item.id)]
-        parent_id = decode_id_or_404(item.parent_id) if item.parent_id else None
+        parent_id = None
+        if item.parent_id:
+            parent_id = decode_id(item.parent_id)
+            if parent_id is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Parent category not found")
         if parent_id is not None and parent_id not in category_by_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Parent category not found")
         category.parent_id = parent_id
@@ -1094,6 +1098,8 @@ async def get_vendor_inventory_summary(
                     "quantity": quantity,
                     "reserved_qty": reserved,
                     "available_qty": max(quantity - reserved, 0),
+                    "reorder_level": reorder_level,
+                    "reorder_qty": max((row.reorder_qty for row in inventory_rows), default=0),
                     "low_stock": quantity <= reorder_level if reorder_level else False,
                 }
             )

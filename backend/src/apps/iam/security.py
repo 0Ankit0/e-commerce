@@ -113,8 +113,12 @@ PRIVILEGED_ACTION_REGISTRY: dict[PrivilegedAction, PrivilegedActionPolicy] = {
         otp_freshness_seconds=settings.PRIVILEGED_STEP_UP_TTL_SECONDS,
     ),
 }
+# Backwards-compatible alias used by legacy tests and callers.
+PRIVILEGED_ACTION_POLICY_MAP = PRIVILEGED_ACTION_REGISTRY
 
+_IN_MEMORY_POLICY_OVERRIDES: dict[str, dict[str, Any]] = {}
 _IN_MEMORY_STEP_UP_STORE: dict[str, dict[str, Any]] = {}
+_IN_MEMORY_STEP_UP_MARKERS: dict[str, dict[str, Any]] = {}
 
 
 def _now() -> datetime:
@@ -128,6 +132,8 @@ def _policy_override_cache_key(action: PrivilegedAction) -> str:
 async def resolve_privileged_action_policy(action: PrivilegedAction) -> PrivilegedActionPolicy:
     default_policy = PRIVILEGED_ACTION_REGISTRY[action]
     override = await RedisCache.get(_policy_override_cache_key(action))
+    if override is None:
+        override = _IN_MEMORY_POLICY_OVERRIDES.get(_policy_override_cache_key(action))
     if not override:
         return default_policy
     return PrivilegedActionPolicy(
@@ -160,6 +166,7 @@ async def override_privileged_action_policy(
             base_policy.step_up_grace_seconds if step_up_grace_seconds is None else step_up_grace_seconds
         ),
     }
+    _IN_MEMORY_POLICY_OVERRIDES[_policy_override_cache_key(action)] = updated
     await RedisCache.set(_policy_override_cache_key(action), updated)
     return await resolve_privileged_action_policy(action)
 
@@ -183,20 +190,23 @@ async def issue_step_up_token(*, user_id: int, action: PrivilegedAction) -> dict
         "grace_expires_at": grace_expires_at.isoformat(),
     }
     _IN_MEMORY_STEP_UP_STORE[token] = payload
+    marker_key = f"{user_id}:{action.value}:{marker}"
+    marker_payload = {
+        "user_id": user_id,
+        "action": action.value,
+        "issued_at": payload["issued_at"],
+        "expires_at": payload["expires_at"],
+        "grace_expires_at": payload["grace_expires_at"],
+    }
+    _IN_MEMORY_STEP_UP_MARKERS[marker_key] = marker_payload
     await RedisCache.set(
         f"privileged:stepup:{token}",
         payload,
         ttl=policy.otp_freshness_seconds + policy.step_up_grace_seconds,
     )
     await RedisCache.set(
-        f"privileged:marker:{user_id}:{action.value}:{marker}",
-        {
-            "user_id": user_id,
-            "action": action.value,
-            "issued_at": payload["issued_at"],
-            "expires_at": payload["expires_at"],
-            "grace_expires_at": payload["grace_expires_at"],
-        },
+        f"privileged:marker:{marker_key}",
+        marker_payload,
         ttl=policy.otp_freshness_seconds + policy.step_up_grace_seconds,
     )
     return {
@@ -212,6 +222,24 @@ async def _read_step_up_token(*, token: str) -> dict[str, Any] | None:
     payload = await RedisCache.get(f"privileged:stepup:{token}")
     if payload is None:
         payload = _IN_MEMORY_STEP_UP_STORE.get(token)
+    return payload
+
+
+async def _read_step_up_marker(*, user_id: int, action: str, marker: str) -> dict[str, Any] | None:
+    marker_key = f"{user_id}:{action}:{marker}"
+    payload = await RedisCache.get(f"privileged:marker:{marker_key}")
+    if payload is None:
+        payload = _IN_MEMORY_STEP_UP_MARKERS.get(marker_key)
+    if not payload:
+        return None
+    try:
+        grace_expires_at = datetime.fromisoformat(str(payload.get("grace_expires_at")))
+    except Exception:
+        grace_expires_at = _now() - timedelta(seconds=1)
+    if grace_expires_at <= _now():
+        _IN_MEMORY_STEP_UP_MARKERS.pop(marker_key, None)
+        await RedisCache.delete(f"privileged:marker:{marker_key}")
+        return None
     return payload
 
 
@@ -317,12 +345,12 @@ async def enforce_privileged_action(
             action=action.value,
             outcome="denied",
             request=request,
-            metadata={"reason": "step_up_invalid"},
+            metadata={"reason": "expired_or_invalid_step_up_token"},
         )
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=await build_privileged_action_error(action, reason="step_up_invalid"),
+            detail=await build_privileged_action_error(action, reason="expired_or_invalid_step_up_token"),
         )
     try:
         expires_at = datetime.fromisoformat(str(payload.get("expires_at")))
@@ -335,15 +363,15 @@ async def enforce_privileged_action(
             action=action.value,
             outcome="denied",
             request=request,
-            metadata={"reason": "step_up_expired"},
+            metadata={"reason": "step_up_expired_requires_rechallenge"},
         )
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=await build_privileged_action_error(action, reason="step_up_expired"),
+            detail=await build_privileged_action_error(action, reason="step_up_expired_requires_rechallenge"),
         )
     marker = str(payload.get("marker", "")).strip()
-    marker_payload = await RedisCache.get(f"privileged:marker:{current_user.id}:{action.value}:{marker}")
+    marker_payload = await _read_step_up_marker(user_id=current_user.id, action=action.value, marker=marker)
     if not marker_payload:
         await record_privileged_action_audit(
             db,
@@ -351,12 +379,12 @@ async def enforce_privileged_action(
             action=action.value,
             outcome="denied",
             request=request,
-            metadata={"reason": "step_up_invalid", "marker": marker},
+            metadata={"reason": "expired_or_invalid_step_up_token", "marker": marker},
         )
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=await build_privileged_action_error(action, reason="step_up_invalid"),
+            detail=await build_privileged_action_error(action, reason="expired_or_invalid_step_up_token"),
         )
     payload = await consume_step_up_token(token=token)
     if not payload:
@@ -366,12 +394,12 @@ async def enforce_privileged_action(
             action=action.value,
             outcome="denied",
             request=request,
-            metadata={"reason": "step_up_invalid"},
+            metadata={"reason": "expired_or_invalid_step_up_token"},
         )
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=await build_privileged_action_error(action, reason="step_up_invalid"),
+            detail=await build_privileged_action_error(action, reason="expired_or_invalid_step_up_token"),
         )
 
     if int(payload.get("user_id", 0)) != current_user.id:
@@ -381,12 +409,12 @@ async def enforce_privileged_action(
             action=action.value,
             outcome="denied",
             request=request,
-            metadata={"reason": "token_user_mismatch"},
+            metadata={"reason": "expired_or_invalid_step_up_token", "subreason": "token_user_mismatch"},
         )
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=await build_privileged_action_error(action, reason="step_up_invalid"),
+            detail=await build_privileged_action_error(action, reason="expired_or_invalid_step_up_token"),
         )
 
     if payload.get("action") != action.value:
@@ -396,12 +424,12 @@ async def enforce_privileged_action(
             action=action.value,
             outcome="denied",
             request=request,
-            metadata={"reason": "token_action_mismatch"},
+            metadata={"reason": "expired_or_invalid_step_up_token", "subreason": "token_action_mismatch"},
         )
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=await build_privileged_action_error(action, reason="step_up_invalid"),
+            detail=await build_privileged_action_error(action, reason="expired_or_invalid_step_up_token"),
         )
 
     await record_privileged_action_audit(

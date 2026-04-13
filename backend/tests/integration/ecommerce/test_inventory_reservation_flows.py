@@ -67,15 +67,67 @@ async def _create_tenant_for_owner(db_session: AsyncSession, owner: User, slug: 
 
 
 
-async def _approve_vendor_for_tests(client: AsyncClient, admin_headers: dict[str, str], vendor_id: str):
+async def _submit_vendor_kyc_packet(client: AsyncClient, vendor_headers: dict[str, str]) -> None:
+    packet_submit = await client.put(
+        "/api/v1/vendor/kyc/packet",
+        headers=vendor_headers,
+        json={
+            "gst_doc_number": "GST-12345",
+            "gst_file_url": "https://example.com/gst.pdf",
+            "pan_doc_number": "PAN-5555",
+            "pan_file_url": "https://example.com/pan.pdf",
+            "bank_account_name": "KYC Vendor Pvt Ltd",
+            "bank_account_number": "000123456789",
+            "bank_ifsc_code": "NMBL0001",
+            "bank_name": "NMB Bank",
+        },
+    )
+    assert packet_submit.status_code == 200, packet_submit.text
+
+
+async def _verify_vendor_kyc_documents_and_bank(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    vendor_headers: dict[str, str],
+) -> None:
+    profile_resp = await client.get("/api/v1/vendor/profile", headers=vendor_headers)
+    assert profile_resp.status_code == 200, profile_resp.text
+    profile = profile_resp.json()
+    current_docs = [doc for doc in profile["documents"] if doc["is_current"] and doc["doc_type"] in {"gst", "pan"}]
+    assert {doc["doc_type"] for doc in current_docs} == {"gst", "pan"}
+    for doc in current_docs:
+        mark_under_review = await client.post(
+            f"/api/v1/admin/vendor-documents/{doc['id']}/mark-under-review",
+            headers=admin_headers,
+            json={"remarks": "reviewing", "expected_uploaded_at": doc["uploaded_at"], "expected_version": doc["version"]},
+        )
+        assert mark_under_review.status_code == 200, mark_under_review.text
+        verify_doc = await client.post(
+            f"/api/v1/admin/vendor-documents/{doc['id']}/verify",
+            headers=admin_headers,
+            json={"remarks": "approved", "expected_uploaded_at": doc["uploaded_at"], "expected_version": doc["version"]},
+        )
+        assert verify_doc.status_code == 200, verify_doc.text
+
+    primary_bank = next((bank for bank in profile["bank_accounts"] if bank["is_primary"]), None)
+    assert primary_bank is not None
+    verify_bank = await client.post(
+        f"/api/v1/admin/vendor-bank-accounts/{primary_bank['id']}/verify",
+        headers=admin_headers,
+    )
+    assert verify_bank.status_code == 200, verify_bank.text
+
+
+async def _approve_vendor_for_tests(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    vendor_headers: dict[str, str],
+    vendor_id: str,
+):
+    await _submit_vendor_kyc_packet(client, vendor_headers)
     under_review_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/mark-under-review", headers=admin_headers)
     assert under_review_resp.status_code == 200, under_review_resp.text
-    resubmission_resp = await client.post(
-        f"/api/v1/admin/vendors/{vendor_id}/request-resubmission",
-        headers=admin_headers,
-        json={"reason": "Verification details requested"},
-    )
-    assert resubmission_resp.status_code == 200, resubmission_resp.text
+    await _verify_vendor_kyc_documents_and_bank(client, admin_headers, vendor_headers)
     approve_vendor_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
     assert approve_vendor_resp.status_code == 200, approve_vendor_resp.text
     return approve_vendor_resp
@@ -117,7 +169,7 @@ async def _bootstrap_catalog(client: AsyncClient, db_session: AsyncSession):
     )
     assert vendor_create.status_code == 201, vendor_create.text
     vendor_id = vendor_create.json()["vendor"]["id"]
-    approve_vendor = await _approve_vendor_for_tests(client, admin_headers, vendor_id)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_headers, vendor_id)
 
     await _create_delivery_zone(client, admin_headers, code="inv-zone")
 

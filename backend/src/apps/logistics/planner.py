@@ -47,6 +47,16 @@ class PlannerAssignment:
     overridden: bool = False
     reason: str = "capacity_fit"
 
+    def model_dump(self, mode: str = "python") -> dict[str, object]:
+        return {
+            "route_id": self.route_id,
+            "vehicle_id": self.vehicle_id,
+            "assigned_units": self.assigned_units,
+            "locked": self.locked,
+            "overridden": self.overridden,
+            "reason": self.reason,
+        }
+
 
 @dataclass(slots=True)
 class PlannerRunResult:

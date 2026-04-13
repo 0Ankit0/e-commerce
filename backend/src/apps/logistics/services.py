@@ -1308,13 +1308,17 @@ async def build_branch_kpi_snapshot(
         exceptions=exceptions,
     )
     success_attempts = len([job for job in pickup_jobs if job.status == PickupJobStatus.PICKED_UP])
-    failed_attempts = len([job for job in pickup_jobs if job.status == PickupJobStatus.FAILED]) + len(
-        [item for item in exceptions if item.exception_type.lower() in {"failed_delivery", "delivery_failed"}]
-    )
+    failed_attempts = len([job for job in pickup_jobs if job.status == PickupJobStatus.FAILED])
     total_attempts = success_attempts + failed_attempts
     rto_count = len([item for item in exceptions if item.status == DeliveryExceptionStatus.RTO_INITIATED])
     pending_jobs = [job for job in pickup_jobs if job.status in {PickupJobStatus.PENDING, PickupJobStatus.ASSIGNED}]
     now = utc_now()
+
+    def _as_utc(value: datetime) -> datetime:
+        if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
     analytics = get_analytics()
     inventory_health = analytics.build_branch_inventory_health(
         inventory_on_hand_units=sum(item.quantity for item in inventory_rows),
@@ -1322,14 +1326,15 @@ async def build_branch_kpi_snapshot(
         total_items=len(inventory_rows),
     )
     aging_buckets = analytics.build_branch_undelivered_aging_buckets(
-        over_2h=len([job for job in pending_jobs if (now - job.created_at).total_seconds() >= 2 * 3600]),
-        over_6h=len([job for job in pending_jobs if (now - job.created_at).total_seconds() >= 6 * 3600]),
-        over_12h=len([job for job in pending_jobs if (now - job.created_at).total_seconds() >= 12 * 3600]),
+        over_2h=len([job for job in pending_jobs if (now - _as_utc(job.created_at)).total_seconds() >= 2 * 3600]),
+        over_6h=len([job for job in pending_jobs if (now - _as_utc(job.created_at)).total_seconds() >= 6 * 3600]),
+        over_12h=len([job for job in pending_jobs if (now - _as_utc(job.created_at)).total_seconds() >= 12 * 3600]),
     )
     attempt_and_exception_metrics = analytics.build_branch_attempt_and_exception_metrics(
         first_attempt_successes=success_attempts,
         total_attempts=total_attempts,
         rto_count=rto_count,
+        exception_count=len(exceptions),
         open_exceptions=len([item for item in exceptions if item.status in {DeliveryExceptionStatus.OPEN, DeliveryExceptionStatus.RESCHEDULED}]),
     )
     avg_utilization = (

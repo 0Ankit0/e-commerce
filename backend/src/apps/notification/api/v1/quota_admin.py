@@ -12,7 +12,6 @@ from sqlmodel import select
 from src.apps.iam.api.deps import get_current_active_superuser, get_db
 from src.apps.iam.models.user import User
 from src.apps.notification.models.sms_quota import (
-    SmsQuotaConfig,
     SmsQuotaCounter,
     SmsQuotaPolicyAuditEvent,
     SmsQuotaViolationEvent,

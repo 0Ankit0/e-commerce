@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from math import floor
 from hashlib import sha256
 
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import delete, select
@@ -57,6 +58,13 @@ class SmsQuotaDecision:
     cooldown_until: datetime | None = None
 
 
+@dataclass
+class SmsQuotaCounterReservation:
+    usage_count: int
+    attempted_count: int
+    allowed: bool
+
+
 def _daily_bounds(now: datetime) -> tuple[datetime, datetime]:
     start = datetime(now.year, now.month, now.day, tzinfo=UTC)
     return start, start + timedelta(days=1)
@@ -100,56 +108,68 @@ async def _increment_counter(
     device_fingerprint_hash: str | None,
     window_start: datetime,
     window_end: datetime,
+    limit_count: int,
     increment: int = 1,
-) -> SmsQuotaCounter:
-    counter = (
-        (
-            await db.execute(
-                select(SmsQuotaCounter)
-                .where(SmsQuotaCounter.counter_key == counter_key)
-                .with_for_update()
-            )
+) -> SmsQuotaCounterReservation:
+    updated_at = utc_now()
+
+    updated = await db.execute(
+        update(SmsQuotaCounter)
+        .where(
+            SmsQuotaCounter.counter_key == counter_key,
+            SmsQuotaCounter.usage_count + increment <= limit_count,
         )
-        .scalars()
-        .first()
+        .values(usage_count=SmsQuotaCounter.usage_count + increment, updated_at=updated_at)
     )
-    if counter is None:
+    if updated.rowcount:
+        current_count = (
+            await db.execute(
+                select(SmsQuotaCounter.usage_count).where(SmsQuotaCounter.counter_key == counter_key)
+            )
+        ).scalar_one()
+        return SmsQuotaCounterReservation(
+            usage_count=int(current_count),
+            attempted_count=int(current_count),
+            allowed=True,
+        )
+
+    if increment <= limit_count:
         try:
             async with db.begin_nested():
-                counter = SmsQuotaCounter(
-                    counter_key=counter_key,
-                    scope=scope,
-                    provider=provider,
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    ip_address=ip_address,
-                    phone_number_hash=phone_number_hash,
-                    device_fingerprint_hash=device_fingerprint_hash,
-                    window_start=window_start,
-                    window_end=window_end,
-                    usage_count=0,
-                )
-                db.add(counter)
-                await db.flush()
-        except IntegrityError:
-            counter = (
-                (
-                    await db.execute(
-                        select(SmsQuotaCounter)
-                        .where(SmsQuotaCounter.counter_key == counter_key)
-                        .with_for_update()
+                db.add(
+                    SmsQuotaCounter(
+                        counter_key=counter_key,
+                        scope=scope,
+                        provider=provider,
+                        user_id=user_id,
+                        tenant_id=tenant_id,
+                        ip_address=ip_address,
+                        phone_number_hash=phone_number_hash,
+                        device_fingerprint_hash=device_fingerprint_hash,
+                        window_start=window_start,
+                        window_end=window_end,
+                        usage_count=increment,
+                        updated_at=updated_at,
                     )
                 )
-                .scalars()
-                .first()
+                await db.flush()
+            return SmsQuotaCounterReservation(
+                usage_count=increment,
+                attempted_count=increment,
+                allowed=True,
             )
-    if counter is None:
-        raise RuntimeError("failed to lock quota counter")
-    counter.usage_count += increment
-    counter.updated_at = utc_now()
-    db.add(counter)
-    await db.flush()
-    return counter
+        except IntegrityError:
+            pass
+
+    current_count = (
+        await db.execute(select(SmsQuotaCounter.usage_count).where(SmsQuotaCounter.counter_key == counter_key))
+    ).scalar_one_or_none()
+    usage_count = int(current_count or 0)
+    return SmsQuotaCounterReservation(
+        usage_count=usage_count,
+        attempted_count=usage_count + increment,
+        allowed=False,
+    )
 
 
 async def _record_violation(
@@ -366,9 +386,10 @@ async def enforce_sms_quota(
             device_fingerprint_hash=device_fingerprint_hash,
             window_start=window_start,
             window_end=window_end,
+            limit_count=limit_count,
             increment=increment,
         )
-        if counter.usage_count > limit_count:
+        if not counter.allowed:
             action = config.hard_throttle_action if severity == "hard" else config.soft_throttle_action
             delay_seconds = config.hard_throttle_delay_seconds if severity == "hard" else config.soft_throttle_delay_seconds
             cooldown_until = (
@@ -381,7 +402,7 @@ async def enforce_sms_quota(
                 db,
                 config=config,
                 scope=scope,
-                attempted_count=counter.usage_count,
+                attempted_count=counter.attempted_count,
                 limit_count=limit_count,
                 window_start=window_start,
                 window_end=window_end,
@@ -418,7 +439,7 @@ async def enforce_sms_quota(
                     scope=scope,
                     retry_after_seconds=retry_after,
                     limit_count=limit_count,
-                    attempted_count=counter.usage_count,
+                    attempted_count=counter.attempted_count,
                 )
             return decision
     return decision

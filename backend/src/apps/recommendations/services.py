@@ -4,6 +4,10 @@ import json
 from datetime import timezone
 from math import exp, log1p
 
+from sqlalchemy import update as sa_update
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -18,6 +22,99 @@ from src.apps.recommendations.models import (
     UserAffinity,
     UserProductEvent,
 )
+
+
+def _product_popularity_insert_values(product_id: int, event_type: RecommendationEventType, now) -> dict[str, object]:
+    values: dict[str, object] = {
+        "product_id": product_id,
+        "score": 0.0,
+        "view_count": 0,
+        "purchase_count": 0,
+        "cart_count": 0,
+        "wishlist_count": 0,
+        "updated_at": now,
+    }
+    if event_type == RecommendationEventType.VIEW:
+        values["view_count"] = 1
+        values["score"] = 1.0
+    elif event_type == RecommendationEventType.ADD_TO_CART:
+        values["cart_count"] = 1
+        values["score"] = 3.0
+    elif event_type == RecommendationEventType.ADD_TO_WISHLIST:
+        values["wishlist_count"] = 1
+        values["score"] = 2.0
+    elif event_type == RecommendationEventType.PURCHASE:
+        values["purchase_count"] = 1
+        values["score"] = 5.0
+    return values
+
+
+def _product_popularity_update_values(event_type: RecommendationEventType, now) -> dict[str, object]:
+    values: dict[str, object] = {"updated_at": now}
+    if event_type == RecommendationEventType.VIEW:
+        values["view_count"] = ProductPopularity.view_count + 1
+        values["score"] = ProductPopularity.score + 1.0
+    elif event_type == RecommendationEventType.ADD_TO_CART:
+        values["cart_count"] = ProductPopularity.cart_count + 1
+        values["score"] = ProductPopularity.score + 3.0
+    elif event_type == RecommendationEventType.ADD_TO_WISHLIST:
+        values["wishlist_count"] = ProductPopularity.wishlist_count + 1
+        values["score"] = ProductPopularity.score + 2.0
+    elif event_type == RecommendationEventType.PURCHASE:
+        values["purchase_count"] = ProductPopularity.purchase_count + 1
+        values["score"] = ProductPopularity.score + 5.0
+    return values
+
+
+async def _increment_product_popularity(
+    *,
+    product_id: int,
+    event_type: RecommendationEventType,
+    db: AsyncSession,
+) -> None:
+    now = utc_now()
+    insert_values = _product_popularity_insert_values(product_id, event_type, now)
+    update_values = _product_popularity_update_values(event_type, now)
+    bind = db.get_bind()
+    dialect_name = bind.dialect.name if bind is not None else ""
+
+    if dialect_name == "sqlite":
+        stmt = sqlite_insert(ProductPopularity).values(**insert_values)
+        await db.execute(
+            stmt.on_conflict_do_update(
+                index_elements=[ProductPopularity.product_id],
+                set_=update_values,
+            )
+        )
+        return
+    if dialect_name == "postgresql":
+        stmt = postgresql_insert(ProductPopularity).values(**insert_values)
+        await db.execute(
+            stmt.on_conflict_do_update(
+                index_elements=[ProductPopularity.product_id],
+                set_=update_values,
+            )
+        )
+        return
+
+    popularity = (
+        await db.execute(select(ProductPopularity).where(ProductPopularity.product_id == product_id))
+    ).scalars().first()
+    if popularity is None:
+        popularity = ProductPopularity(product_id=product_id)
+        try:
+            async with db.begin_nested():
+                db.add(popularity)
+                await db.flush()
+        except IntegrityError:
+            popularity = (
+                await db.execute(select(ProductPopularity).where(ProductPopularity.product_id == product_id))
+            ).scalars().one()
+    await db.execute(
+        sa_update(ProductPopularity)
+        .where(ProductPopularity.product_id == product_id)
+        .values(**update_values)
+    )
 
 
 async def record_recommendation_event(
@@ -42,26 +139,7 @@ async def record_recommendation_event(
     await db.flush()
 
     if product_id:
-        popularity = (
-            await db.execute(select(ProductPopularity).where(ProductPopularity.product_id == product_id))
-        ).scalars().first()
-        if popularity is None:
-            popularity = ProductPopularity(product_id=product_id)
-            db.add(popularity)
-            await db.flush()
-        if event_type == RecommendationEventType.VIEW:
-            popularity.view_count += 1
-            popularity.score += 1.0
-        elif event_type == RecommendationEventType.ADD_TO_CART:
-            popularity.cart_count += 1
-            popularity.score += 3.0
-        elif event_type == RecommendationEventType.ADD_TO_WISHLIST:
-            popularity.wishlist_count += 1
-            popularity.score += 2.0
-        elif event_type == RecommendationEventType.PURCHASE:
-            popularity.purchase_count += 1
-            popularity.score += 5.0
-
+        await _increment_product_popularity(product_id=product_id, event_type=event_type, db=db)
         if user_id:
             product = await db.get(Product, product_id)
             if product:

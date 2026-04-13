@@ -216,8 +216,12 @@ async def create_notification(
         extra_data=data.extra_data,
     )
     db.add(notification)
+    await db.flush()
+    notification_id = notification.id
     await db.commit()
-    await db.refresh(notification)
+    notification = await db.get(Notification, notification_id) if notification_id else None
+    if notification is None:
+        raise RuntimeError("Notification could not be reloaded after creation")
 
     pref = await get_or_create_preference(db, data.user_id)
 
@@ -428,7 +432,7 @@ async def retry_delivery(db: AsyncSession, delivery_id: int) -> Optional[Notific
     if delivery.status == NotificationDeliveryStatus.DELIVERED:
         return delivery
 
-    delivery.status = NotificationDeliveryStatus.QUEUED
+    delivery.status = NotificationDeliveryStatus.PENDING
     delivery.last_error_reason = None
     delivery.last_error_code = None
     delivery.dead_lettered_at = None

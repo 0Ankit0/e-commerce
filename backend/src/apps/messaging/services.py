@@ -16,8 +16,6 @@ from src.apps.messaging.models import (
     ChatOneTimePreKey,
     ChatParticipant,
     ChatParticipantRole,
-    ChatReadReceipt,
-    ChatReport,
     ChatSignedPreKey,
 )
 from src.apps.orders.models import Order

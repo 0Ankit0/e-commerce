@@ -10,7 +10,6 @@ from src.apps.core.config import settings
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import your settings and models
-from src.apps.core.config import settings
 import sqlmodel
 from src.apps.core.models import *  # noqa: F403,F401
 from src.apps.finance.models import *  # noqa: F403,F401

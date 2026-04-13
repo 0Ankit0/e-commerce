@@ -8,6 +8,7 @@ import random
 import string
 
 from fastapi import HTTPException, status
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -285,11 +286,21 @@ async def create_order_from_cart(
             if free_units <= 0:
                 continue
             deduction = min(remaining, free_units)
-            if reserve_only:
-                inventory.reserved_qty += deduction
-            else:
-                inventory.quantity -= deduction
-            inventory.updated_at = utc_now()
+            inventory_update = (
+                sa_update(Inventory)
+                .where(
+                    Inventory.id == inventory.id,
+                    (Inventory.quantity - Inventory.reserved_qty) >= deduction,
+                )
+                .values(
+                    reserved_qty=Inventory.reserved_qty + deduction if reserve_only else Inventory.reserved_qty,
+                    quantity=Inventory.quantity if reserve_only else Inventory.quantity - deduction,
+                    updated_at=utc_now(),
+                )
+            )
+            update_result = await db.execute(inventory_update)
+            if update_result.rowcount == 0:
+                continue
             if reserve_only:
                 db.add(
                     InventoryReservation(
@@ -308,6 +319,11 @@ async def create_order_from_cart(
             remaining -= deduction
             if remaining == 0:
                 break
+        if remaining > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Insufficient inventory for SKU {variant.sku}",
+            )
         grouped_items[product.vendor_id].append({"product": product, "variant": variant, "cart_item": item})
 
     for vendor_id, entries in grouped_items.items():
@@ -889,7 +905,10 @@ async def release_inventory_reservations_for_order(
     released_count = 0
     now = utc_now()
     for reservation in reservations:
-        if only_expired and reservation.reserved_until > now:
+        reserved_until = reservation.reserved_until
+        if reserved_until.tzinfo is None:
+            reserved_until = reserved_until.replace(tzinfo=now.tzinfo)
+        if only_expired and reserved_until > now:
             continue
         metadata = json.loads(reservation.metadata_json or "{}")
         inventory = (

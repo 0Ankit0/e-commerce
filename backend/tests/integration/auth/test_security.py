@@ -15,6 +15,29 @@ from src.apps.observability.models import ObservabilityLogEntry
 from src.apps.iam.utils.hashid import encode_id
 
 
+async def _login_access_token(
+    client: AsyncClient,
+    username: str,
+    password: str = "ValidPass123",
+    otp_secret: str | None = None,
+) -> str:
+    response = await client.post(
+        "/api/v1/auth/login/?set_cookie=false",
+        json={"username": username, "password": password},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    if payload.get("requires_otp"):
+        assert otp_secret is not None, "OTP secret required for OTP-protected login"
+        otp_response = await client.post(
+            "/api/v1/auth/otp/validate/?set_cookie=false",
+            json={"temp_token": payload["temp_token"], "otp_code": pyotp.TOTP(otp_secret).now()},
+        )
+        assert otp_response.status_code == 200, otp_response.text
+        payload = otp_response.json()
+    return payload["access"]
+
+
 class TestAuthenticationSecurity:
     """Test authentication security features."""
     
@@ -182,11 +205,7 @@ class TestAuthenticationSecurity:
         db_session.add(admin)
         await db_session.commit()
 
-        login_resp = await client.post(
-            "/api/v1/auth/login/?set_cookie=false",
-            json={"username": "active_session_admin", "password": "ValidPass123"},
-        )
-        token = login_resp.json()["access"]
+        token = await _login_access_token(client, "active_session_admin")
         headers = {"Authorization": f"Bearer {token}"}
 
         allowed = await client.get("/api/v1/users/", headers=headers)
@@ -212,11 +231,7 @@ class TestAuthenticationSecurity:
         db_session.add(user)
         await db_session.commit()
 
-        login_resp = await client.post(
-            "/api/v1/auth/login/?set_cookie=false",
-            json={"username": "disabled_token_user", "password": "ValidPass123"},
-        )
-        token = login_resp.json()["access"]
+        token = await _login_access_token(client, "disabled_token_user")
 
         db_user = (await db_session.execute(select(User).where(User.username == "disabled_token_user"))).scalars().one()
         db_user.is_active = False
@@ -284,11 +299,7 @@ class TestAuthenticationSecurity:
         db_session.add(target)
         await db_session.commit()
 
-        login = await client.post(
-            "/api/v1/auth/login/?set_cookie=false",
-            json={"username": "stepup_admin", "password": "ValidPass123"},
-        )
-        token = login.json()["access"]
+        token = await _login_access_token(client, "stepup_admin", otp_secret=otp_secret)
         headers = {"Authorization": f"Bearer {token}"}
 
         blocked = await client.patch(
@@ -352,11 +363,8 @@ class TestAuthenticationSecurity:
         db_session.add(target)
         await db_session.commit()
 
-        login = await client.post(
-            "/api/v1/auth/login/?set_cookie=false",
-            json={"username": "stepup_audit_admin", "password": "ValidPass123"},
-        )
-        headers = {"Authorization": f"Bearer {login.json()['access']}"}
+        token = await _login_access_token(client, "stepup_audit_admin", otp_secret=otp_secret)
+        headers = {"Authorization": f"Bearer {token}"}
 
         await client.patch(
             f"/api/v1/users/{encode_id(target.id)}",
@@ -390,8 +398,9 @@ class TestAuthenticationSecurity:
                     ObservabilityLogEntry.user_id == admin.id,
                     ObservabilityLogEntry.event_code.in_(
                         [
-                            "admin.privileged_action.challenge_required",
+                            "admin.privileged_action.required",
                             "admin.privileged_action.success",
+                            "admin.privileged_action.denied",
                         ]
                     ),
                 )
@@ -401,12 +410,13 @@ class TestAuthenticationSecurity:
 
         outcomes = [row.event_code for row in audit_rows]
         assert "admin.privileged_action.success" in outcomes
-        assert outcomes.count("admin.privileged_action.challenge_required") >= 2
+        assert "admin.privileged_action.required" in outcomes
+        assert "admin.privileged_action.denied" in outcomes
 
         replay_challenge = next(
             row
             for row in reversed(audit_rows)
-            if row.event_code == "admin.privileged_action.challenge_required"
+            if row.event_code == "admin.privileged_action.denied"
         )
         assert replay_challenge.metadata_json["reason"] == "expired_or_invalid_step_up_token"
 
@@ -436,11 +446,8 @@ class TestAuthenticationSecurity:
         db_session.add(target)
         await db_session.commit()
 
-        login = await client.post(
-            "/api/v1/auth/login/?set_cookie=false",
-            json={"username": "stepup_rolechange_admin", "password": "ValidPass123"},
-        )
-        headers = {"Authorization": f"Bearer {login.json()['access']}"}
+        token = await _login_access_token(client, "stepup_rolechange_admin", otp_secret=otp_secret)
+        headers = {"Authorization": f"Bearer {token}"}
 
         step_up = await client.post(
             "/api/v1/auth/otp/step-up/verify",
@@ -511,11 +518,7 @@ class TestAuthenticationSecurity:
             ),
         )
 
-        login = await client.post(
-            "/api/v1/auth/login/?set_cookie=false",
-            json={"username": "stepup_expiry_admin", "password": "ValidPass123"},
-        )
-        token = login.json()["access"]
+        token = await _login_access_token(client, "stepup_expiry_admin", otp_secret=otp_secret)
         headers = {"Authorization": f"Bearer {token}"}
         step_up = await client.post(
             "/api/v1/auth/otp/step-up/verify",
@@ -560,11 +563,8 @@ class TestAuthenticationSecurity:
 
         monkeypatch.setattr(settings, "PRIVILEGED_STEP_UP_MODE", "audit")
 
-        login = await client.post(
-            "/api/v1/auth/login/?set_cookie=false",
-            json={"username": "stepup_audit_only_admin", "password": "ValidPass123"},
-        )
-        headers = {"Authorization": f"Bearer {login.json()['access']}"}
+        token = await _login_access_token(client, "stepup_audit_only_admin")
+        headers = {"Authorization": f"Bearer {token}"}
         allowed = await client.patch(
             f"/api/v1/users/{encode_id(target.id)}",
             json={"is_active": False},
@@ -577,7 +577,7 @@ class TestAuthenticationSecurity:
                 select(ObservabilityLogEntry)
                 .where(
                     ObservabilityLogEntry.user_id == admin.id,
-                    ObservabilityLogEntry.event_code == "admin.privileged_action.bypassed",
+                    ObservabilityLogEntry.event_code == "admin.privileged_action.bypass_attempt",
                 )
                 .order_by(ObservabilityLogEntry.timestamp.desc())
             )

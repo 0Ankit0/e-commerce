@@ -12,7 +12,6 @@ Test card (Khalti wallet):
   OTP    : 987654
 """
 import json
-from datetime import datetime
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession

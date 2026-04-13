@@ -2,19 +2,21 @@ import pytest
 import pyotp
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sqlmodel import select
 
-from src.apps.core import security
+from src.apps.core import security as core_security
+from src.apps.iam import security as iam_security
 from src.apps.iam.models.user import User
+from src.apps.iam.security import PrivilegedAction, override_privileged_action_policy
 from src.apps.iam.utils.hashid import encode_id
-from src.apps.core.config import settings
 
 
 async def _make_user(db: AsyncSession, **kwargs) -> User:
     user = User(
         username=kwargs.get("username", "user"),
         email=kwargs.get("email", "user@example.com"),
-        hashed_password=security.get_password_hash(kwargs.get("password", "TestPass123")),
+        hashed_password=core_security.get_password_hash(kwargs.get("password", "TestPass123")),
         is_active=kwargs.get("is_active", True),
         is_superuser=kwargs.get("is_superuser", False),
         is_confirmed=kwargs.get("is_confirmed", True),
@@ -28,13 +30,27 @@ async def _make_user(db: AsyncSession, **kwargs) -> User:
     return user
 
 
-async def _login(client: AsyncClient, username: str, password: str = "TestPass123") -> str:
+async def _login(
+    client: AsyncClient,
+    username: str,
+    password: str = "TestPass123",
+    otp_secret: str | None = None,
+) -> str:
     response = await client.post(
         "/api/v1/auth/login/?set_cookie=false",
         json={"username": username, "password": password},
     )
     assert response.status_code == 200, response.text
-    return response.json()["access"]
+    payload = response.json()
+    if payload.get("requires_otp"):
+        assert otp_secret is not None, "OTP secret required for OTP-protected login"
+        otp_response = await client.post(
+            "/api/v1/auth/otp/validate/?set_cookie=false",
+            json={"temp_token": payload["temp_token"], "otp_code": pyotp.TOTP(otp_secret).now()},
+        )
+        assert otp_response.status_code == 200, otp_response.text
+        payload = otp_response.json()
+    return payload["access"]
 
 
 @pytest.mark.unit
@@ -58,20 +74,31 @@ class TestUserManagementAPI:
             is_active=True,
             is_superuser=False,
         )
+        target_id = target.id
         token = await _login(client, admin.username)
+        original_policy = iam_security.PRIVILEGED_ACTION_POLICY_MAP[PrivilegedAction.USER_STATUS_EDIT]
+        await override_privileged_action_policy(action=PrivilegedAction.USER_STATUS_EDIT, require_step_up=False)
 
-        response = await client.patch(
-            f"/api/v1/users/{encode_id(target.id)}",
-            headers={"Authorization": f"Bearer {token}"},
-            json={
-                "email": "managed-updated@example.com",
-                "first_name": "Managed",
-                "last_name": "User",
-                "phone": "9800000000",
-                "is_active": False,
-                "is_superuser": True,
-            },
-        )
+        try:
+            response = await client.patch(
+                f"/api/v1/users/{encode_id(target.id)}",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "email": "managed-updated@example.com",
+                    "first_name": "Managed",
+                    "last_name": "User",
+                    "phone": "9800000000",
+                    "is_active": False,
+                    "is_superuser": True,
+                },
+            )
+        finally:
+            await override_privileged_action_policy(
+                action=PrivilegedAction.USER_STATUS_EDIT,
+                require_step_up=original_policy.require_step_up,
+                otp_freshness_seconds=original_policy.otp_freshness_seconds,
+                step_up_grace_seconds=original_policy.step_up_grace_seconds,
+            )
 
         assert response.status_code == 200, response.text
         data = response.json()
@@ -80,7 +107,13 @@ class TestUserManagementAPI:
         assert data["is_active"] is False
         assert data["is_superuser"] is True
 
-        refreshed = await db_session.execute(select(User).where(User.id == target.id))
+        db_session.expire_all()
+        refreshed = await db_session.execute(
+            select(User)
+            .options(selectinload(User.profile))
+            .execution_options(populate_existing=True)
+            .where(User.id == target_id)
+        )
         user = refreshed.scalars().one()
         assert user.email == "managed-updated@example.com"
         assert user.is_active is False
@@ -134,7 +167,7 @@ class TestUserManagementAPI:
         db_session.add(admin)
         await db_session.commit()
         target = await _make_user(db_session, username="stepuptarget", email="stepuptarget@example.com")
-        token = await _login(client, admin.username)
+        token = await _login(client, admin.username, otp_secret=otp_secret)
         headers = {"Authorization": f"Bearer {token}"}
 
         blocked = await client.patch(
@@ -178,14 +211,16 @@ class TestUserManagementAPI:
         db_session.add(admin)
         await db_session.commit()
         target = await _make_user(db_session, username="stepupexp-target", email="stepupexp-target@example.com")
-        token = await _login(client, admin.username)
+        token = await _login(client, admin.username, otp_secret=otp_secret)
         headers = {"Authorization": f"Bearer {token}"}
 
-        original_ttl = settings.PRIVILEGED_STEP_UP_TTL_SECONDS
-        original_grace = settings.PRIVILEGED_STEP_UP_GRACE_SECONDS
+        original_policy = iam_security.PRIVILEGED_ACTION_POLICY_MAP[PrivilegedAction.USER_STATUS_EDIT]
         try:
-            settings.PRIVILEGED_STEP_UP_TTL_SECONDS = 0
-            settings.PRIVILEGED_STEP_UP_GRACE_SECONDS = 0
+            await override_privileged_action_policy(
+                action=PrivilegedAction.USER_STATUS_EDIT,
+                otp_freshness_seconds=0,
+                step_up_grace_seconds=0,
+            )
             expired = await client.post(
                 "/api/v1/auth/otp/step-up/verify",
                 headers=headers,
@@ -198,10 +233,14 @@ class TestUserManagementAPI:
                 json={"is_active": False},
             )
             assert expired_attempt.status_code == 403
-            assert expired_attempt.json()["detail"]["reason"] == "step_up_expired"
+            assert expired_attempt.json()["detail"]["reason"] == "step_up_expired_requires_rechallenge"
         finally:
-            settings.PRIVILEGED_STEP_UP_TTL_SECONDS = original_ttl
-            settings.PRIVILEGED_STEP_UP_GRACE_SECONDS = original_grace
+            await override_privileged_action_policy(
+                action=PrivilegedAction.USER_STATUS_EDIT,
+                require_step_up=original_policy.require_step_up,
+                otp_freshness_seconds=original_policy.otp_freshness_seconds,
+                step_up_grace_seconds=original_policy.step_up_grace_seconds,
+            )
 
         fresh = await client.post(
             "/api/v1/auth/otp/step-up/verify",
@@ -222,4 +261,4 @@ class TestUserManagementAPI:
             json={"is_active": True},
         )
         assert replay.status_code == 403
-        assert replay.json()["detail"]["reason"] == "step_up_invalid"
+        assert replay.json()["detail"]["reason"] == "expired_or_invalid_step_up_token"

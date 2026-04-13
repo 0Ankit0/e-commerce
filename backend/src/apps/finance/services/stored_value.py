@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select

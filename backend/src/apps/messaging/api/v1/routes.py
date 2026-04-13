@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -20,6 +19,7 @@ from src.apps.messaging.models import (
     ChatMessageEnvelope,
     ChatOneTimePreKey,
     ChatParticipant,
+    ChatReadReceipt,
     ChatReport,
     ChatSignedPreKey,
 )

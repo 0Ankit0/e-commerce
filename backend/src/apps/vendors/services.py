@@ -139,7 +139,13 @@ def mark_vendor_kyc_status(
     reviewer_user_id: int | None = None,
     reason: str = "",
 ) -> None:
-    assert_vendor_kyc_transition(vendor.kyc_status, kyc_status)
+    allow_same_state_refresh = vendor.kyc_status == kyc_status and kyc_status in {
+        VendorKYCStatus.SUBMITTED,
+        VendorKYCStatus.UNDER_REVIEW,
+        VendorKYCStatus.RESUBMISSION_REQUIRED,
+    }
+    if not allow_same_state_refresh:
+        assert_vendor_kyc_transition(vendor.kyc_status, kyc_status)
     vendor.kyc_status = kyc_status
     vendor.kyc_last_reviewer_user_id = reviewer_user_id
     now = utc_now()
@@ -238,9 +244,18 @@ async def ensure_vendor_kyc_ready_for_approval(vendor: Vendor, db: AsyncSession)
 def assert_vendor_status_transition(vendor: Vendor, target_status: VendorStatus) -> None:
     allowed_transitions: dict[VendorStatus, set[VendorStatus]] = {
         VendorStatus.PENDING: {VendorStatus.UNDER_REVIEW},
-        VendorStatus.UNDER_REVIEW: {VendorStatus.NEEDS_RESUBMISSION},
-        VendorStatus.NEEDS_RESUBMISSION: {VendorStatus.APPROVED, VendorStatus.REJECTED, VendorStatus.SUSPENDED},
-        VendorStatus.APPROVED: set(),
+        VendorStatus.UNDER_REVIEW: {
+            VendorStatus.NEEDS_RESUBMISSION,
+            VendorStatus.APPROVED,
+            VendorStatus.REJECTED,
+            VendorStatus.SUSPENDED,
+        },
+        VendorStatus.NEEDS_RESUBMISSION: {
+            VendorStatus.UNDER_REVIEW,
+            VendorStatus.REJECTED,
+            VendorStatus.SUSPENDED,
+        },
+        VendorStatus.APPROVED: {VendorStatus.SUSPENDED},
         VendorStatus.REJECTED: set(),
         VendorStatus.SUSPENDED: set(),
     }

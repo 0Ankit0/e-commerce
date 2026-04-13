@@ -5,7 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from src.apps.core import security
+from src.apps.iam import security as iam_security
 from src.apps.iam.models.user import User
+from src.apps.iam.security import PrivilegedAction, override_privileged_action_policy
 from src.apps.iam.utils.hashid import encode_id
 from src.apps.observability.models import ObservabilityLogEntry, SecurityIncident
 
@@ -28,13 +30,27 @@ async def _make_user(db: AsyncSession, **kwargs) -> User:
     return user
 
 
-async def _login(client: AsyncClient, username: str, password: str = "TestPass123") -> str:
+async def _login(
+    client: AsyncClient,
+    username: str,
+    password: str = "TestPass123",
+    otp_secret: str | None = None,
+) -> str:
     response = await client.post(
         "/api/v1/auth/login/?set_cookie=false",
         json={"username": username, "password": password},
     )
     assert response.status_code == 200, response.text
-    return response.json()["access"]
+    payload = response.json()
+    if payload.get("requires_otp"):
+        assert otp_secret is not None, "OTP secret required for OTP-protected login"
+        otp_response = await client.post(
+            "/api/v1/auth/otp/validate/?set_cookie=false",
+            json={"temp_token": payload["temp_token"], "otp_code": pyotp.TOTP(otp_secret).now()},
+        )
+        assert otp_response.status_code == 200, otp_response.text
+        payload = otp_response.json()
+    return payload["access"]
 
 
 @pytest.mark.integration
@@ -127,12 +143,22 @@ class TestObservabilityAPI:
             email="targetuser@example.com",
         )
         token = await _login(client, admin.username)
+        original_policy = iam_security.PRIVILEGED_ACTION_POLICY_MAP[PrivilegedAction.USER_STATUS_EDIT]
 
-        response = await client.patch(
-            f"/api/v1/users/{encode_id(target.id)}",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"is_superuser": True},
-        )
+        await override_privileged_action_policy(action=PrivilegedAction.USER_STATUS_EDIT, require_step_up=False)
+        try:
+            response = await client.patch(
+                f"/api/v1/users/{encode_id(target.id)}",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"is_superuser": True},
+            )
+        finally:
+            await override_privileged_action_policy(
+                action=PrivilegedAction.USER_STATUS_EDIT,
+                require_step_up=original_policy.require_step_up,
+                otp_freshness_seconds=original_policy.otp_freshness_seconds,
+                step_up_grace_seconds=original_policy.step_up_grace_seconds,
+            )
         assert response.status_code == 200, response.text
 
         incidents = (
@@ -172,7 +198,7 @@ class TestObservabilityAPI:
         db_session.add(incident)
         await db_session.commit()
         await db_session.refresh(incident)
-        token = await _login(client, admin.username)
+        token = await _login(client, admin.username, otp_secret=otp_secret)
         headers = {"Authorization": f"Bearer {token}"}
 
         blocked = await client.patch(
@@ -232,7 +258,7 @@ class TestObservabilityAPI:
         await db_session.commit()
         await db_session.refresh(incident)
 
-        token = await _login(client, admin.username)
+        token = await _login(client, admin.username, otp_secret=otp_secret)
         headers = {"Authorization": f"Bearer {token}"}
         security_step_up = await client.post(
             "/api/v1/auth/otp/step-up/verify",

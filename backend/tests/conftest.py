@@ -1,10 +1,10 @@
 import pytest
 import os
+import tempfile
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, patch
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 
 from src.main import app
@@ -15,26 +15,44 @@ from src.db.session import get_session
 os.environ["TESTING"] = "True"
 
 
+@pytest.fixture(autouse=True)
+async def reset_in_memory_runtime_state():
+    from src.apps.iam import security as iam_security
+    from src.apps.core.cache import RedisCache
+
+    iam_security._IN_MEMORY_POLICY_OVERRIDES.clear()
+    iam_security._IN_MEMORY_STEP_UP_STORE.clear()
+    iam_security._IN_MEMORY_STEP_UP_MARKERS.clear()
+    await RedisCache.close()
+    yield
+    iam_security._IN_MEMORY_POLICY_OVERRIDES.clear()
+    iam_security._IN_MEMORY_STEP_UP_STORE.clear()
+    iam_security._IN_MEMORY_STEP_UP_MARKERS.clear()
+    await RedisCache.close()
+
+
 @pytest.fixture(scope="function")
 async def test_engine():
     """Create a test engine for each test function with unique database."""
-    # Use in-memory database with StaticPool
+    db_fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(db_fd)
     engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
+        f"sqlite+aiosqlite:///{db_path}",
         echo=False,
         connect_args={"check_same_thread": False},
-        poolclass=StaticPool
     )
-    
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    
-    yield engine
-    
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.drop_all)
-    
-    await engine.dispose()
+
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(SQLModel.metadata.create_all)
+
+        yield engine
+    finally:
+        async with engine.begin() as conn:
+            await conn.run_sync(SQLModel.metadata.drop_all)
+        await engine.dispose()
+        if os.path.exists(db_path):
+            os.remove(db_path)
 
 
 @pytest.fixture(scope="function")
@@ -57,8 +75,15 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     from src.apps.analytics.service import AnalyticsService
     from src.apps.analytics.dependencies import get_analytics
 
+    test_async_session = async_sessionmaker(
+        db_session.bind,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
-        yield db_session
+        async with test_async_session() as session:
+            yield session
 
     # Provide a disabled (no-op) analytics service for tests
     _noop_analytics = AnalyticsService(provider=None)
@@ -67,11 +92,6 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     app.dependency_overrides[get_analytics] = lambda: _noop_analytics
 
     original_async_session_factory = db_session_module.async_session_factory
-    test_async_session = async_sessionmaker(
-        db_session.bind,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
     db_session_module.async_session_factory = test_async_session
     
     # Disable rate limiting for tests - handle both main limiter and route limiters

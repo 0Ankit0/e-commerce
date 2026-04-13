@@ -51,7 +51,15 @@ async def _seed_shipment(session) -> Shipment:
     user = User(username="buyer-1", email="buyer1@example.com", is_active=True, hashed_password="x")
     session.add(user)
     await session.flush()
-    address = Address(user_id=user.id or 0, name="Buyer", line1="Street 1", city="City", pincode="44600")
+    address = Address(
+        user_id=user.id or 0,
+        name="Buyer",
+        phone="9800000000",
+        line1="Street 1",
+        city="City",
+        state="Bagmati",
+        pincode="44600",
+    )
     session.add(address)
     await session.flush()
     order = Order(

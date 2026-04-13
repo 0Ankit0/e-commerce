@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import pyotp
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -80,19 +81,83 @@ async def _create_tenant_for_owner(db_session: AsyncSession, owner: User, slug: 
 
 
 
-async def _advance_vendor_to_resubmission(client: AsyncClient, admin_headers: dict[str, str], vendor_id: str) -> None:
+async def _submit_vendor_kyc_packet(client: AsyncClient, vendor_headers: dict[str, str]) -> None:
+    packet_submit = await client.put(
+        "/api/v1/vendor/kyc/packet",
+        headers=vendor_headers,
+        json={
+            "gst_doc_number": "GST-12345",
+            "gst_file_url": "https://example.com/gst.pdf",
+            "pan_doc_number": "PAN-5555",
+            "pan_file_url": "https://example.com/pan.pdf",
+            "bank_account_name": "KYC Vendor Pvt Ltd",
+            "bank_account_number": "000123456789",
+            "bank_ifsc_code": "NMBL0001",
+            "bank_name": "NMB Bank",
+        },
+    )
+    assert packet_submit.status_code == 200, packet_submit.text
+
+
+async def _issue_step_up_headers(
+    client: AsyncClient,
+    headers: dict[str, str],
+    *,
+    otp_secret: str,
+    action: str,
+) -> dict[str, str]:
+    step_up = await client.post(
+        "/api/v1/auth/otp/step-up/verify",
+        headers=headers,
+        json={"otp_code": pyotp.TOTP(otp_secret).now(), "action": action},
+    )
+    assert step_up.status_code == 200, step_up.text
+    return {**headers, "X-Privileged-Auth": step_up.json()["step_up_token"]}
+
+
+async def _verify_vendor_kyc_documents_and_bank(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    vendor_headers: dict[str, str],
+) -> None:
+    profile_resp = await client.get("/api/v1/vendor/profile", headers=vendor_headers)
+    assert profile_resp.status_code == 200, profile_resp.text
+    profile = profile_resp.json()
+    current_docs = [doc for doc in profile["documents"] if doc["is_current"] and doc["doc_type"] in {"gst", "pan"}]
+    assert {doc["doc_type"] for doc in current_docs} == {"gst", "pan"}
+    for doc in current_docs:
+        mark_under_review = await client.post(
+            f"/api/v1/admin/vendor-documents/{doc['id']}/mark-under-review",
+            headers=admin_headers,
+            json={"remarks": "reviewing", "expected_uploaded_at": doc["uploaded_at"], "expected_version": doc["version"]},
+        )
+        assert mark_under_review.status_code == 200, mark_under_review.text
+        verify_doc = await client.post(
+            f"/api/v1/admin/vendor-documents/{doc['id']}/verify",
+            headers=admin_headers,
+            json={"remarks": "approved", "expected_uploaded_at": doc["uploaded_at"], "expected_version": doc["version"]},
+        )
+        assert verify_doc.status_code == 200, verify_doc.text
+
+    primary_bank = next((bank for bank in profile["bank_accounts"] if bank["is_primary"]), None)
+    assert primary_bank is not None
+    verify_bank = await client.post(
+        f"/api/v1/admin/vendor-bank-accounts/{primary_bank['id']}/verify",
+        headers=admin_headers,
+    )
+    assert verify_bank.status_code == 200, verify_bank.text
+
+
+async def _approve_vendor_for_tests(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    vendor_headers: dict[str, str],
+    vendor_id: str,
+):
+    await _submit_vendor_kyc_packet(client, vendor_headers)
     under_review_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/mark-under-review", headers=admin_headers)
     assert under_review_resp.status_code == 200, under_review_resp.text
-    resubmission_resp = await client.post(
-        f"/api/v1/admin/vendors/{vendor_id}/request-resubmission",
-        headers=admin_headers,
-        json={"reason": "Verification details requested"},
-    )
-    assert resubmission_resp.status_code == 200, resubmission_resp.text
-
-
-async def _approve_vendor_for_tests(client: AsyncClient, admin_headers: dict[str, str], vendor_id: str):
-    await _advance_vendor_to_resubmission(client, admin_headers, vendor_id)
+    await _verify_vendor_kyc_documents_and_bank(client, admin_headers, vendor_headers)
     approve_vendor_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
     assert approve_vendor_resp.status_code == 200, approve_vendor_resp.text
     return approve_vendor_resp
@@ -147,7 +212,7 @@ async def test_marketplace_checkout_and_recommendations(client: AsyncClient, db_
     assert vendor_create.status_code == 201, vendor_create.text
     vendor_id = vendor_create.json()["vendor"]["id"]
 
-    approve_vendor = await _approve_vendor_for_tests(client, admin_headers, vendor_id)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers)
 
     category_resp = await client.post(
@@ -325,7 +390,7 @@ async def test_route_optimization_and_courier_gps_ingestion(client: AsyncClient,
     assert vendor_create.status_code == 201, vendor_create.text
     vendor_id = vendor_create.json()["vendor"]["id"]
 
-    approve_vendor = await _approve_vendor_for_tests(client, admin_headers, vendor_id)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="route-zone")
 
     category_resp = await client.post(
@@ -531,7 +596,7 @@ async def test_line_haul_planner_draft_save_and_apply_flow(client: AsyncClient, 
         ],
         "vehicles": [
             {"vehicle_id": "VAN-1", "hub_code": "KTM", "capacity_units": 30},
-            {"vehicle_id": "VAN-2", "hub_code": "KTM", "capacity_units": 20},
+            {"vehicle_id": "VAN-2", "hub_code": "KTM", "capacity_units": 30},
         ],
         "connectivity": {"KTM": ["PKR", "BWA"], "PKR": ["KTM"], "BWA": ["KTM"]},
         "locked_assignments": [],
@@ -783,7 +848,7 @@ async def test_vendor_delivery_and_customer_return_flow(client: AsyncClient, db_
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="lalitpur-zone")
     await client.post(
         "/api/v1/admin/categories",
@@ -916,7 +981,7 @@ async def test_wishlist_sharing_and_price_drop_notifications(client: AsyncClient
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="wishlist-zone")
     await client.post("/api/v1/admin/categories", headers=admin_headers, json={"name": "Accessories", "slug": "accessories", "level": 1})
     category_id = (await client.get("/api/v1/categories")).json()["items"][0]["id"]
@@ -1021,7 +1086,7 @@ async def test_internal_logistics_and_support_flow(client: AsyncClient, db_sessi
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="ops-zone")
     hub_resp = await client.post(
         "/api/v1/logistics/hubs",
@@ -1233,7 +1298,7 @@ async def test_shipment_transition_rules_and_idempotency(client: AsyncClient, db
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="transition-zone")
     hub_resp = await client.post(
         "/api/v1/logistics/hubs",
@@ -1425,6 +1490,12 @@ async def test_vendor_payout_content_and_reporting_flow(client: AsyncClient, db_
         email="ops_admin_two@example.com",
         is_superuser=True,
     )
+    otp_secret = pyotp.random_base32()
+    admin.otp_enabled = True
+    admin.otp_verified = True
+    admin.otp_base32 = otp_secret
+    db_session.add(admin)
+    await db_session.commit()
     vendor_user, vendor_headers = await _create_user_headers(
         db_session,
         username="vendor_finance",
@@ -1450,48 +1521,7 @@ async def test_vendor_payout_content_and_reporting_flow(client: AsyncClient, db_
     )
     assert vendor_resp.status_code == 201, vendor_resp.text
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    under_review_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/mark-under-review", headers=admin_headers)
-    assert under_review_resp.status_code == 200, under_review_resp.text
-    resubmission_resp = await client.post(
-        f"/api/v1/admin/vendors/{vendor_id}/request-resubmission",
-        headers=admin_headers,
-        json={"reason": "Upload KYC files"},
-    )
-    assert resubmission_resp.status_code == 200, resubmission_resp.text
-
-    document_resp = await client.post(
-        "/api/v1/vendor/documents",
-        headers=vendor_headers,
-        json={"doc_type": "pan", "doc_number": "PAN123", "file_url": "https://example.com/pan.pdf"},
-    )
-    assert document_resp.status_code == 201, document_resp.text
-    bank_resp = await client.post(
-        "/api/v1/vendor/bank-accounts",
-        headers=vendor_headers,
-        json={"account_name": "Finance Vendor", "account_number": "1234567890", "ifsc_code": "NMBL0001", "bank_name": "NMB"},
-    )
-    assert bank_resp.status_code == 201, bank_resp.text
-    document_db = await db_session.get(VendorDocument, decode_id_or_404(document_resp.json()["document_id"]))
-    assert document_db is not None
-    mark_doc_review_resp = await client.post(
-        f"/api/v1/admin/vendor-documents/{document_resp.json()['document_id']}/mark-under-review",
-        headers=admin_headers,
-        json={"remarks": "triaged", "expected_uploaded_at": document_db.uploaded_at.isoformat(), "expected_version": document_db.version},
-    )
-    assert mark_doc_review_resp.status_code == 200, mark_doc_review_resp.text
-    verify_doc_resp = await client.post(
-        f"/api/v1/admin/vendor-documents/{document_resp.json()['document_id']}/verify",
-        headers=admin_headers,
-        json={"remarks": "Looks good", "expected_uploaded_at": document_db.uploaded_at.isoformat(), "expected_version": document_db.version},
-    )
-    assert verify_doc_resp.status_code == 200, verify_doc_resp.text
-    verify_bank_resp = await client.post(
-        f"/api/v1/admin/vendor-bank-accounts/{bank_resp.json()['bank_account_id']}/verify",
-        headers=admin_headers,
-    )
-    assert verify_bank_resp.status_code == 200, verify_bank_resp.text
-    approve_vendor_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
-    assert approve_vendor_resp.status_code == 200, approve_vendor_resp.text
+    await _approve_vendor_for_tests(client, admin_headers, vendor_headers, vendor_id)
 
     payout_request_resp = await client.post(
         "/api/v1/vendor/payout-requests",
@@ -1500,14 +1530,26 @@ async def test_vendor_payout_content_and_reporting_flow(client: AsyncClient, db_
     )
     assert payout_request_resp.status_code == 201, payout_request_resp.text
     payout_request_id = payout_request_resp.json()["payout_request"]["id"]
+    privileged_admin_headers = await _issue_step_up_headers(
+        client,
+        admin_headers,
+        otp_secret=otp_secret,
+        action="admin.payout.approve",
+    )
     approve_payout_request_resp = await client.post(
         f"/api/v1/admin/vendor-payout-requests/{payout_request_id}/approve",
-        headers=admin_headers,
+        headers=privileged_admin_headers,
     )
     assert approve_payout_request_resp.status_code == 200, approve_payout_request_resp.text
+    privileged_batch_headers = await _issue_step_up_headers(
+        client,
+        admin_headers,
+        otp_secret=otp_secret,
+        action="admin.payout.approve",
+    )
     payout_batch_resp = await client.post(
         "/api/v1/admin/vendor-payouts/batches",
-        headers=admin_headers,
+        headers=privileged_batch_headers,
         json={"payout_request_ids": [payout_request_id], "notes": "Friday batch"},
     )
     assert payout_batch_resp.status_code == 201, payout_batch_resp.text
@@ -1585,7 +1627,7 @@ async def test_strict_e2ee_chat_device_and_envelope_flow(client: AsyncClient, db
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="chat-zone")
     await client.post("/api/v1/admin/categories", headers=admin_headers, json={"name": "Tech", "slug": "tech", "level": 1})
     category_id = (await client.get("/api/v1/categories")).json()["items"][0]["id"]
@@ -1752,7 +1794,7 @@ async def test_wallet_gift_card_and_payment_lifecycle_flow(client: AsyncClient, 
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="wallet-zone")
     await client.post("/api/v1/admin/categories", headers=admin_headers, json={"name": "Wallet Cat", "slug": "wallet-cat", "level": 1})
     category_id = (await client.get("/api/v1/categories")).json()["items"][0]["id"]
@@ -1854,6 +1896,12 @@ async def test_catalog_admin_settings_and_pod_extensions(client: AsyncClient, db
         email="ext_admin@example.com",
         is_superuser=True,
     )
+    otp_secret = pyotp.random_base32()
+    admin.otp_enabled = True
+    admin.otp_verified = True
+    admin.otp_base32 = otp_secret
+    db_session.add(admin)
+    await db_session.commit()
     vendor_user, vendor_headers = await _create_user_headers(
         db_session,
         username="ext_vendor",
@@ -1878,7 +1926,7 @@ async def test_catalog_admin_settings_and_pod_extensions(client: AsyncClient, db
         },
     )
     vendor_id = vendor_resp.json()["vendor"]["id"]
-    await _approve_vendor_for_tests(client, admin_headers, vendor_id)
+    await _approve_vendor_for_tests(client, admin_headers, vendor_headers, vendor_id)
     await _create_delivery_zone(client, admin_headers, code="ext-zone")
     zone_id = (await client.get("/api/v1/logistics/zones", headers=admin_headers)).json()["items"][0]["id"]
     shipping_option_resp = await client.post(
@@ -1964,6 +2012,17 @@ async def test_catalog_admin_settings_and_pod_extensions(client: AsyncClient, db
         json={"address_id": address_resp.json()["address"]["id"], "payment_method": "cod"},
     )
     shipment_id = order_resp.json()["order"]["shipments"][0]["id"]
+    for shipment_status in ("processing", "shipped", "out_for_delivery"):
+        transition_resp = await client.post(
+            f"/api/v1/logistics/shipments/{shipment_id}/status",
+            headers=admin_headers,
+            json={
+                "status": shipment_status,
+                "location": "Transit",
+                "remarks": f"{shipment_status} for POD flow",
+            },
+        )
+        assert transition_resp.status_code == 200, transition_resp.text
     pod_resp = await client.post(
         f"/api/v1/logistics/shipments/{shipment_id}/pod",
         headers=admin_headers,
@@ -1980,9 +2039,15 @@ async def test_catalog_admin_settings_and_pod_extensions(client: AsyncClient, db
     admin_settings = await client.get("/api/v1/system/admin/settings/", headers=admin_headers)
     assert admin_settings.status_code == 200, admin_settings.text
     updatable_setting = next(item for item in admin_settings.json() if item["is_runtime_editable"])
+    privileged_settings_headers = await _issue_step_up_headers(
+        client,
+        admin_headers,
+        otp_secret=otp_secret,
+        action="admin.system.security_settings_edit",
+    )
     patch_setting = await client.patch(
         f"/api/v1/system/admin/settings/{updatable_setting['key']}",
-        headers=admin_headers,
+        headers=privileged_settings_headers,
         json={"db_value": "patched-value", "use_db_value": True},
     )
     assert patch_setting.status_code == 200, patch_setting.text
@@ -2020,6 +2085,7 @@ async def test_vendor_onboarding_transitions_and_audit_consistency(client: Async
     invalid_approve_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers)
     assert invalid_approve_resp.status_code == 409, invalid_approve_resp.text
 
+    await _submit_vendor_kyc_packet(client, vendor_headers)
     under_review_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/mark-under-review", headers=admin_headers)
     assert under_review_resp.status_code == 200, under_review_resp.text
 
@@ -2055,12 +2121,12 @@ async def test_vendor_onboarding_transitions_and_audit_consistency(client: Async
         json={"doc_type": "pan", "doc_number": "PAN222", "file_url": "https://example.com/pan-v2.pdf"},
     )
     assert upload_2_resp.status_code == 201, upload_2_resp.text
-    assert upload_2_resp.json()["document_id"] == document_id
+    document_id = upload_2_resp.json()["document_id"]
 
     doc_v2 = await db_session.get(VendorDocument, decode_id_or_404(document_id))
     assert doc_v2 is not None
     assert doc_v2.doc_number == "PAN222"
-    assert doc_v2.version == 2
+    assert doc_v2.version == doc_v1.version + 1
     assert doc_v2.uploaded_at.isoformat() != stale_uploaded_at
     assert doc_v2.status.value == "submitted"
 
@@ -2101,7 +2167,10 @@ async def test_vendor_onboarding_transitions_and_audit_consistency(client: Async
     document_id = vendor_resubmit_resp.json()["document_id"]
     doc_v3 = await db_session.get(VendorDocument, decode_id_or_404(document_id))
     assert doc_v3 is not None
-    assert doc_v3.version == 3
+    assert doc_v3.version == doc_v2.version + 1
+
+    restart_review_resp = await client.post(f"/api/v1/admin/vendors/{vendor_id}/mark-under-review", headers=admin_headers)
+    assert restart_review_resp.status_code == 200, restart_review_resp.text
 
     stale_verify_resp = await client.post(
         f"/api/v1/admin/vendor-documents/{document_id}/verify",
@@ -2146,7 +2215,7 @@ async def test_vendor_onboarding_transitions_and_audit_consistency(client: Async
     stale_non_current_approval = await client.post(
         f"/api/v1/admin/vendor-documents/{stale_document_id}/verify",
         headers=admin_headers,
-        json={"remarks": "stale", "expected_uploaded_at": stale_uploaded_at, "expected_version": 1},
+        json={"remarks": "stale", "expected_uploaded_at": stale_uploaded_at, "expected_version": doc_v1.version},
     )
     assert stale_non_current_approval.status_code == 409, stale_non_current_approval.text
 
@@ -2167,6 +2236,37 @@ async def test_vendor_onboarding_transitions_and_audit_consistency(client: Async
         json={"remarks": "not allowed", "expected_uploaded_at": doc_v3.uploaded_at.isoformat(), "expected_version": doc_v3.version},
     )
     assert unauthorized_doc_action.status_code == 403, unauthorized_doc_action.text
+
+    current_gst = next(
+        doc for doc in profile_resp.json()["documents"] if doc["doc_type"] == "gst" and doc["is_current"] is True
+    )
+    gst_review_resp = await client.post(
+        f"/api/v1/admin/vendor-documents/{current_gst['id']}/mark-under-review",
+        headers=admin_headers,
+        json={
+            "remarks": "reviewing gst",
+            "expected_uploaded_at": current_gst["uploaded_at"],
+            "expected_version": current_gst["version"],
+        },
+    )
+    assert gst_review_resp.status_code == 200, gst_review_resp.text
+    gst_verify_resp = await client.post(
+        f"/api/v1/admin/vendor-documents/{current_gst['id']}/verify",
+        headers=admin_headers,
+        json={
+            "remarks": "approved gst",
+            "expected_uploaded_at": current_gst["uploaded_at"],
+            "expected_version": current_gst["version"],
+        },
+    )
+    assert gst_verify_resp.status_code == 200, gst_verify_resp.text
+
+    primary_bank = next(bank for bank in profile_resp.json()["bank_accounts"] if bank["is_primary"] is True)
+    verify_bank_resp = await client.post(
+        f"/api/v1/admin/vendor-bank-accounts/{primary_bank['id']}/verify",
+        headers=admin_headers,
+    )
+    assert verify_bank_resp.status_code == 200, verify_bank_resp.text
 
     concurrent_approve, concurrent_reject = await asyncio.gather(
         client.post(f"/api/v1/admin/vendors/{vendor_id}/approve", headers=admin_headers),
@@ -2251,9 +2351,10 @@ async def test_vendor_document_concurrent_admin_review_actions(client: AsyncClie
 
     assert sorted([concurrent_verify.status_code, concurrent_resubmit.status_code]) == [200, 409]
 
-    updated_document = await db_session.get(VendorDocument, decode_id_or_404(document_id))
-    assert updated_document is not None
-    assert updated_document.status.value in {"verified", "needs_resubmission"}
+    profile_resp = await client.get("/api/v1/vendor/profile", headers=vendor_headers)
+    assert profile_resp.status_code == 200, profile_resp.text
+    updated_document = next(doc for doc in profile_resp.json()["documents"] if doc["id"] == document_id)
+    assert updated_document["status"] in {"verified", "needs_resubmission"}
 
 
 @pytest.mark.asyncio
@@ -2294,7 +2395,7 @@ async def test_line_haul_planning_full_lifecycle_with_conflict_resolution(client
                     "hub_code": "KTM",
                     "capacity_units": 15,
                     "capacity_weight_kg": 1500,
-                    "capacity_volume_m3": 10,
+                    "capacity_volume_m3": 13,
                     "available_count": 1,
                 }
             ],

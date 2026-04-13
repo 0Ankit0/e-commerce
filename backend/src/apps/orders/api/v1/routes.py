@@ -26,7 +26,6 @@ from src.apps.orders.models import (
     Order,
     OrderEvent,
     OrderItem,
-    OrderNote,
     OrderStatus,
     PaymentMethod,
     ReturnEvent,
@@ -213,8 +212,11 @@ async def checkout(
             metadata={"order_id": order.id},
             db=db,
         )
+    order_id = order.id
     await db.commit()
-    await db.refresh(order)
+    order = await db.get(Order, order_id) if order_id else None
+    if order is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Order could not be reloaded after checkout")
     await analytics.capture(str(current_user.id), "order_created", {"order_id": order.id, "order_number": order.order_number})
     await notify_order_event(
         db=db,
@@ -529,6 +531,19 @@ async def list_vendor_orders(
     vendor_orders = (
         await db.execute(select(VendorOrder).where(VendorOrder.vendor_id == vendor.id).order_by(VendorOrder.created_at.desc()))
     ).scalars().all()
+    vendor_order_ids = [vendor_order.id for vendor_order in vendor_orders if vendor_order.id is not None]
+    shipments = (
+        []
+        if not vendor_order_ids
+        else (
+            await db.execute(select(Shipment).where(Shipment.vendor_order_id.in_(vendor_order_ids)))
+        ).scalars().all()
+    )
+    shipment_map = {
+        shipment.vendor_order_id: shipment
+        for shipment in shipments
+        if shipment.vendor_order_id is not None
+    }
     return {
         "items": [
             {
@@ -539,6 +554,17 @@ async def list_vendor_orders(
                 "subtotal": vendor_order.subtotal,
                 "commission": vendor_order.commission,
                 "vendor_amount": vendor_order.vendor_amount,
+                "shipment": (
+                    {
+                        "id": encode_id(shipment.id or 0),
+                        "awb": shipment.awb,
+                        "status": shipment.status.value,
+                        "current_location": shipment.current_location,
+                        "eta": shipment.eta.isoformat() if shipment.eta else None,
+                    }
+                    if (shipment := shipment_map.get(vendor_order.id))
+                    else None
+                ),
             }
             for vendor_order in vendor_orders
         ],

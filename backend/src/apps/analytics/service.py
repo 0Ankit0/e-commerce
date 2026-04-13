@@ -232,10 +232,11 @@ class AnalyticsService:
         first_attempt_successes: int,
         total_attempts: int,
         rto_count: int,
+        exception_count: int,
         open_exceptions: int,
     ) -> dict[str, int | float]:
         first_attempt_success_rate = round((first_attempt_successes / total_attempts) * 100, 2) if total_attempts else 0.0
-        rto_rate = round((rto_count / open_exceptions) * 100, 2) if open_exceptions else 0.0
+        rto_rate = round((rto_count / exception_count) * 100, 2) if exception_count else 0.0
         return {
             "first_attempt_success_rate_percent": first_attempt_success_rate,
             "rto_rate_percent": rto_rate,

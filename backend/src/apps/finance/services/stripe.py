@@ -19,7 +19,6 @@ Flow:
   4. POST /payments/verify/ with provider=stripe and pidx=<session_id>
 """
 import json
-from datetime import datetime
 
 import stripe
 from sqlalchemy.ext.asyncio import AsyncSession
