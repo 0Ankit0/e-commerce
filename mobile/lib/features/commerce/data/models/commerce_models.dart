@@ -144,8 +144,11 @@ class CatalogProduct {
       minSellingPrice: (json['min_selling_price'] as num?)?.toDouble(),
       categoryName: category?['name'] as String?,
       brandName: brand?['name'] as String?,
-      vendorName: vendor?['display_name'] as String? ?? vendor?['business_name'] as String? ?? json['vendor_name'] as String?,
-      vendorKycStatus: (vendor?['kyc_status'] as String?) ?? (json['vendor_kyc_status'] as String?),
+      vendorName: vendor?['display_name'] as String? ??
+          vendor?['business_name'] as String? ??
+          json['vendor_name'] as String?,
+      vendorKycStatus: (vendor?['kyc_status'] as String?) ??
+          (json['vendor_kyc_status'] as String?),
       images: (json['images'] as List<dynamic>? ?? const [])
           .map(
             (item) =>
@@ -165,6 +168,44 @@ class CatalogProduct {
     return variants.firstWhere(
       (variant) => variant.isDefault,
       orElse: () => variants.first,
+    );
+  }
+}
+
+class WishlistItemModel {
+  final String id;
+  final String productId;
+  final String name;
+  final String slug;
+  final String status;
+  final String imageUrl;
+  final double? price;
+  final String? variantId;
+  final String variantName;
+
+  const WishlistItemModel({
+    required this.id,
+    required this.productId,
+    required this.name,
+    required this.slug,
+    required this.status,
+    required this.imageUrl,
+    required this.price,
+    required this.variantId,
+    required this.variantName,
+  });
+
+  factory WishlistItemModel.fromJson(Map<String, dynamic> json) {
+    return WishlistItemModel(
+      id: json['id'].toString(),
+      productId: json['product_id']?.toString() ?? '',
+      name: json['name'] as String? ?? '',
+      slug: json['slug'] as String? ?? '',
+      status: json['status'] as String? ?? '',
+      imageUrl: json['image_url'] as String? ?? '',
+      price: (json['price'] as num?)?.toDouble(),
+      variantId: json['variant_id']?.toString(),
+      variantName: json['variant_name'] as String? ?? '',
     );
   }
 }
@@ -536,6 +577,129 @@ class OrderTracking {
             (item) => TrackingShipment.fromJson(item as Map<String, dynamic>),
           )
           .toList(),
+    );
+  }
+}
+
+class ReturnRequestCreatePayload {
+  final String orderId;
+  final String? orderItemId;
+  final int quantity;
+  final String reason;
+  final String details;
+  final String refundMethod;
+
+  const ReturnRequestCreatePayload({
+    required this.orderId,
+    this.orderItemId,
+    required this.quantity,
+    required this.reason,
+    this.details = '',
+    this.refundMethod = 'original',
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'order_id': orderId,
+      if (orderItemId != null && orderItemId!.isNotEmpty)
+        'order_item_id': orderItemId,
+      'quantity': quantity,
+      'reason': reason,
+      'details': details,
+      'refund_method': refundMethod,
+    };
+  }
+}
+
+class ReturnRequestSubmission {
+  final String returnRequestId;
+  final String status;
+
+  const ReturnRequestSubmission({
+    required this.returnRequestId,
+    required this.status,
+  });
+
+  factory ReturnRequestSubmission.fromJson(Map<String, dynamic> json) {
+    return ReturnRequestSubmission(
+      returnRequestId: json['return_request_id']?.toString() ?? '',
+      status: json['status'] as String? ?? '',
+    );
+  }
+}
+
+class ReturnRequestModel {
+  final String id;
+  final String orderId;
+  final String? orderItemId;
+  final String userId;
+  final String reason;
+  final String details;
+  final int quantity;
+  final String refundMethod;
+  final String status;
+  final int returnWindowDays;
+  final String? eligibleUntil;
+  final String createdAt;
+  final String? resolvedAt;
+
+  const ReturnRequestModel({
+    required this.id,
+    required this.orderId,
+    required this.orderItemId,
+    required this.userId,
+    required this.reason,
+    required this.details,
+    required this.quantity,
+    required this.refundMethod,
+    required this.status,
+    required this.returnWindowDays,
+    required this.eligibleUntil,
+    required this.createdAt,
+    required this.resolvedAt,
+  });
+
+  factory ReturnRequestModel.fromJson(Map<String, dynamic> json) {
+    return ReturnRequestModel(
+      id: json['id']?.toString() ?? '',
+      orderId: json['order_id']?.toString() ?? '',
+      orderItemId: json['order_item_id']?.toString(),
+      userId: json['user_id']?.toString() ?? '',
+      reason: json['reason'] as String? ?? '',
+      details: json['details'] as String? ?? '',
+      quantity: json['quantity'] as int? ?? 0,
+      refundMethod: json['refund_method'] as String? ?? 'original',
+      status: json['status'] as String? ?? '',
+      returnWindowDays: json['return_window_days'] as int? ?? 0,
+      eligibleUntil: json['eligible_until'] as String?,
+      createdAt: json['created_at'] as String? ?? '',
+      resolvedAt: json['resolved_at'] as String?,
+    );
+  }
+}
+
+class ReturnTimelineEvent {
+  final String id;
+  final String eventType;
+  final String message;
+  final Map<String, dynamic> payload;
+  final String createdAt;
+
+  const ReturnTimelineEvent({
+    required this.id,
+    required this.eventType,
+    required this.message,
+    required this.payload,
+    required this.createdAt,
+  });
+
+  factory ReturnTimelineEvent.fromJson(Map<String, dynamic> json) {
+    return ReturnTimelineEvent(
+      id: json['id']?.toString() ?? '',
+      eventType: json['event_type'] as String? ?? '',
+      message: json['message'] as String? ?? '',
+      payload: Map<String, dynamic>.from(json['payload'] as Map? ?? const {}),
+      createdAt: json['created_at'] as String? ?? '',
     );
   }
 }

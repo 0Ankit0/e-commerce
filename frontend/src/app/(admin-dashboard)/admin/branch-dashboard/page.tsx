@@ -135,7 +135,7 @@ export default function AdminBranchDashboardPage() {
       <div className="grid gap-4 md:grid-cols-4">
         {[
           { label: 'Inventory posture', value: snapshot?.snapshot.inventory_posture ?? 'healthy', queue: 'aging' as const },
-          { label: 'First-attempt success', value: `${snapshot?.snapshot.first_attempt_success_rate_percent ?? 0}%`, queue: 'reassign' as const },
+          { label: 'First-attempt success', value: `${snapshot?.snapshot.attempt_success_rate_percent ?? 0}%`, queue: 'reassign' as const },
           { label: 'RTO / exceptions', value: `${snapshot?.snapshot.rto_rate_percent ?? 0}%`, queue: 'escalate' as const },
           { label: 'Aging queue (6h+)', value: snapshot?.snapshot.aging_queue_over_6h ?? 0, queue: 'aging' as const },
         ].map((item) => (
@@ -199,9 +199,9 @@ export default function AdminBranchDashboardPage() {
         </CardHeader>
         <CardContent className="space-y-2">
           <div className="flex gap-2">
-            <Button variant={selectedQueue === 'reassign' ? 'default' : 'outline'} size="sm" onClick={() => setSelectedQueue('reassign')}>Reassign agent</Button>
-            <Button variant={selectedQueue === 'escalate' ? 'default' : 'outline'} size="sm" onClick={() => setSelectedQueue('escalate')}>Escalate delayed</Button>
-            <Button variant={selectedQueue === 'aging' ? 'default' : 'outline'} size="sm" onClick={() => setSelectedQueue('aging')}>Prioritize aging</Button>
+            <Button variant={selectedQueue === 'reassign' ? 'primary' : 'outline'} size="sm" onClick={() => setSelectedQueue('reassign')}>Reassign agent</Button>
+            <Button variant={selectedQueue === 'escalate' ? 'primary' : 'outline'} size="sm" onClick={() => setSelectedQueue('escalate')}>Escalate delayed</Button>
+            <Button variant={selectedQueue === 'aging' ? 'primary' : 'outline'} size="sm" onClick={() => setSelectedQueue('aging')}>Prioritize aging</Button>
           </div>
           {selectedQueue === 'reassign' && (
             <ul className="space-y-2 text-sm">

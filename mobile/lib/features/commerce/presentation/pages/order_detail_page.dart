@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import '../../../../core/constants/app_constants.dart';
 import '../../../../core/constants/colors.dart';
 import '../../../../core/error/error_handler.dart';
+import '../../data/models/commerce_models.dart';
 import '../providers/commerce_provider.dart';
 
 String _moneyLabel(num value) =>
@@ -22,15 +25,99 @@ String _timestamp(String value) {
   }
 }
 
-class OrderDetailPage extends ConsumerWidget {
+class OrderDetailPage extends ConsumerStatefulWidget {
   final String orderId;
 
   const OrderDetailPage({super.key, required this.orderId});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final orderAsync = ref.watch(orderDetailProvider(orderId));
-    final trackingAsync = ref.watch(orderTrackingProvider(orderId));
+  ConsumerState<OrderDetailPage> createState() => _OrderDetailPageState();
+}
+
+class _OrderDetailPageState extends ConsumerState<OrderDetailPage> {
+  bool _cancelling = false;
+
+  bool _canCancelOrder(CustomerOrder order) {
+    return !{
+      'shipped',
+      'out_for_delivery',
+      'delivered',
+      'cancelled',
+      'returned',
+    }.contains(order.status);
+  }
+
+  bool _canRequestReturn(CustomerOrder order) {
+    return order.status == 'delivered' &&
+        order.items.any((item) => item.status == 'delivered');
+  }
+
+  Future<void> _refresh() async {
+    await Future.wait([
+      ref.refresh(orderDetailProvider(widget.orderId).future),
+      ref.refresh(orderTrackingProvider(widget.orderId).future),
+    ]);
+  }
+
+  Future<void> _cancelOrder(CustomerOrder order) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cancel order?'),
+        content: Text(
+          'This will cancel ${order.orderNumber} and stop any remaining fulfilment.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Keep order'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Cancel order'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    setState(() => _cancelling = true);
+    try {
+      await ref.read(commerceRepositoryProvider).cancelOrder(order.id);
+      ref.invalidate(ordersProvider);
+      ref.invalidate(orderDetailProvider(widget.orderId));
+      ref.invalidate(orderTrackingProvider(widget.orderId));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Order cancelled'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(ErrorHandler.handle(e).message),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _cancelling = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final orderAsync = ref.watch(orderDetailProvider(widget.orderId));
+    final trackingAsync = ref.watch(orderTrackingProvider(widget.orderId));
 
     return Scaffold(
       appBar: AppBar(title: const Text('Order Detail')),
@@ -39,10 +126,7 @@ class OrderDetailPage extends ConsumerWidget {
         error: (err, _) =>
             Center(child: Text(ErrorHandler.handle(err).message)),
         data: (order) => RefreshIndicator(
-          onRefresh: () async {
-            ref.invalidate(orderDetailProvider(orderId));
-            ref.invalidate(orderTrackingProvider(orderId));
-          },
+          onRefresh: _refresh,
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: [
@@ -117,6 +201,60 @@ class OrderDetailPage extends ConsumerWidget {
                   ],
                 ),
               ),
+              if (_canCancelOrder(order) || _canRequestReturn(order)) ...[
+                const SizedBox(height: 18),
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(28),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Manage order',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      if (_canCancelOrder(order))
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed:
+                                _cancelling ? null : () => _cancelOrder(order),
+                            icon: _cancelling
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.cancel_outlined),
+                            label: const Text('Cancel order'),
+                          ),
+                        ),
+                      if (_canRequestReturn(order)) ...[
+                        if (_canCancelOrder(order)) const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.tonalIcon(
+                            onPressed: () => context.push(
+                              AppConstants.orderReturnRequestRoute(order.id),
+                            ),
+                            icon: const Icon(Icons.assignment_return_outlined),
+                            label: const Text('Request return'),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 18),
               trackingAsync.when(
                 loading: () => const Center(child: CircularProgressIndicator()),

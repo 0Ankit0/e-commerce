@@ -183,7 +183,7 @@ export default function BranchOperationsPage() {
         <CardContent className="pt-5">
           <div className="flex flex-wrap gap-2">
             {BRANCHES.map((branch) => (
-              <Button key={branch.id} variant={branch.id === selectedBranchId ? 'default' : 'outline'} onClick={() => setSelectedBranchId(branch.id)}>
+                <Button key={branch.id} variant={branch.id === selectedBranchId ? 'primary' : 'outline'} onClick={() => setSelectedBranchId(branch.id)}>
                 {branch.name}
               </Button>
             ))}
@@ -240,7 +240,7 @@ export default function BranchOperationsPage() {
           <CardContent className="space-y-3">
             <div className="flex flex-wrap gap-2">
               {(['all', 'assigned', 'delivered', 'failed', 'branch_transfer', 'reassigned'] as const).map((status) => (
-                <Button key={status} variant={shipmentFilter === status ? 'default' : 'outline'} size="sm" onClick={() => setShipmentFilter(status)}>
+                <Button key={status} variant={shipmentFilter === status ? 'primary' : 'outline'} size="sm" onClick={() => setShipmentFilter(status)}>
                   {status}
                 </Button>
               ))}

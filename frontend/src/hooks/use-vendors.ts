@@ -19,6 +19,59 @@ export interface VendorQueueItem {
   age_hours: number;
 }
 
+export interface VendorAnalyticsResponse {
+  vendor: {
+    id: string;
+    business_name: string;
+    display_name: string;
+    status: string;
+    kyc_status: string;
+    product_count: number;
+    rating: number;
+    created_at: string;
+  };
+  analytics: {
+    orders: number;
+    net_revenue: number;
+    product_count: number;
+    rating: number;
+  };
+}
+
+export interface VendorTimelineItem {
+  id: string;
+  event_type: string;
+  message: string;
+  created_at: string;
+  payload: Record<string, unknown>;
+}
+
+export interface VendorPayout {
+  id: string;
+  vendor_id: string;
+  amount: number;
+  commission_amount: number;
+  status: string;
+  reference: string;
+  period_start: string | null;
+  period_end: string | null;
+  payout_batch_id: string | null;
+  created_at: string;
+  paid_at: string | null;
+}
+
+export interface VendorPayoutRequest {
+  id: string;
+  vendor_id: string;
+  requested_by_user_id: string;
+  amount: number;
+  currency: string;
+  notes: string;
+  status: string;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
 export function useAdminKycQueue(filter: 'new' | 'pending' | 'sla_breach' = 'pending') {
   return useQuery({
     queryKey: ['admin-kyc-queue', filter],
@@ -72,6 +125,69 @@ export function useVendorKycHistory() {
         items: Array<{ event_type: string; message: string; created_at: string; payload: Record<string, unknown> }>;
       }>('/vendor/kyc/history');
       return response.data;
+    },
+  });
+}
+
+export function useVendorAnalytics() {
+  return useQuery({
+    queryKey: ['vendor-analytics'],
+    queryFn: async () => {
+      const response = await apiClient.get<VendorAnalyticsResponse>('/vendor/analytics');
+      return response.data;
+    },
+    staleTime: 15_000,
+  });
+}
+
+export function useVendorTimeline() {
+  return useQuery({
+    queryKey: ['vendor-timeline'],
+    queryFn: async () => {
+      const response = await apiClient.get<{ items: VendorTimelineItem[]; total: number }>('/vendor/timeline');
+      return response.data;
+    },
+    staleTime: 15_000,
+  });
+}
+
+export function useVendorPayouts() {
+  return useQuery({
+    queryKey: ['vendor-payouts'],
+    queryFn: async () => {
+      const response = await apiClient.get<{ items: VendorPayout[]; total: number }>('/vendor/payouts');
+      return response.data;
+    },
+    staleTime: 15_000,
+  });
+}
+
+export function useVendorPayoutRequests() {
+  return useQuery({
+    queryKey: ['vendor-payout-requests'],
+    queryFn: async () => {
+      const response = await apiClient.get<{ items: VendorPayoutRequest[]; total: number }>('/vendor/payout-requests');
+      return response.data;
+    },
+    staleTime: 15_000,
+  });
+}
+
+export function useCreateVendorPayoutRequest() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: { amount: number; notes: string }) => {
+      const response = await apiClient.post('/vendor/payout-requests', payload);
+      return response.data as { payout_request: VendorPayoutRequest };
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['vendor-payout-requests'] }),
+        queryClient.invalidateQueries({ queryKey: ['vendor-payouts'] }),
+        queryClient.invalidateQueries({ queryKey: ['vendor-timeline'] }),
+        queryClient.invalidateQueries({ queryKey: ['vendor-analytics'] }),
+      ]);
     },
   });
 }

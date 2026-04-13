@@ -337,6 +337,10 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
               context,
               user,
             ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.05),
+            const SizedBox(height: 12),
+            _buildShoppingToolsSection(
+              context,
+            ).animate().fadeIn(delay: 350.ms).slideY(begin: 0.05),
             const SizedBox(height: 32),
           ],
         ),
@@ -720,6 +724,30 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     );
   }
 
+  Widget _buildShoppingToolsSection(BuildContext context) {
+    return _SectionCard(
+      title: 'Shopping & Payments',
+      icon: Icons.shopping_bag_outlined,
+      child: Column(
+        children: [
+          _NavigationTile(
+            icon: Icons.favorite_border,
+            title: 'Wishlist',
+            subtitle: 'Review the products you have saved for later.',
+            onTap: () => context.push(AppConstants.wishlistRoute),
+          ),
+          const Divider(height: 24),
+          _NavigationTile(
+            icon: Icons.payments_outlined,
+            title: 'Payments',
+            subtitle: 'Open your payment history and gateway flows.',
+            onTap: () => context.push(AppConstants.paymentsRoute),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildAccountInfoSection(BuildContext context, User user) {
     return _SectionCard(
       title: 'Account Information',
@@ -813,6 +841,40 @@ class _SectionCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _NavigationTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _NavigationTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      onTap: onTap,
+      leading: CircleAvatar(
+        backgroundColor: Theme.of(
+          context,
+        ).colorScheme.primaryContainer.withValues(alpha: 0.6),
+        child: Icon(icon),
+      ),
+      title: Text(
+        title,
+        style: const TextStyle(fontWeight: FontWeight.w700),
+      ),
+      subtitle: Text(subtitle),
+      trailing: const Icon(Icons.chevron_right),
     );
   }
 }

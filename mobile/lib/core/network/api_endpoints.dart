@@ -54,6 +54,8 @@ class ApiEndpoints {
   static const String products = '/products';
   static String productById(String id) => '/products/$id';
   static const String categories = '/categories';
+  static const String wishlist = '/wishlist';
+  static String wishlistByProduct(String id) => '/wishlist/$id';
   static const String cart = '/cart';
   static const String cartItems = '/cart/items';
   static String cartItemById(String id) => '/cart/items/$id';
@@ -63,5 +65,9 @@ class ApiEndpoints {
   static const String checkout = '/checkout';
   static const String orders = '/orders';
   static String orderById(String id) => '/orders/$id';
+  static String cancelOrder(String id) => '/orders/$id/cancel';
   static String orderTracking(String id) => '/tracking/$id';
+  static const String returns = '/returns';
+  static String returnById(String id) => '/returns/$id';
+  static String returnTimeline(String id) => '/returns/$id/timeline';
 }

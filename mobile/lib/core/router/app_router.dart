@@ -11,8 +11,12 @@ import '../../features/commerce/presentation/pages/checkout_page.dart';
 import '../../features/commerce/presentation/pages/order_detail_page.dart';
 import '../../features/commerce/presentation/pages/orders_page.dart';
 import '../../features/commerce/presentation/pages/product_detail_page.dart';
+import '../../features/commerce/presentation/pages/return_request_detail_page.dart';
+import '../../features/commerce/presentation/pages/return_request_page.dart';
+import '../../features/commerce/presentation/pages/wishlist_page.dart';
 import '../../features/home/presentation/pages/home_page.dart';
 import '../../features/notifications/presentation/pages/notifications_page.dart';
+import '../../features/payments/presentation/pages/payments_page.dart';
 import '../../features/profile/presentation/pages/profile_page.dart';
 import '../../features/profile/presentation/pages/tokens_page.dart';
 import '../../features/settings/presentation/pages/settings_page.dart';
@@ -100,6 +104,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                     path: 'checkout',
                     builder: (context, state) => const CheckoutPage(),
                   ),
+                  GoRoute(
+                    path: 'wishlist',
+                    builder: (context, state) => const WishlistPage(),
+                  ),
                 ],
               ),
             ],
@@ -112,10 +120,25 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 builder: (context, state) => const OrdersPage(),
                 routes: [
                   GoRoute(
+                    path: 'returns/:returnRequestId',
+                    builder: (context, state) => ReturnRequestDetailPage(
+                      returnRequestId:
+                          state.pathParameters['returnRequestId'] ?? '',
+                    ),
+                  ),
+                  GoRoute(
                     path: ':orderId',
                     builder: (context, state) => OrderDetailPage(
                       orderId: state.pathParameters['orderId'] ?? '',
                     ),
+                    routes: [
+                      GoRoute(
+                        path: 'return-request',
+                        builder: (context, state) => ReturnRequestPage(
+                          orderId: state.pathParameters['orderId'] ?? '',
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -137,6 +160,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 path: AppConstants.profileRoute,
                 builder: (context, state) => const ProfilePage(),
                 routes: [
+                  GoRoute(
+                    path: 'payments',
+                    builder: (context, state) => const PaymentsPage(),
+                  ),
                   GoRoute(
                     path: 'settings',
                     builder: (context, state) => const SettingsPage(),

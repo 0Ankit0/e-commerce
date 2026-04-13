@@ -63,6 +63,37 @@ class CommerceRepository {
     }
   }
 
+  Future<List<WishlistItemModel>> getWishlist() async {
+    try {
+      final response = await _dioClient.dio.get(ApiEndpoints.wishlist);
+      final payload = response.data as Map<String, dynamic>;
+      final items = payload['items'] as List<dynamic>? ?? const [];
+      return items
+          .map(
+            (item) => WishlistItemModel.fromJson(item as Map<String, dynamic>),
+          )
+          .toList();
+    } catch (e) {
+      throw ErrorHandler.handle(e);
+    }
+  }
+
+  Future<void> addToWishlist(String productId) async {
+    try {
+      await _dioClient.dio.post(ApiEndpoints.wishlistByProduct(productId));
+    } catch (e) {
+      throw ErrorHandler.handle(e);
+    }
+  }
+
+  Future<void> removeFromWishlist(String productId) async {
+    try {
+      await _dioClient.dio.delete(ApiEndpoints.wishlistByProduct(productId));
+    } catch (e) {
+      throw ErrorHandler.handle(e);
+    }
+  }
+
   Future<CartModel> getCart() async {
     try {
       final response = await _dioClient.dio.get(ApiEndpoints.cart);
@@ -229,6 +260,71 @@ class CommerceRepository {
         (response.data as Map<String, dynamic>)['order']
             as Map<String, dynamic>,
       );
+    } catch (e) {
+      throw ErrorHandler.handle(e);
+    }
+  }
+
+  Future<CustomerOrder> cancelOrder(String orderId) async {
+    try {
+      final response = await _dioClient.dio.post(
+        ApiEndpoints.cancelOrder(orderId),
+      );
+      return CustomerOrder.fromJson(
+        (response.data as Map<String, dynamic>)['order']
+            as Map<String, dynamic>,
+      );
+    } catch (e) {
+      throw ErrorHandler.handle(e);
+    }
+  }
+
+  Future<ReturnRequestSubmission> createReturnRequest(
+    ReturnRequestCreatePayload payload,
+  ) async {
+    try {
+      final response = await _dioClient.dio.post(
+        ApiEndpoints.returns,
+        data: payload.toJson(),
+      );
+      return ReturnRequestSubmission.fromJson(
+        response.data as Map<String, dynamic>,
+      );
+    } catch (e) {
+      throw ErrorHandler.handle(e);
+    }
+  }
+
+  Future<ReturnRequestModel> getReturnRequest(String returnRequestId) async {
+    try {
+      final response = await _dioClient.dio.get(
+        ApiEndpoints.returnById(returnRequestId),
+      );
+      return ReturnRequestModel.fromJson(
+        (response.data as Map<String, dynamic>)['return_request']
+            as Map<String, dynamic>,
+      );
+    } catch (e) {
+      throw ErrorHandler.handle(e);
+    }
+  }
+
+  Future<List<ReturnTimelineEvent>> getReturnTimeline(
+    String returnRequestId,
+  ) async {
+    try {
+      final response = await _dioClient.dio.get(
+        ApiEndpoints.returnTimeline(returnRequestId),
+      );
+      final payload = response.data as Map<String, dynamic>;
+      final items = payload['items'] as List<dynamic>? ?? const [];
+      return items
+          .map(
+            (item) => ReturnTimelineEvent.fromJson(
+              item as Map<String, dynamic>,
+            ),
+          )
+          .toList();
     } catch (e) {
       throw ErrorHandler.handle(e);
     }

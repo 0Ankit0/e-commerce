@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, Image, FileText, Pencil, Trash2, X } from 'lucide-react';
+import { Plus, Image as ImageIcon, FileText, Pencil, Trash2, X } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -60,7 +60,7 @@ function AddContentModal({ onClose, onAdd }: { onClose: () => void; onAdd: (item
                       : 'border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--surface-muted)]'
                   }`}
                 >
-                  {t === 'banner' ? <Image className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+                  {t === 'banner' ? <ImageIcon className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
                   {t[0].toUpperCase() + t.slice(1)}
                 </button>
               ))}
@@ -188,7 +188,7 @@ export default function AdminContentPage() {
                 <li key={item.id} className="flex items-center justify-between gap-4 px-6 py-4">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
-                      {item.type === 'banner' ? <Image className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+                      {item.type === 'banner' ? <ImageIcon className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
                     </div>
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-[var(--text-primary)]">{item.title}</p>
@@ -233,4 +233,3 @@ export default function AdminContentPage() {
     </div>
   );
 }
-

@@ -62,6 +62,7 @@ class _HomeTabState extends ConsumerState<HomeTab> {
     final featuredAsync = ref.watch(featuredProductsProvider);
     final categoriesAsync = ref.watch(categoriesProvider);
     final cartAsync = ref.watch(cartProvider);
+    final wishlistCount = ref.watch(wishlistCountProvider);
 
     final theme = Theme.of(context);
     final cartCount = cartAsync.valueOrNull?.totalQuantity ?? 0;
@@ -82,6 +83,14 @@ class _HomeTabState extends ConsumerState<HomeTab> {
           ],
         ),
         actions: [
+          IconButton(
+            onPressed: () => context.push(AppConstants.wishlistRoute),
+            icon: Badge(
+              isLabelVisible: wishlistCount > 0,
+              label: Text(wishlistCount > 99 ? '99+' : '$wishlistCount'),
+              child: const Icon(Icons.favorite_border),
+            ),
+          ),
           IconButton(
             onPressed: () => context.push(AppConstants.cartRoute),
             icon: Badge(

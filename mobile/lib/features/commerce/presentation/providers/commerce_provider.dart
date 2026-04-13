@@ -35,6 +35,23 @@ final productDetailProvider = FutureProvider.family<CatalogProduct, String>((
   return ref.watch(commerceRepositoryProvider).getProduct(productId);
 });
 
+final wishlistProvider = FutureProvider<List<WishlistItemModel>>((ref) async {
+  return ref.watch(commerceRepositoryProvider).getWishlist();
+});
+
+final wishlistCountProvider = Provider<int>((ref) {
+  return ref.watch(wishlistProvider).valueOrNull?.length ?? 0;
+});
+
+final wishlistProductIdsProvider = Provider<Set<String>>((ref) {
+  return ref
+          .watch(wishlistProvider)
+          .valueOrNull
+          ?.map((item) => item.productId)
+          .toSet() ??
+      <String>{};
+});
+
 final cartProvider = FutureProvider<CartModel>((ref) async {
   return ref.watch(commerceRepositoryProvider).getCart();
 });
@@ -67,4 +84,24 @@ final orderTrackingProvider = FutureProvider.family<OrderTracking, String>((
   orderId,
 ) async {
   return ref.watch(commerceRepositoryProvider).getOrderTracking(orderId);
+});
+
+final returnRequestProvider =
+    FutureProvider.family<ReturnRequestModel, String>((
+  ref,
+  returnRequestId,
+) async {
+  return ref
+      .watch(commerceRepositoryProvider)
+      .getReturnRequest(returnRequestId);
+});
+
+final returnRequestTimelineProvider =
+    FutureProvider.family<List<ReturnTimelineEvent>, String>((
+  ref,
+  returnRequestId,
+) async {
+  return ref
+      .watch(commerceRepositoryProvider)
+      .getReturnTimeline(returnRequestId);
 });

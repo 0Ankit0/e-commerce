@@ -38,6 +38,18 @@ interface CategoryPayload {
   expected_updated_at?: string;
 }
 
+export interface VendorInventoryItem {
+  product_id: string;
+  variant_id: string;
+  sku: string;
+  quantity: number;
+  reserved_qty: number;
+  available_qty: number;
+  reorder_level: number;
+  reorder_qty: number;
+  low_stock: boolean;
+}
+
 function shouldRetryCatalogQuery(failureCount: number, error: unknown) {
   if (axios.isAxiosError(error)) {
     const status = error.response?.status;
@@ -125,6 +137,44 @@ export function useVendorProducts() {
     },
     staleTime: 60_000,
     retry: shouldRetryCatalogQuery,
+  });
+}
+
+export function useVendorInventorySummary() {
+  return useQuery({
+    queryKey: ['vendor-inventory-summary'],
+    queryFn: async () => {
+      const response = await apiClient.get<CatalogListResponse<VendorInventoryItem>>('/vendor/inventory/summary');
+      return response.data;
+    },
+    staleTime: 30_000,
+    retry: shouldRetryCatalogQuery,
+  });
+}
+
+export function useUpdateVendorInventory() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: {
+      variantId: string;
+      quantity: number;
+      reorderLevel: number;
+      reorderQty: number;
+    }) => {
+      const response = await apiClient.patch(`/vendor/inventory/${payload.variantId}`, {
+        quantity: payload.quantity,
+        reorder_level: payload.reorderLevel,
+        reorder_qty: payload.reorderQty,
+      });
+      return response.data;
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['vendor-inventory-summary'] }),
+        queryClient.invalidateQueries({ queryKey: ['vendor-products'] }),
+      ]);
+    },
   });
 }
 

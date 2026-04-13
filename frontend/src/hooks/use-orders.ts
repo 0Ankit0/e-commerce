@@ -19,6 +19,34 @@ interface ReturnPayload {
   refundMethod?: string;
 }
 
+export interface VendorShipmentSummary {
+  id: string;
+  awb: string;
+  status: string;
+  current_location: string;
+  eta: string | null;
+}
+
+export interface VendorOrderSummary {
+  id: string;
+  order_id: string;
+  vendor_order_number: string;
+  status: string;
+  subtotal: number;
+  commission: number;
+  vendor_amount: number;
+  shipment: VendorShipmentSummary | null;
+}
+
+export interface AdminLiveFeedItem {
+  source: string;
+  event_type: string;
+  message: string;
+  actor_user_id: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
 export function useOrders(enabled = true) {
   return useQuery({
     queryKey: ['orders'],
@@ -137,6 +165,133 @@ export function useReturnDetail(returnRequestId: string, enabled = true) {
       return response.data.return_request;
     },
     enabled: enabled && Boolean(returnRequestId),
+  });
+}
+
+export function useVendorOrders() {
+  return useQuery({
+    queryKey: ['vendor-orders'],
+    queryFn: async () => {
+      const response = await apiClient.get<{ items: VendorOrderSummary[]; total: number }>('/vendor/orders');
+      return response.data;
+    },
+    staleTime: 15_000,
+  });
+}
+
+export function useUpdateVendorOrderStatus() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: { vendorOrderId: string; status: string; location?: string; remarks?: string }) => {
+      const response = await apiClient.post(`/vendor/orders/${payload.vendorOrderId}/status`, {
+        status: payload.status,
+        location: payload.location ?? '',
+        remarks: payload.remarks ?? '',
+      });
+      return response.data;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['vendor-orders'] });
+    },
+  });
+}
+
+export function useRejectVendorOrder() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: { vendorOrderId: string; reason: string }) => {
+      const response = await apiClient.post(`/vendor/orders/${payload.vendorOrderId}/reject`, {
+        reason: payload.reason,
+      });
+      return response.data;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['vendor-orders'] });
+    },
+  });
+}
+
+export function useCreateVendorPickupJob() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: { vendorOrderId: string; branchId?: string }) => {
+      const response = await apiClient.post(`/vendor/orders/${payload.vendorOrderId}/pickup-jobs`, null, {
+        params: payload.branchId ? { branch_id: payload.branchId } : undefined,
+      });
+      return response.data as { pickup_job_id: string };
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['vendor-orders'] });
+    },
+  });
+}
+
+export function useGenerateVendorShipmentLabel() {
+  return useMutation({
+    mutationFn: async (payload: { shipmentId: string; force?: boolean }) => {
+      const response = await apiClient.post(`/vendor/shipments/${payload.shipmentId}/label`, null, {
+        params: payload.force ? { force: true } : undefined,
+      });
+      return response.data as {
+        shipment_id: string;
+        awb: string;
+        label_url: string;
+        generated_at: string;
+        label: Record<string, unknown>;
+      };
+    },
+  });
+}
+
+export function useAdminOrders(query?: string) {
+  return useQuery({
+    queryKey: ['admin-orders', query ?? ''],
+    queryFn: async () => {
+      const response = await apiClient.get<{ items: CustomerOrder[]; total: number }>('/admin/orders', {
+        params: query ? { q: query } : undefined,
+      });
+      return response.data;
+    },
+    staleTime: 10_000,
+  });
+}
+
+export function useAdminOrderLiveFeed(limit = 50) {
+  return useQuery({
+    queryKey: ['admin-order-live-feed', limit],
+    queryFn: async () => {
+      const response = await apiClient.get<{ items: AdminLiveFeedItem[]; total: number }>('/admin/orders/live-feed', {
+        params: { limit },
+      });
+      return response.data;
+    },
+    staleTime: 10_000,
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: true,
+  });
+}
+
+export function useCreateAdminOrderNote() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: { orderId: string; note: string; noteType?: string; isCustomerVisible?: boolean }) => {
+      const response = await apiClient.post(`/admin/orders/${payload.orderId}/notes`, {
+        note: payload.note,
+        note_type: payload.noteType ?? 'internal',
+        is_customer_visible: payload.isCustomerVisible ?? false,
+      });
+      return response.data as { note_id: string };
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['admin-orders'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-order-live-feed'] }),
+      ]);
+    },
   });
 }
 

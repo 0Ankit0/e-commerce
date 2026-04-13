@@ -25,6 +25,7 @@ class _ProductDetailPageState extends ConsumerState<ProductDetailPage> {
   String? _selectedVariantId;
   int _quantity = 1;
   bool _submitting = false;
+  bool _wishlistSubmitting = false;
 
   Future<void> _addToCart(CatalogProduct product) async {
     final variant = product.variants.firstWhere(
@@ -59,16 +60,78 @@ class _ProductDetailPageState extends ConsumerState<ProductDetailPage> {
     }
   }
 
+  Future<void> _toggleWishlist({
+    required CatalogProduct product,
+    required bool isWishlisted,
+  }) async {
+    setState(() => _wishlistSubmitting = true);
+    try {
+      final repository = ref.read(commerceRepositoryProvider);
+      if (isWishlisted) {
+        await repository.removeFromWishlist(product.id);
+      } else {
+        await repository.addToWishlist(product.id);
+      }
+      ref.invalidate(wishlistProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isWishlisted ? 'Removed from wishlist' : 'Added to wishlist',
+            ),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(ErrorHandler.handle(e).message),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _wishlistSubmitting = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final productAsync = ref.watch(productDetailProvider(widget.productId));
     final cartAsync = ref.watch(cartProvider);
+    final wishlistProductIds = ref.watch(wishlistProductIdsProvider);
     final cartCount = cartAsync.valueOrNull?.totalQuantity ?? 0;
+    final product = productAsync.valueOrNull;
+    final isWishlisted =
+        product != null && wishlistProductIds.contains(product.id);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Product'),
         actions: [
+          IconButton(
+            onPressed: product == null || _wishlistSubmitting
+                ? null
+                : () => _toggleWishlist(
+                      product: product,
+                      isWishlisted: isWishlisted,
+                    ),
+            tooltip: isWishlisted ? 'Remove from wishlist' : 'Add to wishlist',
+            icon: _wishlistSubmitting
+                ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    isWishlisted ? Icons.favorite : Icons.favorite_border,
+                    color: isWishlisted ? Colors.red : null,
+                  ),
+          ),
           IconButton(
             onPressed: () => context.push(AppConstants.cartRoute),
             icon: Badge(

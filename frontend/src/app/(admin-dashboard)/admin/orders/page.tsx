@@ -5,53 +5,41 @@ import { Plus, ShoppingBag, X } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { StorefrontState } from '@/components/storefront/storefront-state';
+import { formatCurrency, formatDateLabel, titleCaseStatus } from '@/lib/commerce-format';
+import { useAdminOrders, useCreateAdminOrderNote } from '@/hooks/use-orders';
 import {
   isSupportedOrderReference,
   normalizeOrderReference,
   ORDER_REFERENCE_PLACEHOLDER,
 } from '@/lib/order-reference';
 
-type OrderStatus = 'pending' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
-
-interface OrderItem {
-  id: string;
-  orderNumber: string;
-  customer: string;
-  vendor: string;
-  amount: string;
-  status: OrderStatus;
-  placedAt: string;
-}
-
-const INITIAL_ORDERS: OrderItem[] = [
-  { id: '1', orderNumber: 'ORD-2025-0041', customer: 'Jane Cooper', vendor: 'Artisan Crafts Co.', amount: '$84.00', status: 'processing', placedAt: '2025-03-22' },
-  { id: '2', orderNumber: 'ORD-2025-0040', customer: 'Wade Warren', vendor: 'Tech Gadgets Ltd.', amount: '$159.98', status: 'shipped', placedAt: '2025-03-21' },
-  { id: '3', orderNumber: 'ORD-2025-0039', customer: 'Esther Howard', vendor: 'Green Living Store', amount: '$34.50', status: 'delivered', placedAt: '2025-03-18' },
-  { id: '4', orderNumber: 'ORD-2025-0038', customer: 'Cameron Williamson', vendor: 'Vintage Finds', amount: '$120.00', status: 'cancelled', placedAt: '2025-03-15' },
-  { id: '5', orderNumber: 'ORD-2025-0037', customer: 'Brooklyn Simmons', vendor: 'Artisan Crafts Co.', amount: '$45.00', status: 'pending', placedAt: '2025-03-24' },
-];
-
-const STATUS_STYLES: Record<OrderStatus, string> = {
-  pending: 'bg-[var(--surface-muted)] text-[var(--text-secondary)]',
-  processing: 'bg-[var(--warning-soft)] text-[var(--text-secondary)]',
-  shipped: 'bg-[var(--accent-soft)] text-[var(--accent)]',
-  delivered: 'bg-[var(--success-soft)] text-emerald-700',
-  cancelled: 'bg-[var(--danger-soft)] text-red-700',
-};
-
-function AddOrderNoteModal({ onClose }: { onClose: () => void }) {
+function AddOrderNoteModal({
+  onClose,
+  onSubmit,
+  isLoading,
+}: {
+  onClose: () => void;
+  onSubmit: (payload: { orderId: string; note: string }) => Promise<void>;
+  isLoading: boolean;
+}) {
   const [orderId, setOrderId] = useState('');
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isSupportedOrderReference(orderId)) {
       setError('Use an order number (current/legacy) or hashid.');
       return;
     }
     setError('');
-    onClose();
+    try {
+      await onSubmit({ orderId: normalizeOrderReference(orderId), note });
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save this note.');
+    }
   };
 
   return (
@@ -85,7 +73,7 @@ function AddOrderNoteModal({ onClose }: { onClose: () => void }) {
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <Button variant="outline" type="button" onClick={onClose}>Cancel</Button>
-            <Button type="submit">Save note</Button>
+            <Button type="submit" isLoading={isLoading}>Save note</Button>
           </div>
         </form>
       </div>
@@ -94,25 +82,69 @@ function AddOrderNoteModal({ onClose }: { onClose: () => void }) {
 }
 
 export default function AdminOrdersPage() {
-  const [orders] = useState<OrderItem[]>(INITIAL_ORDERS);
+  const { data, isLoading, isError, refetch } = useAdminOrders();
+  const createNote = useCreateAdminOrderNote();
   const [showAdd, setShowAdd] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<'all' | OrderStatus>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | string>('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const orders = data?.items ?? [];
 
   const normalizedSearch = searchTerm.trim();
   const filteredByStatus = statusFilter === 'all' ? orders : orders.filter((o) => o.status === statusFilter);
   const filtered = !normalizedSearch
-    ? filteredByStatus
-    : filteredByStatus.filter((order) => {
-        const normalizedOrderNumber = order.orderNumber.toUpperCase();
+      ? filteredByStatus
+      : filteredByStatus.filter((order) => {
+        const normalizedOrderNumber = order.order_number.toUpperCase();
+        const products = order.items.map((item) => item.product_name).join(' ').toUpperCase();
         if (isSupportedOrderReference(normalizedSearch)) {
           const normalizedRef = normalizeOrderReference(normalizedSearch);
           return normalizedOrderNumber === normalizedRef || order.id === normalizedRef;
         }
-        return normalizedOrderNumber.includes(normalizedSearch.toUpperCase());
+        return normalizedOrderNumber.includes(normalizedSearch.toUpperCase()) || products.includes(normalizedSearch.toUpperCase());
       });
 
   const activeCount = orders.filter((o) => !['delivered', 'cancelled'].includes(o.status)).length;
+
+  async function handleCreateNote(payload: { orderId: string; note: string }) {
+    await createNote.mutateAsync({
+      orderId: payload.orderId,
+      note: payload.note,
+      noteType: 'internal',
+      isCustomerVisible: false,
+    });
+  }
+
+  if (isLoading) {
+    return (
+      <Card className="rounded-[32px]">
+        <CardHeader>
+          <CardTitle>Order oversight</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3" role="status" aria-label="Loading admin orders">
+          {Array.from({ length: 5 }).map((_, index) => (
+            <div
+              key={index}
+              className="h-20 animate-pulse rounded-[22px] border border-[var(--border-color)] bg-[var(--surface-muted)]"
+            />
+          ))}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (isError) {
+    return (
+      <StorefrontState
+        eyebrow="Admin console"
+        title="Order oversight unavailable"
+        description="The admin orders queue could not be loaded from the live backend."
+        actionLabel="Retry"
+        onAction={() => {
+          void refetch();
+        }}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -159,7 +191,7 @@ export default function AdminOrdersPage() {
               className="w-full sm:w-72"
             />
             <div className="flex flex-wrap rounded-xl border border-[var(--border-color)] bg-white p-1">
-              {(['all', 'pending', 'processing', 'shipped', 'delivered', 'cancelled'] as const).map((f) => (
+              {(['all', 'pending', 'processing', 'packed', 'shipped', 'delivered', 'cancelled'] as const).map((f) => (
                 <button
                   key={f}
                   type="button"
@@ -191,15 +223,17 @@ export default function AdminOrdersPage() {
                       <ShoppingBag className="h-5 w-5" />
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-[var(--text-primary)]">{order.orderNumber}</p>
-                      <p className="truncate text-xs text-[var(--text-muted)]">{order.customer} · {order.vendor} · {order.amount}</p>
+                      <p className="text-sm font-semibold text-[var(--text-primary)]">{order.order_number}</p>
+                      <p className="truncate text-xs text-[var(--text-muted)]">
+                        {order.items.map((item) => item.product_name).join(', ') || 'Order items unavailable'} · {formatCurrency(order.total)}
+                      </p>
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_STYLES[order.status]}`}>
-                      {order.status}
+                    <span className="rounded-full bg-[var(--surface-muted)] px-2.5 py-1 text-xs font-semibold text-[var(--text-secondary)]">
+                      {titleCaseStatus(order.status)}
                     </span>
-                    <span className="text-xs text-[var(--text-muted)]">{order.placedAt}</span>
+                    <span className="text-xs text-[var(--text-muted)]">{formatDateLabel(order.created_at)}</span>
                   </div>
                 </li>
               ))}
@@ -208,7 +242,13 @@ export default function AdminOrdersPage() {
         </CardContent>
       </Card>
 
-      {showAdd && <AddOrderNoteModal onClose={() => setShowAdd(false)} />}
+      {showAdd && (
+        <AddOrderNoteModal
+          onClose={() => setShowAdd(false)}
+          onSubmit={handleCreateNote}
+          isLoading={createNote.isPending}
+        />
+      )}
     </div>
   );
 }

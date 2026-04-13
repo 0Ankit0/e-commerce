@@ -16,11 +16,17 @@ class AppConstants {
   static const String profileRoute = '/home/profile';
   static const String settingsRoute = '/home/profile/settings';
   static const String tokensRoute = '/home/profile/settings/tokens';
+  static const String paymentsRoute = '/home/profile/payments';
   static const String cartRoute = '/home/cart';
   static const String checkoutRoute = '/home/checkout';
+  static const String wishlistRoute = '/home/wishlist';
 
   static String productRoute(String productId) => '/home/products/$productId';
   static String orderDetailRoute(String orderId) => '/home/orders/$orderId';
+  static String orderReturnRequestRoute(String orderId) =>
+      '/home/orders/$orderId/return-request';
+  static String returnRequestRoute(String returnRequestId) =>
+      '/home/orders/returns/$returnRequestId';
 
   // Social auth — the backend redirects here after OAuth; the WebView intercepts it
   static const String socialAuthCallbackPrefix = '/auth-callback';

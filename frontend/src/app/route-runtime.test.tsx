@@ -1,5 +1,6 @@
 import { act, type ReactElement, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import UserDashboardPage from './(user-dashboard)/dashboard/page';
 import AdminDashboardPage from './(admin-dashboard)/admin/dashboard/page';
@@ -54,7 +55,16 @@ function render(element: ReactElement) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
-  act(() => { root.render(element); });
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  act(() => {
+    root.render(<QueryClientProvider client={queryClient}>{element}</QueryClientProvider>);
+  });
   return { container, unmount() { act(() => root.unmount()); container.remove(); } };
 }
 
