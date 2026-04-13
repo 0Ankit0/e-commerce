@@ -1,3 +1,24 @@
+x-backend-env: &backend-env
+  APP_ENV: production
+  DEBUG: "False"
+  TESTING: "False"
+  POSTGRES_SERVER: db
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  POSTGRES_DB: template
+  DATABASE_URL: postgresql+asyncpg://postgres:postgres@db/template
+  SYNC_DATABASE_URL: postgresql://postgres:postgres@db/template
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/0
+  BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-http://localhost:3000}
+  TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1}
+  PROXY_TRUSTED_HOSTS: ${PROXY_TRUSTED_HOSTS:-*}
+  FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
+  SERVER_HOST: ${SERVER_HOST:-http://localhost:8000}
+  FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+  WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-http://localhost:3000}
+
 services:
   db:
     image: postgres:16-alpine
@@ -6,78 +27,108 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d template"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   backend:
+    image: ecommerce-backend:local
     build:
       context: ./backend
-    environment:
-      DEBUG: "False"
-      TESTING: "False"
-      POSTGRES_SERVER: db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: template
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db/template
-      SYNC_DATABASE_URL: postgresql://postgres:postgres@db/template
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
-      BACKEND_CORS_ORIGINS: http://localhost:3000
-      SERVER_HOST: http://localhost:8000
-      FRONTEND_URL: http://localhost:3000
-    command: >
-      sh -c "uv run alembic upgrade head &&
-             uv run uvicorn src.main:app --host 0.0.0.0 --port 8000"
+      dockerfile: Dockerfile
+    environment: *backend-env
+    command: >-
+      sh -c "alembic upgrade head &&
+             exec uvicorn src.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
+    volumes:
+      - backend_media:/app/media
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/docs')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   worker:
+    image: ecommerce-backend:local
     build:
       context: ./backend
-    environment:
-      DEBUG: "False"
-      TESTING: "False"
-      POSTGRES_SERVER: db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: template
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db/template
-      SYNC_DATABASE_URL: postgresql://postgres:postgres@db/template
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
-    command: uv run celery -A src.apps.core.celery_app worker --loglevel=info
+      dockerfile: Dockerfile
+    environment: *backend-env
+    command: ["celery", "-A", "src.apps.core.celery_app", "worker", "--loglevel=info"]
     depends_on:
-      - backend
-      - redis
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
   frontend:
-    image: node:20-alpine
-    working_dir: /app
-    volumes:
-      - ./frontend:/app
+    image: ecommerce-frontend:local
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}
+        NEXT_PUBLIC_ANALYTICS_ENABLED: ${NEXT_PUBLIC_ANALYTICS_ENABLED:-false}
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
-      NEXT_PUBLIC_ANALYTICS_ENABLED: "false"
-    command: sh -c "npm ci && npm run dev -- --hostname 0.0.0.0"
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}
+      NEXT_PUBLIC_ANALYTICS_ENABLED: ${NEXT_PUBLIC_ANALYTICS_ENABLED:-false}
     ports:
       - "3000:3000"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
 volumes:
   postgres_data:
   redis_data:
+  backend_media:

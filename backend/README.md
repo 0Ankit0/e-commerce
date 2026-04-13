@@ -29,6 +29,22 @@ uv run uvicorn src.main:app --reload
 
 The app creates tables automatically in test mode. For local development, point `DATABASE_URL` and `SYNC_DATABASE_URL` at SQLite or PostgreSQL.
 
+## Container Runtime
+
+From the repository root, the compose stack now builds the backend image once for both the API and Celery worker, runs migrations before booting the API, and persists local media uploads in a named volume:
+
+```bash
+docker compose up --build backend worker db redis
+```
+
+For production-like deployments, layer the production override so public hosts and origins must be set explicitly:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+```
+
+Set `TRUSTED_HOSTS`, `BACKEND_CORS_ORIGINS`, `SERVER_HOST`, `FRONTEND_URL`, and `WS_ALLOWED_ORIGINS` before using the production override.
+
 ## Workers And Infra
 
 - Redis/Celery back async notifications and background tasks.
