@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { CheckCircle2, Heart, Minus, Plus, Star, Truck } from 'lucide-react';
-import { useCatalogProduct } from '@/hooks/use-catalog';
+import { useCatalogProduct, useCatalogRecommendations } from '@/hooks/use-catalog';
 import {
   useAddToCart,
   useAddToWishlist,
@@ -15,6 +15,7 @@ import {
 } from '@/hooks/use-commerce';
 import { SiteHeader } from '@/components/storefront/site-header';
 import { SiteFooter } from '@/components/storefront/site-footer';
+import { ProductCard } from '@/components/storefront/product-card';
 import { StorefrontState } from '@/components/storefront/storefront-state';
 import { formatCurrency } from '@/lib/commerce-format';
 import { useAuthStore } from '@/store/auth-store';
@@ -25,6 +26,16 @@ export default function ProductDetailPage() {
   const { isAuthenticated } = useAuthStore();
   const { getErrorMessage } = useApiErrorMessage();
   const { data: product, isLoading, isError, error, refetch } = useCatalogProduct(productId);
+  const {
+    data: recommendationsData,
+    isLoading: recommendationsLoading,
+    isError: recommendationsError,
+    refetch: refetchRecommendations,
+  } = useCatalogRecommendations('product_detail', {
+    productId,
+    limit: 4,
+    enabled: Boolean(productId),
+  });
   const { data: wishlistData } = useWishlist(isAuthenticated);
   const addToCart = useAddToCart();
   const addToWishlist = useAddToWishlist();
@@ -33,6 +44,7 @@ export default function ProductDetailPage() {
   const [quantity, setQuantity] = useState(1);
   const [feedback, setFeedback] = useState<string | null>(null);
   const heroImage = product?.images.find((image) => image.is_primary)?.url ?? product?.images[0]?.url;
+  const recommendedProducts = recommendationsData?.items ?? [];
   const variants = useMemo(() => product?.variants ?? [], [product]);
   const selectedVariant = useMemo(
     () => variants.find((variant) => variant.id === selectedVariantId) ?? variants[0] ?? null,
@@ -325,6 +337,46 @@ export default function ProductDetailPage() {
             </div>
           </div>
         </div>
+
+        <section className="mt-12">
+          <div className="mb-6 flex items-end justify-between gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-[var(--text-muted)]">Recommended next</p>
+              <h2 className="mt-2 font-[family:var(--font-display)] text-4xl text-[var(--text-primary)]">
+                Similar products shaped by live shopping signals.
+              </h2>
+            </div>
+          </div>
+          {recommendationsLoading ? (
+            <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+              {[1, 2, 3, 4].map((item) => (
+                <div key={item} className="h-[360px] animate-pulse rounded-[28px] bg-white" />
+              ))}
+            </div>
+          ) : recommendationsError ? (
+            <StorefrontState
+              eyebrow="Recommendations"
+              title="Related products unavailable"
+              description="The product detail page could not load recommendation results right now."
+              actionLabel="Retry"
+              onAction={() => {
+                void refetchRecommendations();
+              }}
+            />
+          ) : recommendedProducts.length === 0 ? (
+            <StorefrontState
+              eyebrow="Recommendations"
+              title="No related products yet"
+              description="Recommendation results will appear here after the catalog collects more product and shopping signals."
+            />
+          ) : (
+            <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+              {recommendedProducts.map((recommendedProduct) => (
+                <ProductCard key={recommendedProduct.id} product={recommendedProduct} />
+              ))}
+            </div>
+          )}
+        </section>
       </main>
       <SiteFooter />
     </div>

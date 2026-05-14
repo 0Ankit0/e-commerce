@@ -35,3 +35,6 @@ Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_WS_URL` before using the production o
 - Customer portal routes under `src/app/(user-dashboard)`
 - Vendor portal routes under `src/app/(vendor-dashboard)`
 - Social auth provider discovery via `/auth/social/providers/`
+- Storefront discovery hooks live in `src/hooks/use-catalog.ts` and now cover full-text search, autocomplete, recommendation feeds, and recommendation-event tracking.
+- `src/app/shop/page.tsx` consumes ranked search and autocomplete suggestions.
+- `src/app/products/[productId]/page.tsx` and `src/app/(user-dashboard)/dashboard/page.tsx` render recommendation rails backed by `/recommendations`.

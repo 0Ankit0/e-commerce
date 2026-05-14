@@ -12,7 +12,7 @@ const useOrdersMock = vi.fn();
 const useWishlistMock = vi.fn();
 const useCartMock = vi.fn();
 const useNotificationsMock = vi.fn();
-const useFeaturedProductsMock = vi.fn();
+const useCatalogRecommendationsMock = vi.fn();
 const useAuthStoreMock = vi.fn();
 const useListUsersMock = vi.fn();
 const useVendorProductsMock = vi.fn();
@@ -37,7 +37,7 @@ vi.mock('@/hooks/use-commerce', () => ({
 }));
 vi.mock('@/hooks/use-notifications', () => ({ useNotifications: (...args: unknown[]) => useNotificationsMock(...args) }));
 vi.mock('@/hooks/use-catalog', () => ({
-  useFeaturedProducts: (...args: unknown[]) => useFeaturedProductsMock(...args),
+  useCatalogRecommendations: (...args: unknown[]) => useCatalogRecommendationsMock(...args),
   useVendorProducts: (...args: unknown[]) => useVendorProductsMock(...args),
 }));
 vi.mock('@/hooks/use-users', () => ({ useListUsers: (...args: unknown[]) => useListUsersMock(...args) }));
@@ -76,7 +76,7 @@ describe('major route runtime states', () => {
     useWishlistMock.mockReturnValue({ data: { items: [] } });
     useCartMock.mockReturnValue({ data: { items: [] } });
     useNotificationsMock.mockReturnValue(queryState({ data: { items: [], unread_count: 0 } }));
-    useFeaturedProductsMock.mockReturnValue(queryState({ data: { items: [], total: 0 } }));
+    useCatalogRecommendationsMock.mockReturnValue(queryState({ data: { strategy: 'ml_ranker_v2', items: [] } }));
     useListUsersMock.mockReturnValue(queryState({ data: { items: [], total: 0 } }));
     useVendorProductsMock.mockReturnValue(queryState({ data: { items: [], total: 0 } }));
     useSearchParamsMock.mockReturnValue(new URLSearchParams('t=test-token'));
