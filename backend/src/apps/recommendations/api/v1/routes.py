@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
-from src.apps.iam.api.deps import get_db
+from src.apps.iam.api.deps import get_db, get_optional_current_user
 from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import decode_id_or_404
 from src.apps.recommendations.models import RecommendationEventType, RecommendationPlacement
@@ -23,24 +23,12 @@ class RecommendationEventRequest(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
-async def _optional_current_user(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-) -> User | None:
-    from src.apps.iam.api.deps import get_current_user as strict_get_current_user
-
-    try:
-        return await strict_get_current_user(request=request, credentials=None, db=db)  # type: ignore[arg-type]
-    except Exception:
-        return None
-
-
 @router.get("/recommendations")
 async def fetch_recommendations(
     type: RecommendationPlacement,
     limit: int = 10,
     product_id: str | None = None,
-    current_user: User | None = Depends(_optional_current_user),
+    current_user: User | None = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     recommendations = await get_recommendations(
@@ -56,7 +44,7 @@ async def fetch_recommendations(
 @router.post("/recommendations/events", status_code=201)
 async def track_recommendation_event(
     payload: RecommendationEventRequest,
-    current_user: User | None = Depends(_optional_current_user),
+    current_user: User | None = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_db),
     analytics: AnalyticsService = Depends(get_analytics),
 ):

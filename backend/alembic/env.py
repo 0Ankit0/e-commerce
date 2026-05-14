@@ -52,7 +52,7 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     connectable = create_engine(
-        settings.SYNC_DATABASE_URL or "sqlite:///./test.db",
+        settings.SYNC_DATABASE_URL,
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:

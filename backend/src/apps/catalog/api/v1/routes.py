@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import io
 import json
-from difflib import SequenceMatcher
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -15,6 +14,12 @@ from sqlmodel import select
 from src.apps.analytics.dependencies import get_analytics
 from src.apps.analytics.service import AnalyticsService
 from src.apps.core.time import utc_now
+from src.apps.catalog.discovery import (
+    autocomplete_catalog_products,
+    delete_product_search_document,
+    query_catalog_products,
+    sync_product_search_document,
+)
 from src.apps.catalog.models import (
     Brand,
     Category,
@@ -37,11 +42,17 @@ from src.apps.catalog.services import (
     serialize_product,
 )
 from src.apps.commerce.models import ProductVariantPriceHistory, WishlistItem
-from src.apps.iam.api.deps import get_current_active_superuser, get_current_user, get_db
+from src.apps.iam.api.deps import (
+    get_current_active_superuser,
+    get_current_user,
+    get_db,
+    get_optional_current_user,
+)
 from src.apps.iam.models.user import User
 from src.apps.iam.utils.hashid import decode_id, decode_id_or_404, encode_id
 from src.apps.notification.services.commerce_events import notify_low_stock, notify_wishlist_price_drop
-from src.apps.recommendations.models import RecommendationEventType, UserProductEvent
+from src.apps.recommendations.models import RecommendationEventType, RecommendationPlacement
+from src.apps.recommendations.services import record_recommendation_event
 from src.apps.vendors.models import Vendor
 from src.apps.vendors.services import ensure_vendor_active, get_vendor_for_user
 
@@ -290,6 +301,35 @@ async def _wishlist_watchers_for_product(product_id: int, db: AsyncSession) -> l
     return sorted({item.user_id for item in wishlist_items})
 
 
+def _build_search_event_metadata(payload: dict[str, object]) -> dict[str, object]:
+    items = payload.get("items", [])
+    if not isinstance(items, list):
+        return {}
+
+    product_ids: list[int] = []
+    category_ids: list[str] = []
+    brand_ids: list[str] = []
+    for item in items[:5]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            product_ids.append(decode_id_or_404(str(item.get("id"))))
+        except HTTPException:
+            continue
+        category = item.get("category")
+        if isinstance(category, dict) and category.get("id"):
+            category_ids.append(str(category["id"]))
+        brand = item.get("brand")
+        if isinstance(brand, dict) and brand.get("id"):
+            brand_ids.append(str(brand["id"]))
+
+    return {
+        "product_ids": product_ids,
+        "category_ids": category_ids,
+        "brand_ids": brand_ids,
+    }
+
+
 async def _preview_product_import(
     *,
     csv_content: str,
@@ -358,6 +398,7 @@ async def _preview_product_import(
     job.summary_json = json.dumps({"errors": errors[:20]})
 
     created_products: list[str] = []
+    created_product_ids: list[int] = []
     if not dry_run:
         for product_slug, grouped_rows in grouped.items():
             first_row = grouped_rows[0]
@@ -398,7 +439,11 @@ async def _preview_product_import(
                     )
                 )
             created_products.append(product.slug)
+            if product.id is not None:
+                created_product_ids.append(product.id)
         vendor.product_count += len(created_products)
+        for created_product_id in created_product_ids:
+            await sync_product_search_document(created_product_id, db)
 
     return {
         "job_id": encode_id(job.id or 0),
@@ -793,6 +838,8 @@ async def create_product(
         )
         db.add(Inventory(variant_id=variant.id, quantity=variant_payload.quantity))
     vendor.product_count += 1
+    if product.id is not None:
+        await sync_product_search_document(product.id, db)
     await db.commit()
     await db.refresh(product)
     return {"product": await serialize_product(product, db)}
@@ -990,6 +1037,8 @@ async def update_vendor_product(
                     "reorder_level": inventory.reorder_level,
                 }
             )
+    if product.id is not None:
+        await sync_product_search_document(product.id, db)
     await db.commit()
     for price_drop in price_drop_notifications:
         await notify_wishlist_price_drop(db=db, **price_drop)
@@ -1010,6 +1059,8 @@ async def archive_vendor_product(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     product.status = ProductStatus.ARCHIVED
     product.updated_at = utc_now()
+    if product.id is not None:
+        await delete_product_search_document(product.id, db)
     await db.commit()
     return {"success": True}
 
@@ -1026,6 +1077,8 @@ async def delete_vendor_product(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     product.status = ProductStatus.ARCHIVED
     product.updated_at = utc_now()
+    if product.id is not None:
+        await delete_product_search_document(product.id, db)
     await db.commit()
     return {"success": True}
 
@@ -1141,6 +1194,8 @@ async def approve_product(
     product.status = ProductStatus.ACTIVE
     product.published_at = utc_now()
     product.updated_at = utc_now()
+    if product.id is not None:
+        await sync_product_search_document(product.id, db)
     await db.commit()
     return {"product": await serialize_product(product, db)}
 
@@ -1156,6 +1211,8 @@ async def reject_product(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     product.status = ProductStatus.REJECTED
     product.updated_at = utc_now()
+    if product.id is not None:
+        await delete_product_search_document(product.id, db)
     await db.commit()
     return {"product": await serialize_product(product, db)}
 
@@ -1176,55 +1233,39 @@ async def list_products(
     sort: str = Query(default="newest"),
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=20, ge=1, le=100),
+    current_user: User | None = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Product).where(Product.status == ProductStatus.ACTIVE)
+    payload = await query_catalog_products(
+        q=q,
+        category=category,
+        brand=brand,
+        vendor_id=vendor_id,
+        in_stock=in_stock,
+        min_price=min_price,
+        max_price=max_price,
+        min_rating=min_rating,
+        is_featured=is_featured,
+        attribute_key=attribute_key,
+        attribute_value=attribute_value,
+        sort=sort,
+        page=page,
+        limit=limit,
+        user_id=current_user.id if current_user else None,
+        db=db,
+    )
     if q:
-        query = query.where(
-            (Product.name.ilike(f"%{q}%")) |
-            (Product.short_description.ilike(f"%{q}%")) |
-            (Product.description.ilike(f"%{q}%"))
+        await record_recommendation_event(
+            user_id=current_user.id if current_user else None,
+            product_id=None,
+            event_type=RecommendationEventType.SEARCH,
+            placement=RecommendationPlacement.SEARCH,
+            query_text=q,
+            metadata=_build_search_event_metadata(payload),
+            db=db,
         )
-    if category:
-        query = query.where(Product.category_id == decode_id_or_404(category))
-    if brand:
-        query = query.where(Product.brand_id == decode_id_or_404(brand))
-    if vendor_id:
-        query = query.where(Product.vendor_id == decode_id_or_404(vendor_id))
-    if min_rating is not None:
-        query = query.where(Product.avg_rating >= min_rating)
-    if is_featured is not None:
-        query = query.where(Product.is_featured == is_featured)
-    products = (await db.execute(query.order_by(Product.created_at.desc()))).scalars().all()
-    filtered: list[dict[str, object]] = []
-    for product in products:
-        serialized = await serialize_product(product, db, include_variants=False)
-        if in_stock and not serialized["in_stock"]:
-            continue
-        if min_price is not None and (serialized["min_selling_price"] or 0) < min_price:
-            continue
-        if max_price is not None and (serialized["min_selling_price"] or 0) > max_price:
-            continue
-        if attribute_key and attribute_value:
-            specifications = serialized["specifications"]
-            value = specifications.get(attribute_key)
-            if str(value).lower() != attribute_value.lower():
-                continue
-        filtered.append(serialized)
-    if sort == "price_asc":
-        filtered.sort(key=lambda item: item["min_selling_price"] or 0)
-    elif sort == "price_desc":
-        filtered.sort(key=lambda item: item["min_selling_price"] or 0, reverse=True)
-    elif sort == "rating":
-        filtered.sort(key=lambda item: item["avg_rating"], reverse=True)
-    start = (page - 1) * limit
-    end = start + limit
-    return {
-        "items": filtered[start:end],
-        "total": len(filtered),
-        "page": page,
-        "limit": limit,
-    }
+        await db.commit()
+    return payload
 
 
 @router.get("/search")
@@ -1232,44 +1273,59 @@ async def search_products(
     q: str = Query(..., min_length=1),
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=20, ge=1, le=100),
+    current_user: User | None = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await list_products(q=q, page=page, limit=limit, db=db)
+    payload = await query_catalog_products(
+        q=q,
+        category=None,
+        brand=None,
+        vendor_id=None,
+        in_stock=False,
+        min_price=None,
+        max_price=None,
+        min_rating=None,
+        is_featured=None,
+        attribute_key=None,
+        attribute_value=None,
+        sort="relevance",
+        page=page,
+        limit=limit,
+        user_id=current_user.id if current_user else None,
+        db=db,
+    )
+    await record_recommendation_event(
+        user_id=current_user.id if current_user else None,
+        product_id=None,
+        event_type=RecommendationEventType.SEARCH,
+        placement=RecommendationPlacement.SEARCH,
+        query_text=q,
+        metadata=_build_search_event_metadata(payload),
+        db=db,
+    )
+    await db.commit()
+    return payload
 
 
 @router.get("/search/autocomplete")
 async def autocomplete_products(
     q: str = Query(..., min_length=1),
     limit: int = Query(default=8, ge=1, le=20),
+    current_user: User | None = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    products = (
-        await db.execute(select(Product).where(Product.status == ProductStatus.ACTIVE).order_by(Product.view_count.desc(), Product.created_at.desc()))
-    ).scalars().all()
-    q_lower = q.lower()
-    suggestions = []
-    for product in products:
-        score = max(
-            SequenceMatcher(None, q_lower, product.name.lower()).ratio(),
-            1.0 if product.name.lower().startswith(q_lower) else 0.0,
-            0.9 if q_lower in product.name.lower() else 0.0,
-        )
-        if score >= 0.35:
-            suggestions.append(
-                {
-                    "id": encode_id(product.id or 0),
-                    "name": product.name,
-                    "slug": product.slug,
-                    "score": round(score, 3),
-                }
-            )
-    suggestions.sort(key=lambda item: item["score"], reverse=True)
-    return {"items": suggestions[:limit], "total": min(len(suggestions), limit)}
+    return await autocomplete_catalog_products(
+        q=q,
+        limit=limit,
+        user_id=current_user.id if current_user else None,
+        db=db,
+    )
 
 
 @router.get("/products/{product_id}")
 async def get_product_detail(
     product_id: str,
+    current_user: User | None = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     product = await db.get(Product, decode_id_or_404(product_id))
@@ -1277,6 +1333,15 @@ async def get_product_detail(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     ensure_product_active(product)
     product.view_count += 1
+    await record_recommendation_event(
+        user_id=current_user.id if current_user else None,
+        product_id=product.id,
+        event_type=RecommendationEventType.VIEW,
+        placement=RecommendationPlacement.PRODUCT_DETAIL,
+        query_text="",
+        metadata={"slug": product.slug},
+        db=db,
+    )
     await db.commit()
     return {"product": await serialize_product(product, db)}
 
@@ -1324,12 +1389,14 @@ async def create_review(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     review = ProductReview(product_id=decoded_product_id, user_id=current_user.id, **payload.model_dump())
     db.add(review)
-    db.add(
-        UserProductEvent(
-            user_id=current_user.id,
-            product_id=decoded_product_id,
-            event_type=RecommendationEventType.RATING,
-        )
+    await record_recommendation_event(
+        user_id=current_user.id,
+        product_id=decoded_product_id,
+        event_type=RecommendationEventType.RATING,
+        placement=RecommendationPlacement.PRODUCT_DETAIL,
+        query_text="",
+        metadata={"rating": payload.rating},
+        db=db,
     )
     await recalculate_product_rating(decoded_product_id, db)
     await db.commit()

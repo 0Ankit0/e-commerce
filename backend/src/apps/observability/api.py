@@ -204,7 +204,7 @@ async def update_incident(
     if payload.review_notes is not None:
         incident.review_notes = payload.review_notes
     incident.reviewed_by = current_user.id
-    incident.reviewed_at = datetime.now(timezone.utc)
+    incident.reviewed_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
     await db.refresh(incident)
     return SecurityIncidentRead.model_validate(incident)

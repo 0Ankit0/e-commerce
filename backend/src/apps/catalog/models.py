@@ -88,6 +88,20 @@ class Product(SQLModel, table=True):
     published_at: Optional[datetime] = Field(default=None)
 
 
+class ProductSearchDocument(SQLModel, table=True):
+    __tablename__ = "product_search_documents"  # type: ignore[assignment]
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    product_id: int = Field(foreign_key="products.id", index=True, unique=True)
+    title_text: str = Field(default="")
+    summary_text: str = Field(default="")
+    body_text: str = Field(default="")
+    facet_text: str = Field(default="")
+    keyword_text: str = Field(default="")
+    searchable_text: str = Field(default="")
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class ProductVariant(SQLModel, table=True):
     __tablename__ = "product_variants"  # type: ignore[assignment]
 

@@ -6,12 +6,11 @@ from math import exp, log1p
 
 from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from src.apps.catalog.models import Inventory, Product, ProductVariant, ProductStatus
+from src.apps.catalog.models import Inventory, Product, ProductStatus, ProductVariant
 from src.apps.core.time import utc_now
 from src.apps.orders.models import Order, OrderItem, OrderStatus
 from src.apps.recommendations.models import (
@@ -22,6 +21,21 @@ from src.apps.recommendations.models import (
     UserAffinity,
     UserProductEvent,
 )
+
+EVENT_SIGNAL_WEIGHTS = {
+    RecommendationEventType.VIEW: 0.4,
+    RecommendationEventType.CLICK: 0.7,
+    RecommendationEventType.SEARCH: 0.8,
+    RecommendationEventType.ADD_TO_CART: 1.7,
+    RecommendationEventType.ADD_TO_WISHLIST: 1.3,
+    RecommendationEventType.PURCHASE: 2.6,
+    RecommendationEventType.RATING: 1.8,
+    RecommendationEventType.RECOMMENDATION_CLICK: 1.0,
+}
+
+
+def _event_weight(event_type: RecommendationEventType) -> float:
+    return EVENT_SIGNAL_WEIGHTS[event_type]
 
 
 def _product_popularity_insert_values(product_id: int, event_type: RecommendationEventType, now) -> dict[str, object]:
@@ -78,15 +92,6 @@ async def _increment_product_popularity(
     bind = db.get_bind()
     dialect_name = bind.dialect.name if bind is not None else ""
 
-    if dialect_name == "sqlite":
-        stmt = sqlite_insert(ProductPopularity).values(**insert_values)
-        await db.execute(
-            stmt.on_conflict_do_update(
-                index_elements=[ProductPopularity.product_id],
-                set_=update_values,
-            )
-        )
-        return
     if dialect_name == "postgresql":
         stmt = postgresql_insert(ProductPopularity).values(**insert_values)
         await db.execute(
@@ -101,7 +106,7 @@ async def _increment_product_popularity(
         await db.execute(select(ProductPopularity).where(ProductPopularity.product_id == product_id))
     ).scalars().first()
     if popularity is None:
-        popularity = ProductPopularity(product_id=product_id)
+        popularity = ProductPopularity(**insert_values)
         try:
             async with db.begin_nested():
                 db.add(popularity)
@@ -138,13 +143,28 @@ async def record_recommendation_event(
     db.add(event)
     await db.flush()
 
+    product = await db.get(Product, product_id) if product_id else None
     if product_id:
         await _increment_product_popularity(product_id=product_id, event_type=event_type, db=db)
-        if user_id:
-            product = await db.get(Product, product_id)
-            if product:
-                await _upsert_affinity(user_id, product.category_id, product.brand_id, event_type, db)
-                await _upsert_similarity(product.id, db)
+    if product is not None:
+        await _upsert_similarity(product.id, db)
+
+    if user_id and product is not None:
+        await _upsert_affinity(
+            user_id,
+            product.category_id,
+            product.brand_id,
+            event_type,
+            db,
+        )
+        await _update_behavioral_similarity(
+            user_id=user_id,
+            product_id=product.id,
+            event_type=event_type,
+            db=db,
+        )
+    if user_id and event_type == RecommendationEventType.SEARCH:
+        await _upsert_search_intent_affinities(user_id=user_id, metadata=metadata, db=db)
 
     return event
 
@@ -164,19 +184,33 @@ async def get_recommendations(
         popularity.product_id: popularity
         for popularity in (await db.execute(select(ProductPopularity))).scalars().all()
     }
-    user_affinities = []
+
+    user_affinities: list[UserAffinity] = []
     purchased_product_ids: set[int] = set()
     user_price_profile: tuple[float, float] | None = None
+    recent_signal_scores: dict[int, float] = {}
     if user_id:
         user_affinities = (
             await db.execute(select(UserAffinity).where(UserAffinity.user_id == user_id))
         ).scalars().all()
+        recent_signal_scores = await _recent_user_product_signals(
+            user_id=user_id,
+            db=db,
+            exclude_product_id=product_id,
+        )
         orders = (
-            await db.execute(select(Order).where(Order.user_id == user_id, Order.status != OrderStatus.CANCELLED))
+            await db.execute(
+                select(Order).where(
+                    Order.user_id == user_id,
+                    Order.status != OrderStatus.CANCELLED,
+                )
+            )
         ).scalars().all()
         observed_prices: list[float] = []
         for order in orders:
-            items = (await db.execute(select(OrderItem).where(OrderItem.order_id == order.id))).scalars().all()
+            items = (
+                await db.execute(select(OrderItem).where(OrderItem.order_id == order.id))
+            ).scalars().all()
             purchased_product_ids.update(item.product_id for item in items)
             observed_prices.extend(item.unit_price for item in items if item.unit_price > 0)
         if observed_prices:
@@ -185,33 +219,67 @@ async def get_recommendations(
                 max(observed_prices),
             )
 
-    similarity_ids: dict[int, float] = {}
+    similarity_scores: dict[int, float] = {}
     context_product = await db.get(Product, product_id) if product_id else None
     if context_product:
         rows = (
-            await db.execute(select(ProductSimilarity).where(ProductSimilarity.product_id == context_product.id))
+            await db.execute(
+                select(ProductSimilarity).where(ProductSimilarity.product_id == context_product.id)
+            )
         ).scalars().all()
-        similarity_ids = {row.similar_product_id: row.score for row in rows}
+        for row in rows:
+            similarity_scores[row.similar_product_id] = similarity_scores.get(
+                row.similar_product_id,
+                0.0,
+            ) + row.score
+
+    for seed_product_id, seed_score in recent_signal_scores.items():
+        rows = (
+            await db.execute(
+                select(ProductSimilarity).where(ProductSimilarity.product_id == seed_product_id)
+            )
+        ).scalars().all()
+        for row in rows:
+            similarity_scores[row.similar_product_id] = similarity_scores.get(
+                row.similar_product_id,
+                0.0,
+            ) + (row.score * max(seed_score, 0.4))
+
+    similarity_max = max(similarity_scores.values(), default=0.0)
+    collaborative_scores = await _collaborative_product_scores(
+        user_id=user_id,
+        seed_scores=recent_signal_scores,
+        exclude_product_ids=purchased_product_ids | ({product_id} if product_id else set()),
+        db=db,
+    )
+    collaborative_max = max(collaborative_scores.values(), default=0.0)
 
     category_affinity = {
-        affinity.category_id: affinity.score for affinity in user_affinities if affinity.category_id is not None
+        affinity.category_id: affinity.score
+        for affinity in user_affinities
+        if affinity.category_id is not None
     }
     brand_affinity = {
-        affinity.brand_id: affinity.score for affinity in user_affinities if affinity.brand_id is not None
+        affinity.brand_id: affinity.score
+        for affinity in user_affinities
+        if affinity.brand_id is not None
     }
     max_category_affinity = max(category_affinity.values(), default=0.0)
     max_brand_affinity = max(brand_affinity.values(), default=0.0)
+    max_recent_signal = max(recent_signal_scores.values(), default=0.0)
 
     results: list[tuple[float, Product, str, dict[str, float]]] = []
     for product in products:
+        if product.id is None:
+            continue
         if product_id and product.id == product_id:
             continue
         available = await _available_stock(product.id, db)
         if available <= 0:
             continue
+
         price_point = await _product_price_point(product.id, db)
         popularity = popularity_map.get(product.id)
-
         popularity_feature = min(
             log1p(
                 (popularity.view_count if popularity else 0)
@@ -237,14 +305,29 @@ async def get_recommendations(
             if product.brand_id and max_brand_affinity > 0
             else 0.0
         )
-        similarity_feature = similarity_ids.get(product.id, 0.0)
+        similarity_feature = (
+            similarity_scores.get(product.id, 0.0) / similarity_max
+            if similarity_max > 0
+            else 0.0
+        )
+        collaborative_feature = (
+            collaborative_scores.get(product.id, 0.0) / collaborative_max
+            if collaborative_max > 0
+            else 0.0
+        )
+        recent_interest_feature = (
+            recent_signal_scores.get(product.id, 0.0) / max_recent_signal
+            if max_recent_signal > 0
+            else 0.0
+        )
+
         context_match_feature = 0.0
         if context_product and product.category_id == context_product.category_id:
             context_match_feature += 0.7
         if context_product and context_product.brand_id and product.brand_id == context_product.brand_id:
             context_match_feature += 0.3
-        price_fit_feature = _price_fit_score(price_point, user_price_profile)
 
+        price_fit_feature = _price_fit_score(price_point, user_price_profile)
         features = {
             "popularity": popularity_feature,
             "rating": rating_feature,
@@ -254,30 +337,38 @@ async def get_recommendations(
             "category_affinity": category_feature,
             "brand_affinity": brand_feature,
             "similarity": similarity_feature,
+            "collaborative": collaborative_feature,
+            "recent_interest": recent_interest_feature,
             "context_match": min(context_match_feature, 1.0),
             "price_fit": price_fit_feature,
         }
 
         score = (
-            features["popularity"] * 2.1
-            + features["rating"] * 1.6
-            + features["recency"] * 1.0
-            + features["stock"] * 0.8
-            + features["featured"] * 0.5
-            + features["category_affinity"] * 2.0
-            + features["brand_affinity"] * 1.2
-            + features["similarity"] * 2.4
-            + features["context_match"] * 1.4
-            + features["price_fit"] * 0.9
+            features["popularity"] * 1.9
+            + features["rating"] * 1.5
+            + features["recency"] * 0.8
+            + features["stock"] * 0.6
+            + features["featured"] * 0.35
+            + features["category_affinity"] * 1.8
+            + features["brand_affinity"] * 1.1
+            + features["similarity"] * 2.3
+            + features["collaborative"] * 1.9
+            + features["recent_interest"] * 1.0
+            + features["context_match"] * 1.2
+            + features["price_fit"] * 0.7
         )
+        if placement in {
+            RecommendationPlacement.HOME,
+            RecommendationPlacement.POST_PURCHASE,
+        } and product.id in purchased_product_ids:
+            score -= 3.0
 
         reason = _reason_from_features(features, context_product)
-        if placement in {RecommendationPlacement.HOME, RecommendationPlacement.POST_PURCHASE} and product.id in purchased_product_ids:
-            score -= 3
         results.append((score, product, reason, features))
 
     results.sort(key=lambda item: (item[0], item[1].created_at), reverse=True)
     ranked_results = _apply_diversity_rerank(results)
+
     from src.apps.catalog.services import serialize_product
 
     payload: list[dict[str, object]] = []
@@ -285,9 +376,68 @@ async def get_recommendations(
         serialized = await serialize_product(product, db, include_variants=False)
         serialized["score"] = round(score, 2)
         serialized["reason"] = reason
-        serialized["ranking_features"] = {key: round(value, 3) for key, value in features.items()}
+        serialized["ranking_features"] = {
+            key: round(value, 3)
+            for key, value in features.items()
+        }
         payload.append(serialized)
     return payload
+
+
+async def _recent_user_product_signals(
+    *,
+    user_id: int,
+    db: AsyncSession,
+    exclude_product_id: int | None = None,
+    limit: int = 18,
+) -> dict[int, float]:
+    recent_events = (
+        await db.execute(
+            select(UserProductEvent)
+            .where(
+                UserProductEvent.user_id == user_id,
+                UserProductEvent.product_id != None,  # noqa: E711
+            )
+            .order_by(UserProductEvent.created_at.desc())
+        )
+    ).scalars().all()
+
+    product_scores: dict[int, float] = {}
+    for index, event in enumerate(recent_events):
+        if event.product_id is None or event.product_id == exclude_product_id:
+            continue
+        recency_factor = max(0.35, 1 - (index * 0.05))
+        weight = _event_weight(event.event_type) * recency_factor
+        product_scores[event.product_id] = max(product_scores.get(event.product_id, 0.0), weight)
+        if len(product_scores) >= limit and index >= limit:
+            break
+
+    orders = (
+        await db.execute(
+            select(Order).where(
+                Order.user_id == user_id,
+                Order.status != OrderStatus.CANCELLED,
+            )
+        )
+    ).scalars().all()
+    for order in orders[:8]:
+        items = (
+            await db.execute(select(OrderItem).where(OrderItem.order_id == order.id))
+        ).scalars().all()
+        for item in items:
+            if item.product_id == exclude_product_id:
+                continue
+            product_scores[item.product_id] = max(
+                product_scores.get(item.product_id, 0.0),
+                EVENT_SIGNAL_WEIGHTS[RecommendationEventType.PURCHASE] * 0.9,
+            )
+    return dict(
+        sorted(
+            product_scores.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:limit]
+    )
 
 
 async def _upsert_affinity(
@@ -296,17 +446,10 @@ async def _upsert_affinity(
     brand_id: int | None,
     event_type: RecommendationEventType,
     db: AsyncSession,
+    *,
+    multiplier: float = 1.0,
 ) -> None:
-    weight = {
-        RecommendationEventType.VIEW: 0.3,
-        RecommendationEventType.CLICK: 0.6,
-        RecommendationEventType.ADD_TO_CART: 1.5,
-        RecommendationEventType.ADD_TO_WISHLIST: 1.0,
-        RecommendationEventType.PURCHASE: 2.5,
-        RecommendationEventType.RATING: 1.5,
-        RecommendationEventType.SEARCH: 0.7,
-        RecommendationEventType.RECOMMENDATION_CLICK: 0.8,
-    }[event_type]
+    weight = _event_weight(event_type) * multiplier
     if category_id:
         affinity = (
             await db.execute(
@@ -321,6 +464,7 @@ async def _upsert_affinity(
             affinity = UserAffinity(user_id=user_id, category_id=category_id, score=0)
             db.add(affinity)
         affinity.score += weight
+        affinity.updated_at = utc_now()
     if brand_id:
         affinity = (
             await db.execute(
@@ -335,6 +479,104 @@ async def _upsert_affinity(
             affinity = UserAffinity(user_id=user_id, brand_id=brand_id, score=0)
             db.add(affinity)
         affinity.score += weight
+        affinity.updated_at = utc_now()
+
+
+async def _upsert_search_intent_affinities(
+    *,
+    user_id: int,
+    metadata: dict[str, object],
+    db: AsyncSession,
+) -> None:
+    raw_product_ids = metadata.get("product_ids")
+    if not isinstance(raw_product_ids, list):
+        return
+
+    multipliers = [0.8, 0.65, 0.5, 0.35, 0.25]
+    for index, raw_product_id in enumerate(raw_product_ids[: len(multipliers)]):
+        try:
+            decoded_product_id = int(raw_product_id)
+        except (TypeError, ValueError):
+            continue
+        product = await db.get(Product, decoded_product_id)
+        if product is None:
+            continue
+        await _upsert_affinity(
+            user_id,
+            product.category_id,
+            product.brand_id,
+            RecommendationEventType.SEARCH,
+            db,
+            multiplier=multipliers[index],
+        )
+
+
+async def _update_behavioral_similarity(
+    *,
+    user_id: int,
+    product_id: int,
+    event_type: RecommendationEventType,
+    db: AsyncSession,
+) -> None:
+    related_signals = await _recent_user_product_signals(
+        user_id=user_id,
+        db=db,
+        exclude_product_id=product_id,
+        limit=12,
+    )
+    if not related_signals:
+        return
+
+    base_delta = max(_event_weight(event_type), 0.5)
+    for related_product_id, signal_score in related_signals.items():
+        delta = min(0.18 + ((base_delta + signal_score) / 4.5), 1.35)
+        await _upsert_similarity_edge(
+            product_id=product_id,
+            similar_product_id=related_product_id,
+            delta=delta,
+            reason_code="behavioral_cooccurrence",
+            db=db,
+        )
+        await _upsert_similarity_edge(
+            product_id=related_product_id,
+            similar_product_id=product_id,
+            delta=delta,
+            reason_code="behavioral_cooccurrence",
+            db=db,
+        )
+
+
+async def _upsert_similarity_edge(
+    *,
+    product_id: int,
+    similar_product_id: int,
+    delta: float,
+    reason_code: str,
+    db: AsyncSession,
+) -> None:
+    if product_id == similar_product_id:
+        return
+    existing = (
+        await db.execute(
+            select(ProductSimilarity).where(
+                ProductSimilarity.product_id == product_id,
+                ProductSimilarity.similar_product_id == similar_product_id,
+            )
+        )
+    ).scalars().first()
+    if existing is None:
+        db.add(
+            ProductSimilarity(
+                product_id=product_id,
+                similar_product_id=similar_product_id,
+                score=min(delta, 3.5),
+                reason_code=reason_code,
+            )
+        )
+        return
+    existing.score = min(existing.score + delta, 3.5)
+    existing.reason_code = reason_code
+    existing.updated_at = utc_now()
 
 
 async def _upsert_similarity(product_id: int, db: AsyncSession) -> None:
@@ -350,24 +592,68 @@ async def _upsert_similarity(product_id: int, db: AsyncSession) -> None:
             )
         )
     ).scalars().all()
-    for similar in similar_products[:5]:
-        existing = (
-            await db.execute(
-                select(ProductSimilarity).where(
-                    ProductSimilarity.product_id == product.id,
-                    ProductSimilarity.similar_product_id == similar.id,
-                )
+    for similar in similar_products[:8]:
+        base_score = 0.65 if product.brand_id == similar.brand_id else 0.35
+        await _upsert_similarity_edge(
+            product_id=product.id,
+            similar_product_id=similar.id or 0,
+            delta=base_score,
+            reason_code="category_match",
+            db=db,
+        )
+
+
+async def _collaborative_product_scores(
+    *,
+    user_id: int | None,
+    seed_scores: dict[int, float],
+    exclude_product_ids: set[int],
+    db: AsyncSession,
+) -> dict[int, float]:
+    if user_id is None or not seed_scores:
+        return {}
+
+    overlap_rows = (
+        await db.execute(
+            select(UserProductEvent).where(
+                UserProductEvent.user_id != user_id,
+                UserProductEvent.product_id.in_(list(seed_scores.keys())),
             )
-        ).scalars().first()
-        if existing is None:
-            db.add(
-                ProductSimilarity(
-                    product_id=product.id,
-                    similar_product_id=similar.id,
-                    score=0.7 if product.brand_id == similar.brand_id else 0.5,
-                    reason_code="category_match",
-                )
+        )
+    ).scalars().all()
+
+    peer_scores: dict[int, float] = {}
+    for row in overlap_rows:
+        if row.user_id is None or row.product_id is None:
+            continue
+        peer_scores[row.user_id] = peer_scores.get(row.user_id, 0.0) + (
+            _event_weight(row.event_type) * seed_scores.get(row.product_id, 0.0)
+        )
+
+    top_peers = sorted(peer_scores.items(), key=lambda item: item[1], reverse=True)[:10]
+    if not top_peers:
+        return {}
+
+    peer_weight_map = {peer_id: score for peer_id, score in top_peers}
+    peer_events = (
+        await db.execute(
+            select(UserProductEvent).where(
+                UserProductEvent.user_id.in_(list(peer_weight_map.keys())),
+                UserProductEvent.product_id != None,  # noqa: E711
             )
+        )
+    ).scalars().all()
+
+    collaborative_scores: dict[int, float] = {}
+    for event in peer_events:
+        if event.user_id is None or event.product_id is None:
+            continue
+        if event.product_id in exclude_product_ids or event.product_id in seed_scores:
+            continue
+        collaborative_scores[event.product_id] = collaborative_scores.get(event.product_id, 0.0) + (
+            peer_weight_map.get(event.user_id, 0.0) * _event_weight(event.event_type)
+        )
+    return collaborative_scores
 
 
 async def _available_stock(product_id: int, db: AsyncSession) -> int:
@@ -422,10 +708,16 @@ def _reason_from_features(features: dict[str, float], context_product: Product |
     feature_name = max(features, key=features.get)
     if feature_name == "similarity" and context_product is not None:
         return f"Because you viewed {context_product.name}"
+    if feature_name == "collaborative":
+        return "Popular with shoppers whose tastes match yours"
+    if feature_name == "recent_interest":
+        return "Inspired by what you explored recently"
     if feature_name in {"category_affinity", "brand_affinity"}:
         return "Based on your recent shopping signals"
     if feature_name == "rating":
         return "Highly rated by similar shoppers"
+    if feature_name == "price_fit":
+        return "Near your usual price range"
     if feature_name == "recency":
         return "Fresh arrival with rising momentum"
     return "Trending for shoppers like you"

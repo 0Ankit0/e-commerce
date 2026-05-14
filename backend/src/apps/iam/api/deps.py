@@ -106,6 +106,17 @@ async def get_current_user(
     set_log_context(user_id=user.id)
     return user
 
+
+async def get_optional_current_user(
+    request: Request,
+    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(_bearer_scheme)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User | None:
+    try:
+        return await get_current_user(request=request, credentials=credentials, db=db)
+    except HTTPException:
+        return None
+
 async def get_current_active_superuser(
     current_user: User = Depends(get_current_user)
 ) -> User:
