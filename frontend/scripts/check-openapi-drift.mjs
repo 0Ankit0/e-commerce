@@ -52,7 +52,45 @@ function normalizeComponents(spec) {
   return normalized;
 }
 
-function compare(oldMap, newMap) {
+function normalizeContentSchema(content = {}) {
+  for (const mediaType of ['application/json', 'multipart/form-data', 'text/plain']) {
+    const schema = content?.[mediaType]?.schema;
+    if (schema) {
+      return schemaType(schema);
+    }
+  }
+
+  const [first] = Object.values(content ?? {});
+  return schemaType(first?.schema ?? {});
+}
+
+function normalizePaths(spec) {
+  const paths = spec?.paths ?? {};
+  const normalized = {};
+
+  for (const [pathName, operations] of Object.entries(paths)) {
+    normalized[pathName] = Object.fromEntries(
+      Object.entries(operations ?? {})
+        .filter(([, operation]) => operation && typeof operation === 'object')
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([method, operation]) => [
+          method,
+          {
+            requestBody: normalizeContentSchema(operation.requestBody?.content),
+            responses: Object.fromEntries(
+              Object.entries(operation.responses ?? {})
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([status, response]) => [status, normalizeContentSchema(response?.content)]),
+            ),
+          },
+        ]),
+    );
+  }
+
+  return normalized;
+}
+
+function compareComponents(oldMap, newMap) {
   const issues = [];
   const schemaNames = new Set([...Object.keys(oldMap), ...Object.keys(newMap)]);
 
@@ -60,7 +98,14 @@ function compare(oldMap, newMap) {
     const oldSchema = oldMap[schemaName];
     const newSchema = newMap[schemaName];
 
-    if (!oldSchema || !newSchema) continue;
+    if (!oldSchema) {
+      issues.push(`schema added: ${schemaName}`);
+      continue;
+    }
+    if (!newSchema) {
+      issues.push(`schema removed: ${schemaName}`);
+      continue;
+    }
 
     const propNames = new Set([
       ...Object.keys(oldSchema.properties ?? {}),
@@ -70,7 +115,14 @@ function compare(oldMap, newMap) {
     for (const propName of [...propNames].sort()) {
       const oldProp = oldSchema.properties[propName];
       const newProp = newSchema.properties[propName];
-      if (!oldProp || !newProp) continue;
+      if (!oldProp) {
+        issues.push(`${schemaName}.${propName}: property added`);
+        continue;
+      }
+      if (!newProp) {
+        issues.push(`${schemaName}.${propName}: property removed`);
+        continue;
+      }
 
       if (oldProp.required !== newProp.required) {
         issues.push(`${schemaName}.${propName}: required flag changed (${oldProp.required} -> ${newProp.required})`);
@@ -89,6 +141,71 @@ function compare(oldMap, newMap) {
       }
       if (oldProp.nullable !== newProp.nullable) {
         issues.push(`${schemaName}.${propName}: nullable changed (${oldProp.nullable} -> ${newProp.nullable})`);
+      }
+    }
+  }
+
+  return issues;
+}
+
+function comparePaths(oldMap, newMap) {
+  const issues = [];
+  const pathNames = new Set([...Object.keys(oldMap), ...Object.keys(newMap)]);
+
+  for (const pathName of [...pathNames].sort()) {
+    const oldPath = oldMap[pathName];
+    const newPath = newMap[pathName];
+
+    if (!oldPath) {
+      issues.push(`path added: ${pathName}`);
+      continue;
+    }
+    if (!newPath) {
+      issues.push(`path removed: ${pathName}`);
+      continue;
+    }
+
+    const methods = new Set([...Object.keys(oldPath), ...Object.keys(newPath)]);
+    for (const method of [...methods].sort()) {
+      const oldOperation = oldPath[method];
+      const newOperation = newPath[method];
+
+      if (!oldOperation) {
+        issues.push(`operation added: ${method.toUpperCase()} ${pathName}`);
+        continue;
+      }
+      if (!newOperation) {
+        issues.push(`operation removed: ${method.toUpperCase()} ${pathName}`);
+        continue;
+      }
+
+      if (oldOperation.requestBody !== newOperation.requestBody) {
+        issues.push(
+          `${method.toUpperCase()} ${pathName}: request body changed (${oldOperation.requestBody} -> ${newOperation.requestBody})`,
+        );
+      }
+
+      const responseCodes = new Set([
+        ...Object.keys(oldOperation.responses ?? {}),
+        ...Object.keys(newOperation.responses ?? {}),
+      ]);
+      for (const responseCode of [...responseCodes].sort()) {
+        const oldResponse = oldOperation.responses?.[responseCode];
+        const newResponse = newOperation.responses?.[responseCode];
+
+        if (oldResponse === undefined) {
+          issues.push(`${method.toUpperCase()} ${pathName}: response added for ${responseCode}`);
+          continue;
+        }
+        if (newResponse === undefined) {
+          issues.push(`${method.toUpperCase()} ${pathName}: response removed for ${responseCode}`);
+          continue;
+        }
+        if (oldResponse !== newResponse) {
+          issues.push(
+            `${method.toUpperCase()} ${pathName}: response ${responseCode} changed (${oldResponse} -> ${newResponse})`,
+          );
+        }
       }
     }
   }
@@ -119,16 +236,19 @@ function additionalGuards(spec) {
 const oldSpec = loadJson(snapshotPath);
 const newSpec = loadJson(currentPath);
 
-const drift = compare(normalizeComponents(oldSpec), normalizeComponents(newSpec));
+const drift = [
+  ...compareComponents(normalizeComponents(oldSpec), normalizeComponents(newSpec)),
+  ...comparePaths(normalizePaths(oldSpec), normalizePaths(newSpec)),
+];
 const guards = additionalGuards(newSpec);
 const failures = [...drift, ...guards];
 
 if (failures.length > 0) {
-  console.error('OpenAPI compatibility check failed:\n');
+  console.error('OpenAPI alignment check failed:\n');
   for (const failure of failures) {
     console.error(`- ${failure}`);
   }
   process.exit(1);
 }
 
-console.log('OpenAPI compatibility check passed.');
+console.log('OpenAPI alignment check passed.');

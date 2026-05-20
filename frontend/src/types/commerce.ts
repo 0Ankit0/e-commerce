@@ -11,11 +11,11 @@ export interface CatalogCategory {
 }
 
 export interface CategoryAttributeSchema {
-  key: string;
-  label: string;
+  name: string;
   type: 'text' | 'number' | 'boolean' | 'select';
   required: boolean;
   options?: string[];
+  description: string;
 }
 
 export interface CatalogBrand {

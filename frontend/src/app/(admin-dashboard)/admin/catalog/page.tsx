@@ -11,7 +11,13 @@ import { deriveCategoryLevel, wouldCreateCycle } from '@/lib/category-hierarchy'
 
 type AttributeType = CategoryAttributeSchema['type'];
 
-const EMPTY_ATTRIBUTE: CategoryAttributeSchema = { key: '', label: '', type: 'text', required: false, options: [] };
+const EMPTY_ATTRIBUTE: CategoryAttributeSchema = {
+  name: '',
+  type: 'text',
+  required: false,
+  options: [],
+  description: '',
+};
 
 function CategoryForm({
   category,
@@ -64,12 +70,12 @@ function CategoryForm({
       return;
     }
     const cleanedAttributes = attributes
-      .filter((item) => item.key.trim() && item.label.trim())
+      .filter((item) => item.name.trim())
       .map((item) => ({
         ...item,
-        key: item.key.trim(),
-        label: item.label.trim(),
+        name: item.name.trim(),
         options: (item.options ?? []).filter(Boolean),
+        description: item.description.trim(),
       }));
     onSubmit({
       name: name.trim(),
@@ -107,9 +113,13 @@ function CategoryForm({
           <Button type="button" variant="outline" size="sm" onClick={addAttribute}><Plus className="mr-1 h-3 w-3" /> Add</Button>
         </div>
         {attributes.map((attr, index) => (
-          <div key={`${attr.key}-${index}`} className="grid gap-2 md:grid-cols-5">
-            <Input value={attr.key} onChange={(e) => updateAttribute(index, { key: e.target.value })} placeholder="key" />
-            <Input value={attr.label} onChange={(e) => updateAttribute(index, { label: e.target.value })} placeholder="label" />
+          <div key={`${attr.name}-${index}`} className="grid gap-2 md:grid-cols-5">
+            <Input value={attr.name} onChange={(e) => updateAttribute(index, { name: e.target.value })} placeholder="attribute name" />
+            <Input
+              value={attr.description}
+              onChange={(e) => updateAttribute(index, { description: e.target.value })}
+              placeholder="description"
+            />
             <select
               className="h-10 rounded-md border px-3 text-sm"
               value={attr.type}

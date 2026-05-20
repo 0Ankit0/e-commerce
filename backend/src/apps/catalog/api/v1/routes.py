@@ -48,26 +48,11 @@ from src.apps.vendors.services import ensure_vendor_active, get_vendor_for_user
 router = APIRouter()
 
 
-class CategoryCreateRequest(BaseModel):
-    name: str
-    slug: str
-    parent_id: str | None = None
-    level: int = Field(default=1, ge=1, le=3)
-    description: str = ""
-    attributes: list[dict[str, object]] = []
-    sort_order: int = 0
-    expected_updated_at: str | None = None
-
-
-class CategoryDeleteRequest(BaseModel):
-    migrate_to_category_id: str | None = None
-
-
 class CategoryAttributeSchemaRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     type: str = Field(default="text", min_length=1, max_length=60)
     required: bool = False
-    options: list[str] = []
+    options: list[str] = Field(default_factory=list)
     description: str = ""
 
 
@@ -81,6 +66,21 @@ class CategoryAttributeSchemaUpdateRequest(BaseModel):
 
 class CategoryAttributeSchemaReplaceRequest(BaseModel):
     attributes: list[CategoryAttributeSchemaRequest]
+
+
+class CategoryCreateRequest(BaseModel):
+    name: str
+    slug: str
+    parent_id: str | None = None
+    level: int = Field(default=1, ge=1, le=3)
+    description: str = ""
+    attributes: list[CategoryAttributeSchemaRequest] = Field(default_factory=list)
+    sort_order: int = 0
+    expected_updated_at: str | None = None
+
+
+class CategoryDeleteRequest(BaseModel):
+    migrate_to_category_id: str | None = None
 
 
 class CategoryReorderItem(BaseModel):
@@ -452,7 +452,7 @@ async def create_category(
         level=payload.level,
         description=payload.description,
         sort_order=payload.sort_order,
-        attributes_json=json.dumps(_normalize_category_attributes(payload.attributes)),
+        attributes_json=json.dumps(_normalize_category_attributes([item.model_dump() for item in payload.attributes])),
     )
     db.add(category)
     try:
@@ -492,7 +492,7 @@ async def update_category(
     category.level = payload.level
     category.description = payload.description
     category.sort_order = payload.sort_order
-    category.attributes_json = json.dumps(_normalize_category_attributes(payload.attributes))
+    category.attributes_json = json.dumps(_normalize_category_attributes([item.model_dump() for item in payload.attributes]))
     category.updated_at = utc_now()
     try:
         await db.commit()
