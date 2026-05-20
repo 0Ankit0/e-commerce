@@ -30,7 +30,8 @@ from src.apps.iam.models.user import User, UserProfile
 from src.apps.iam.utils.hashid import decode_id_or_404, encode_id
 from src.apps.orders.models import Order
 from src.apps.promotions.models import Coupon
-from src.apps.recommendations.models import RecommendationEventType, UserProductEvent
+from src.apps.recommendations.models import RecommendationEventType
+from src.apps.recommendations.services import record_recommendation_event
 
 router = APIRouter()
 
@@ -327,12 +328,14 @@ async def add_cart_item(
         )
     product = await db.get(Product, variant.product_id)
     if product:
-        db.add(
-            UserProductEvent(
-                user_id=current_user.id,
-                product_id=product.id,
-                event_type=RecommendationEventType.ADD_TO_CART,
-            )
+        await record_recommendation_event(
+            user_id=current_user.id,
+            product_id=product.id,
+            event_type=RecommendationEventType.ADD_TO_CART,
+            placement=None,
+            query_text="",
+            metadata={"variant_id": variant.id, "quantity": payload.quantity},
+            db=db,
         )
     await db.commit()
     await analytics.capture(str(current_user.id), "cart_item_added", {"variant_id": variant.id, "quantity": payload.quantity})
@@ -544,12 +547,14 @@ async def add_to_wishlist(
     ).scalars().first()
     if existing is None:
         db.add(WishlistItem(user_id=current_user.id, product_id=decoded_id))
-        db.add(
-            UserProductEvent(
-                user_id=current_user.id,
-                product_id=decoded_id,
-                event_type=RecommendationEventType.ADD_TO_WISHLIST,
-            )
+        await record_recommendation_event(
+            user_id=current_user.id,
+            product_id=decoded_id,
+            event_type=RecommendationEventType.ADD_TO_WISHLIST,
+            placement=None,
+            query_text="",
+            metadata={},
+            db=db,
         )
         await db.commit()
     return {"success": True}

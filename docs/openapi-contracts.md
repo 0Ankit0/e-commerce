@@ -26,6 +26,11 @@ The check in `frontend/scripts/check-openapi-drift.mjs` fails CI when it detects
 - `StrictPaginatedResponse` enforces pagination metadata presence in TS payload types.
 - `asApiEnum` maps newly introduced enum values to `"unknown"` to avoid runtime breakage when backend adds values before frontend deploy.
 
+## Discovery API notes
+
+- Discovery contract changes now include the ranked catalog endpoints used by `frontend/src/app/shop/page.tsx` and the recommendation feed consumed from `frontend/src/app/products/[productId]/page.tsx` and `frontend/src/app/(user-dashboard)/dashboard/page.tsx`.
+- When changing `/products`, `/search`, `/search/autocomplete`, `/recommendations`, or `/recommendations/events`, refresh the exported schema before updating the committed snapshot.
+
 ## Hashid/numeric-id compatibility
 
 `decode_id_or_404` keeps documented compatibility by accepting both canonical hashids and legacy numeric IDs.

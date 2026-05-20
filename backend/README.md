@@ -6,7 +6,7 @@ This backend is a FastAPI monolith for a multi-vendor e-commerce platform. It no
 
 - auth, multitenancy, RBAC, notifications, analytics, websocket presence
 - vendor onboarding, warehouse and payout workflows
-- catalog management, CSV bulk product import, advanced filtering, fuzzy search autocomplete
+- catalog management, CSV bulk product import, advanced filtering, weighted full-text search autocomplete, and behavior-aware product recommendations
 - cart, wishlist, wishlist share links, price-drop alerts, tax rules, address autocomplete, checkout fingerprinting, idempotent order creation
 - payment flows for `khalti`, `esewa`, `stripe`, `paypal`, `wallet`, and `cod`
 - inventory reservations for unpaid online checkouts, stock commit on payment confirmation, stock release on cancel
@@ -27,7 +27,7 @@ cp .env.example .env
 uv run uvicorn src.main:app --reload
 ```
 
-The app creates tables automatically in test mode. For local development, point `DATABASE_URL` and `SYNC_DATABASE_URL` at SQLite or PostgreSQL.
+The app creates tables automatically in test mode. For local development, point `DATABASE_URL` and `SYNC_DATABASE_URL` at PostgreSQL.
 
 ## Container Runtime
 
@@ -102,7 +102,10 @@ Verification accepts an HMAC-SHA256 signature of the raw request body using the 
   - `POST /api/v1/vendor/products/import/preview`
   - `POST /api/v1/vendor/products/import/commit`
 - Product listing supports filters for price, rating, category, brand, vendor, stock state, featured state, and attribute key/value.
-- Search autocomplete uses SQL candidate selection plus application-side fuzzy scoring.
+- Search uses weighted full-text ranking across product titles, descriptions, categories, brands, specifications, variants, and SKU keywords.
+- Search autocomplete uses the same ranked discovery index, so prefix, phrase, and fuzzy matches stay aligned with full search results.
+- Recommendation endpoints blend popularity, user affinity, recent behavior, product similarity, and cross-shopper collaborative signals.
+- Recommendation learning now ingests product views, searches, carts, wishlists, ratings, and purchases.
 - Inventory reservations are created for unpaid online checkouts and committed after payment confirmation.
 - Inventory summary and reorder reporting are available for vendors/admin.
 

@@ -43,7 +43,7 @@ def error_spike_window() -> timedelta:
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def build_request_log_context(request: Request) -> dict[str, Any]:

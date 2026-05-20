@@ -3,7 +3,7 @@
 import axios from 'axios';
 import { useDeferredValue, useState } from 'react';
 import { Search } from 'lucide-react';
-import { useCatalogBrands, useCatalogCategories, useCatalogProducts } from '@/hooks/use-catalog';
+import { useCatalogAutocomplete, useCatalogBrands, useCatalogCategories, useCatalogProducts } from '@/hooks/use-catalog';
 import { ProductCard } from '@/components/storefront/product-card';
 import { SiteHeader } from '@/components/storefront/site-header';
 import { SiteFooter } from '@/components/storefront/site-footer';
@@ -17,6 +17,7 @@ export default function ShopPage() {
   const [brand, setBrand] = useState('');
   const [featuredOnly, setFeaturedOnly] = useState(false);
   const deferredQuery = useDeferredValue(query);
+  const trimmedQuery = query.trim();
   const {
     data: productsData,
     isLoading: isProductsLoading,
@@ -30,6 +31,7 @@ export default function ShopPage() {
     isFeatured: featuredOnly || undefined,
     limit: 24,
   });
+  const { data: autocompleteData } = useCatalogAutocomplete(deferredQuery);
   const {
     data: categoriesData,
     isLoading: areCategoriesLoading,
@@ -40,9 +42,11 @@ export default function ShopPage() {
   const { data: brandsData } = useCatalogBrands();
 
   const products = productsData?.items ?? [];
+  const searchSuggestions = autocompleteData?.items ?? [];
   const categories = categoriesData?.items ?? [];
   const brands = brandsData?.items ?? [];
   const groupedCategories = categories.slice(0, 6);
+  const visibleResults = productsData?.total ?? products.length;
   const productsErrorStatus = axios.isAxiosError(productsError) ? productsError.response?.status : undefined;
   const hasPartialProductsPayload = productsData !== undefined && !isPaginatedPayload(productsData);
   const hasPartialCategoriesPayload = categoriesData !== undefined && !isPaginatedPayload(categoriesData);
@@ -68,13 +72,35 @@ export default function ShopPage() {
               <div className="flex flex-col gap-3 sm:flex-row">
                 <label className="flex flex-1 items-center gap-3 rounded-full border border-[var(--border-color)] bg-[var(--surface-muted)] px-4 py-3">
                   <Search className="h-4 w-4 text-[var(--text-muted)]" />
-                  <input
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Search products, materials, moods..."
-                    className="w-full bg-transparent text-sm outline-none"
-                    aria-label="Search products"
-                  />
+                  <div className="relative w-full">
+                    <input
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      placeholder="Search products, materials, moods..."
+                      className="w-full bg-transparent text-sm outline-none"
+                      aria-label="Search products"
+                    />
+                    {trimmedQuery.length >= 2 && searchSuggestions.length > 0 ? (
+                      <div className="absolute left-0 right-0 top-[calc(100%+0.75rem)] z-10 rounded-[24px] border border-[var(--border-color)] bg-white p-2 shadow-[0_20px_55px_rgba(25,30,45,0.12)]">
+                        {searchSuggestions.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setQuery(item.name)}
+                            className="flex w-full items-center justify-between rounded-[18px] px-3 py-2 text-left transition-colors hover:bg-[var(--surface-muted)]"
+                          >
+                            <div>
+                              <p className="text-sm font-medium text-[var(--text-primary)]">{item.name}</p>
+                              {item.reason ? <p className="text-xs text-[var(--text-secondary)]">{item.reason}</p> : null}
+                            </div>
+                            <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">
+                              {item.score.toFixed(1)}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                 </label>
                 <button
                   type="button"
@@ -122,9 +148,9 @@ export default function ShopPage() {
                 <div className="rounded-[24px] border border-[var(--border-color)] bg-[var(--surface-muted)] px-4 py-3">
                   <span className="mb-2 block text-[11px] uppercase tracking-[0.22em] text-[var(--text-muted)]">Visible results</span>
                   <div className="flex items-end justify-between gap-3">
-                    <p className="font-[family:var(--font-display)] text-3xl text-[var(--text-primary)]">{products.length}</p>
+                    <p className="font-[family:var(--font-display)] text-3xl text-[var(--text-primary)]">{visibleResults}</p>
                     <p className="text-xs text-[var(--text-secondary)]">
-                      from {products[0]?.min_selling_price ? formatCurrency(products[0].min_selling_price) : 'live quotes'}
+                      {trimmedQuery ? 'ranked by relevance' : `from ${products[0]?.min_selling_price ? formatCurrency(products[0].min_selling_price) : 'live quotes'}`}
                     </p>
                   </div>
                 </div>
@@ -199,7 +225,7 @@ export default function ShopPage() {
             <StorefrontState
               eyebrow="No exact matches"
               title="Try a broader search or switch collections."
-              description="The backend search and filters are live, but this combination of query, category, and brand returned no products."
+              description="The live full-text search and filters did not find a match for this combination of query, category, and brand."
             />
           </div>
         ) : (

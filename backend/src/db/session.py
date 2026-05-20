@@ -1,6 +1,9 @@
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import AsyncGenerator
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.pool import NullPool, AsyncAdaptedQueuePool
+from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlmodel import SQLModel
 from src.apps.core.config import settings
 from src.apps.core.settings_store import sync_general_settings
@@ -8,26 +11,42 @@ from src.apps.core.settings_store import sync_general_settings
 if not settings.DATABASE_URL:
     raise ValueError("DATABASE_URL is not set in the configuration")
 
-_is_sqlite = settings.DATABASE_URL.startswith("sqlite")
-
 engine_kwargs: dict[str, object] = {
     "url": settings.DATABASE_URL,
     "echo": settings.LOG_SQL_QUERIES,
     "future": True,
-    "poolclass": NullPool if _is_sqlite else AsyncAdaptedQueuePool,
+    "poolclass": AsyncAdaptedQueuePool,
+    "pool_size": settings.DB_POOL_SIZE,
+    "max_overflow": settings.DB_MAX_OVERFLOW,
+    "pool_timeout": settings.DB_POOL_TIMEOUT,
+    "pool_recycle": settings.DB_POOL_RECYCLE,
 }
 
-if not _is_sqlite:
-    engine_kwargs.update(
-        {
-            "pool_size": settings.DB_POOL_SIZE,
-            "max_overflow": settings.DB_MAX_OVERFLOW,
-            "pool_timeout": settings.DB_POOL_TIMEOUT,
-            "pool_recycle": settings.DB_POOL_RECYCLE,
-        }
-    )
-
 engine = create_async_engine(**engine_kwargs)
+
+
+def _normalize_datetime_value(value: object) -> object:
+    if isinstance(value, datetime) and value.tzinfo is not None and value.tzinfo.utcoffset(value) is not None:
+        return value.astimezone(UTC).replace(tzinfo=None)
+    if isinstance(value, Mapping):
+        return {key: _normalize_datetime_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalize_datetime_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_normalize_datetime_value(item) for item in value)
+    return value
+
+
+@event.listens_for(engine.sync_engine, "before_cursor_execute", retval=True)
+def _normalize_aware_datetime_parameters(
+    conn,
+    cursor,
+    statement,
+    parameters,
+    context,
+    executemany,
+):
+    return statement, _normalize_datetime_value(parameters)
 
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 

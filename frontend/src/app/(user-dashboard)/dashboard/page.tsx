@@ -5,7 +5,7 @@ import { Bell, Heart, Package, Shield, ShoppingBag, Store } from 'lucide-react';
 import { useCart, useWishlist } from '@/hooks/use-commerce';
 import { useAuthStore } from '@/store/auth-store';
 import { useNotifications } from '@/hooks/use-notifications';
-import { useFeaturedProducts } from '@/hooks/use-catalog';
+import { useCatalogRecommendations } from '@/hooks/use-catalog';
 import { useOrders } from '@/hooks/use-orders';
 import { formatCurrency, formatDateLabel, titleCaseStatus } from '@/lib/commerce-format';
 import { StorefrontState } from '@/components/storefront/storefront-state';
@@ -26,11 +26,11 @@ export default function DashboardPage() {
     refetch: refetchNotifications,
   } = useNotifications({ limit: 5 });
   const {
-    data: featuredProductsData,
-    isLoading: featuredProductsLoading,
-    isError: featuredProductsError,
-    refetch: refetchFeaturedProducts,
-  } = useFeaturedProducts(4);
+    data: recommendedProductsData,
+    isLoading: recommendedProductsLoading,
+    isError: recommendedProductsError,
+    refetch: refetchRecommendedProducts,
+  } = useCatalogRecommendations('home', { limit: 4 });
 
   const recentNotifs = notifData?.items ?? [];
   const unreadCount = notifData?.unread_count ?? 0;
@@ -46,7 +46,7 @@ export default function DashboardPage() {
   const activeOrders = orders.filter((order) => !['delivered', 'cancelled'].includes(order.status)).length;
   const cartUnits = cart?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0;
   const latestOrder = orders[0];
-  const featuredProducts = featuredProductsData?.items ?? [];
+  const recommendedProducts = recommendedProductsData?.items ?? [];
   const accessiblePortals = getUserPortals(user).filter((portal) => portal !== 'customer');
 
   const stats = [
@@ -183,7 +183,7 @@ export default function DashboardPage() {
 
         <Card className="rounded-[32px] border-[var(--border-color)] bg-white">
           <CardHeader>
-            <CardTitle>Featured for you</CardTitle>
+            <CardTitle>Recommended for you</CardTitle>
           </CardHeader>
           <CardContent>
             {ordersError || hasPartialOrdersPayload ? (
@@ -225,25 +225,25 @@ export default function DashboardPage() {
                   Open order detail
                 </Link>
               </div>
-            ) : featuredProductsLoading ? (
+            ) : recommendedProductsLoading ? (
               <div className="space-y-3">
                 {[1, 2, 3].map((item) => (
                   <div key={item} className="h-20 animate-pulse rounded-2xl bg-[var(--surface-muted)]" />
                 ))}
               </div>
-            ) : featuredProductsError ? (
+            ) : recommendedProductsError ? (
               <StorefrontState
-                eyebrow="Featured for you"
-                title="Featured products unavailable"
-                description="The dashboard could not load live featured products right now."
+                eyebrow="Recommended for you"
+                title="Recommendations unavailable"
+                description="The dashboard could not load personalized recommendations right now."
                 actionLabel="Retry"
                 onAction={() => {
-                  void refetchFeaturedProducts();
+                  void refetchRecommendedProducts();
                 }}
               />
-            ) : featuredProducts.length > 0 ? (
+            ) : recommendedProducts.length > 0 ? (
               <div className="space-y-3">
-                {featuredProducts.map((product) => (
+                {recommendedProducts.map((product) => (
                   <Link
                     key={product.id}
                     href={`/products/${product.id}`}
@@ -264,9 +264,9 @@ export default function DashboardPage() {
               </div>
             ) : (
               <StorefrontState
-                eyebrow="Featured for you"
-                title="No featured products yet"
-                description="Featured catalog recommendations will appear here after vendors publish inventory."
+                eyebrow="Recommended for you"
+                title="Your recommendation profile is still warming up"
+                description="Browse, save, and purchase products to train the personalized recommendation rail."
               />
             )}
           </CardContent>

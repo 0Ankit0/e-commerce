@@ -178,6 +178,55 @@ async def _create_delivery_zone(client: AsyncClient, admin_headers: dict[str, st
     )
 
 
+async def _create_and_approve_product(
+    client: AsyncClient,
+    *,
+    vendor_headers: dict[str, str],
+    admin_headers: dict[str, str],
+    category_id: str,
+    brand_id: str | None,
+    name: str,
+    slug: str,
+    short_description: str,
+    description: str,
+    sku: str,
+    price: float,
+    quantity: int = 8,
+) -> dict[str, object]:
+    product_resp = await client.post(
+        "/api/v1/vendor/products",
+        headers=vendor_headers,
+        json={
+            "category_id": category_id,
+            "brand_id": brand_id,
+            "name": name,
+            "slug": slug,
+            "short_description": short_description,
+            "description": description,
+            "status": "pending",
+            "variants": [
+                {
+                    "sku": sku,
+                    "name": "Standard",
+                    "mrp": round(price * 1.2, 2),
+                    "selling_price": price,
+                    "quantity": quantity,
+                    "is_default": True,
+                }
+            ],
+            "images": [{"url": f"https://example.com/{slug}.jpg", "is_primary": True}],
+        },
+    )
+    assert product_resp.status_code == 201, product_resp.text
+    product_id = product_resp.json()["product"]["id"]
+    approve_product = await client.post(
+        f"/api/v1/admin/catalog/products/{product_id}/approve",
+        headers=admin_headers,
+    )
+    assert approve_product.status_code == 200, approve_product.text
+    return approve_product.json()["product"]
+
+
 @pytest.mark.asyncio
 async def test_marketplace_checkout_and_recommendations(client: AsyncClient, db_session: AsyncSession):
     admin, admin_headers = await _create_user_headers(
@@ -354,6 +403,170 @@ async def test_marketplace_checkout_and_recommendations(client: AsyncClient, db_
     assert recommendations_payload["strategy"] == "ml_ranker_v2"
     assert recommendations_payload["items"]
     assert "ranking_features" in recommendations_payload["items"][0]
+
+
+@pytest.mark.asyncio
+async def test_full_text_search_and_collaborative_recommendations(client: AsyncClient, db_session: AsyncSession):
+    _, admin_headers = await _create_user_headers(
+        db_session,
+        username="discover_admin",
+        email="discover-admin@example.com",
+        is_superuser=True,
+    )
+    vendor_user, vendor_headers = await _create_user_headers(
+        db_session,
+        username="discover_vendor",
+        email="discover-vendor@example.com",
+    )
+    _, customer_headers = await _create_user_headers(
+        db_session,
+        username="discover_shopper",
+        email="discover-shopper@example.com",
+    )
+    _, peer_headers = await _create_user_headers(
+        db_session,
+        username="discover_peer",
+        email="discover-peer@example.com",
+    )
+    tenant = await _create_tenant_for_owner(db_session, vendor_user, "discover-tenant")
+
+    vendor_create = await client.post(
+        "/api/v1/vendor/profile",
+        headers=vendor_headers,
+        json={
+            "tenant_id": tenant.id and __import__("src.apps.iam.utils.hashid", fromlist=["encode_id"]).encode_id(tenant.id),
+            "business_name": "Discovery Vendor Pvt Ltd",
+            "display_name": "Discovery Vendor",
+            "slug": "discovery-vendor",
+            "description": "Discovery-first catalog",
+        },
+    )
+    assert vendor_create.status_code == 201, vendor_create.text
+    vendor_id = vendor_create.json()["vendor"]["id"]
+
+    await _approve_vendor_for_tests(client, admin_headers, vendor_headers, vendor_id)
+
+    audio_category_resp = await client.post(
+        "/api/v1/admin/categories",
+        headers=admin_headers,
+        json={"name": "Audio", "slug": "audio", "level": 1, "attributes": [{"name": "wireless"}]},
+    )
+    assert audio_category_resp.status_code == 201, audio_category_resp.text
+    audio_category_id = audio_category_resp.json()["category"]["id"]
+
+    decor_category_resp = await client.post(
+        "/api/v1/admin/categories",
+        headers=admin_headers,
+        json={"name": "Decor", "slug": "decor", "level": 1, "attributes": []},
+    )
+    assert decor_category_resp.status_code == 201, decor_category_resp.text
+    decor_category_id = decor_category_resp.json()["category"]["id"]
+
+    brand_resp = await client.post(
+        "/api/v1/admin/catalog/brands",
+        headers=admin_headers,
+        json={"name": "North Audio", "slug": "north-audio"},
+    )
+    assert brand_resp.status_code == 201, brand_resp.text
+    brand_id = brand_resp.json()["brand"]["id"]
+
+    search_target = await _create_and_approve_product(
+        client,
+        vendor_headers=vendor_headers,
+        admin_headers=admin_headers,
+        category_id=audio_category_id,
+        brand_id=brand_id,
+        name="Wireless Headphones Pro",
+        slug="wireless-headphones-pro",
+        short_description="Adaptive wireless studio headphones",
+        description="Premium wireless noise cancelling headphones built for long listening sessions",
+        sku="WHP-001",
+        price=149,
+    )
+    collaborative_target = await _create_and_approve_product(
+        client,
+        vendor_headers=vendor_headers,
+        admin_headers=admin_headers,
+        category_id=audio_category_id,
+        brand_id=brand_id,
+        name="Studio Headphones Max",
+        slug="studio-headphones-max",
+        short_description="Reference over-ear studio tuning",
+        description="Detailed studio headphones for mixing, mastering, and focused listening",
+        sku="SHM-001",
+        price=169,
+    )
+    await _create_and_approve_product(
+        client,
+        vendor_headers=vendor_headers,
+        admin_headers=admin_headers,
+        category_id=audio_category_id,
+        brand_id=brand_id,
+        name="Gaming Earbuds Lite",
+        slug="gaming-earbuds-lite",
+        short_description="Low-latency wireless earbuds",
+        description="Compact earbuds for gaming sessions and lightweight travel",
+        sku="GEL-001",
+        price=89,
+    )
+    await _create_and_approve_product(
+        client,
+        vendor_headers=vendor_headers,
+        admin_headers=admin_headers,
+        category_id=decor_category_id,
+        brand_id=None,
+        name="Ceramic Accent Vase",
+        slug="ceramic-accent-vase",
+        short_description="Neutral tabletop decor",
+        description="Decorative ceramic vase for shelving and coffee tables",
+        sku="CAV-001",
+        price=45,
+    )
+
+    search_resp = await client.get(
+        "/api/v1/search",
+        headers=customer_headers,
+        params={"q": "wireless noise headphones", "limit": 5},
+    )
+    assert search_resp.status_code == 200, search_resp.text
+    search_payload = search_resp.json()
+    assert search_payload["search_mode"] == "full_text"
+    assert search_payload["items"][0]["id"] == search_target["id"]
+    assert search_payload["items"][0]["search_score"] > 0
+    assert "title" in search_payload["items"][0]["matched_fields"]
+
+    for headers, product_id in [
+        (customer_headers, search_target["id"]),
+        (peer_headers, search_target["id"]),
+        (peer_headers, collaborative_target["id"]),
+    ]:
+        event_resp = await client.post(
+            "/api/v1/recommendations/events",
+            headers=headers,
+            json={"event_type": "purchase", "product_id": product_id, "placement": "home"},
+        )
+        assert event_resp.status_code == 201, event_resp.text
+
+    detail_recommendations_resp = await client.get(
+        "/api/v1/recommendations",
+        headers=customer_headers,
+        params={"type": "product_detail", "product_id": search_target["id"], "limit": 4},
+    )
+    assert detail_recommendations_resp.status_code == 200, detail_recommendations_resp.text
+    detail_items = detail_recommendations_resp.json()["items"]
+    assert detail_items
+    assert detail_items[0]["id"] == collaborative_target["id"]
+    assert "ranking_features" in detail_items[0]
+    assert detail_items[0]["reason"]
+
+    home_recommendations_resp = await client.get(
+        "/api/v1/recommendations",
+        headers=customer_headers,
+        params={"type": "home", "limit": 4},
+    )
+    assert home_recommendations_resp.status_code == 200, home_recommendations_resp.text
+    home_items = home_recommendations_resp.json()["items"]
+    assert collaborative_target["id"] in [item["id"] for item in home_items[:3]]
 
 
 @pytest.mark.asyncio

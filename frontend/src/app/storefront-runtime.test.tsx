@@ -15,9 +15,11 @@ import type { CatalogProduct } from '@/types';
 
 const useParamsMock = vi.fn();
 const useCatalogProductsMock = vi.fn();
+const useCatalogAutocompleteMock = vi.fn();
 const useCatalogCategoriesMock = vi.fn();
 const useCatalogBrandsMock = vi.fn();
 const useCatalogProductMock = vi.fn();
+const useCatalogRecommendationsMock = vi.fn();
 const useVendorProductsMock = vi.fn();
 const useWishlistMock = vi.fn();
 const useAddToCartMock = vi.fn();
@@ -39,9 +41,11 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/hooks/use-catalog', () => ({
   useCatalogProducts: (...args: unknown[]) => useCatalogProductsMock(...args),
+  useCatalogAutocomplete: (...args: unknown[]) => useCatalogAutocompleteMock(...args),
   useCatalogCategories: (...args: unknown[]) => useCatalogCategoriesMock(...args),
   useCatalogBrands: (...args: unknown[]) => useCatalogBrandsMock(...args),
   useCatalogProduct: (...args: unknown[]) => useCatalogProductMock(...args),
+  useCatalogRecommendations: (...args: unknown[]) => useCatalogRecommendationsMock(...args),
   useVendorProducts: (...args: unknown[]) => useVendorProductsMock(...args),
 }));
 
@@ -156,9 +160,13 @@ describe('storefront runtime states', () => {
     vi.spyOn(axios, 'isAxiosError').mockImplementation((value) => Boolean((value as { isAxiosError?: boolean })?.isAxiosError));
     useParamsMock.mockReturnValue({ productId: 'prod-1' });
     useCatalogProductsMock.mockReturnValue(queryState({ data: { items: [createProduct()], total: 1 } }));
+    useCatalogAutocompleteMock.mockReturnValue(queryState({ data: { items: [], total: 0 } }));
     useCatalogCategoriesMock.mockReturnValue(queryState({ data: { items: [], total: 0 } }));
     useCatalogBrandsMock.mockReturnValue(queryState({ data: { items: [], total: 0 } }));
     useCatalogProductMock.mockReturnValue(queryState({ data: createProduct() }));
+    useCatalogRecommendationsMock.mockReturnValue(
+      queryState({ data: { strategy: 'ml_ranker_v2', items: [createProduct({ id: 'prod-2', name: 'Recommended Lamp' })] } })
+    );
     useVendorProductsMock.mockReturnValue(queryState({ data: { items: [createProduct()], total: 1 } }));
     useWishlistMock.mockReturnValue({ data: { items: [] } });
     useAddToCartMock.mockReturnValue({ mutateAsync: vi.fn(), isPending: false });

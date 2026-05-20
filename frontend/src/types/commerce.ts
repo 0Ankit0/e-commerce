@@ -74,6 +74,12 @@ export interface CatalogProduct {
   min_selling_price: number | null;
   in_stock: boolean;
   created_at: string;
+  score?: number;
+  reason?: string;
+  ranking_features?: Record<string, number>;
+  search_score?: number;
+  search_reason?: string;
+  matched_fields?: string[];
 }
 
 export interface CatalogListResponse<T> {
@@ -81,10 +87,27 @@ export interface CatalogListResponse<T> {
   total: number;
   page?: number;
   limit?: number;
+  query?: string;
+  search_mode?: string;
 }
 
 export interface ProductDetailResponse {
   product: CatalogProduct;
+}
+
+export type RecommendationPlacement = 'home' | 'product_detail' | 'cart' | 'post_purchase' | 'search';
+
+export interface CatalogSearchSuggestion {
+  id: string;
+  name: string;
+  slug: string;
+  score: number;
+  reason?: string;
+}
+
+export interface CatalogRecommendationsResponse {
+  strategy: string;
+  items: CatalogProduct[];
 }
 
 export interface CatalogBanner {

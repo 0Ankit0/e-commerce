@@ -30,7 +30,7 @@ Current implementation note:
 | Environment | Technology | Purpose |
 |-------------|------------|----------|
 | Production | PostgreSQL 15+ | Primary database |
-| Testing | SQLite | Unit/integration tests |
+| Testing | PostgreSQL | Unit/integration tests |
 | Caching | Redis | Sessions, hot data |
 
 ### Frontend Applications
@@ -426,9 +426,9 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.core.config import settings
 
-# Use PostgreSQL in production, SQLite for testing
+# Use PostgreSQL in production and testing
 if settings.TESTING:
-    SQLALCHEMY_DATABASE_URL = "sqlite+aiosqlite:///./test.db"
+    SQLALCHEMY_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost/test_db"
 else:
     SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
 
@@ -548,8 +548,8 @@ from sqlalchemy.orm import sessionmaker
 from app.core.database import Base, get_db
 from app.main import app
 
-# Use SQLite for testing
-TEST_DATABASE_URL = "sqlite+aiosqlite:///./test.db"
+# Use PostgreSQL for testing
+TEST_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost/test_db"
 
 
 @pytest.fixture(scope="session")

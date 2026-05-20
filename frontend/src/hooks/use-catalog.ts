@@ -8,8 +8,11 @@ import type {
   CatalogCategory,
   CatalogListResponse,
   CatalogProduct,
+  CatalogRecommendationsResponse,
+  CatalogSearchSuggestion,
   CategoryAttributeSchema,
   ProductDetailResponse,
+  RecommendationPlacement,
 } from '@/types';
 
 interface ProductQueryOptions {
@@ -64,9 +67,10 @@ export function useCatalogProducts(options: ProductQueryOptions = {}) {
   return useQuery({
     queryKey: ['catalog-products', options],
     queryFn: async () => {
-      const response = await apiClient.get<CatalogListResponse<CatalogProduct>>('/products', {
+      const endpoint = options.q ? '/search' : '/products';
+      const response = await apiClient.get<CatalogListResponse<CatalogProduct>>(endpoint, {
         params: {
-          q: options.q,
+          ...(options.q ? { q: options.q } : {}),
           category: options.category,
           brand: options.brand,
           vendor_id: options.vendorId,
@@ -125,6 +129,67 @@ export function useCatalogProduct(productId: string) {
     enabled: Boolean(productId),
     staleTime: 60_000,
     retry: shouldRetryCatalogQuery,
+  });
+}
+
+export function useCatalogAutocomplete(query: string, enabled = true) {
+  return useQuery({
+    queryKey: ['catalog-autocomplete', query],
+    queryFn: async () => {
+      const response = await apiClient.get<{ items: CatalogSearchSuggestion[]; total: number }>('/search/autocomplete', {
+        params: {
+          q: query,
+          limit: 6,
+        },
+      });
+      return response.data;
+    },
+    enabled: enabled && query.trim().length >= 2,
+    staleTime: 30_000,
+    retry: shouldRetryCatalogQuery,
+  });
+}
+
+export function useCatalogRecommendations(
+  placement: RecommendationPlacement,
+  options: { limit?: number; productId?: string; enabled?: boolean } = {}
+) {
+  return useQuery({
+    queryKey: ['catalog-recommendations', placement, options],
+    queryFn: async () => {
+      const response = await apiClient.get<CatalogRecommendationsResponse>('/recommendations', {
+        params: {
+          type: placement,
+          limit: options.limit ?? 6,
+          product_id: options.productId,
+        },
+      });
+      return response.data;
+    },
+    enabled: options.enabled ?? true,
+    staleTime: 45_000,
+    retry: shouldRetryCatalogQuery,
+  });
+}
+
+export function useTrackCatalogEvent() {
+  return useMutation({
+    mutationFn: async (payload: {
+      eventType: 'view' | 'click' | 'search' | 'add_to_cart' | 'add_to_wishlist' | 'purchase' | 'rating' | 'recommendation_click';
+      placement?: RecommendationPlacement;
+      productId?: string | null;
+      queryText?: string;
+      metadata?: Record<string, unknown>;
+    }) => {
+      const response = await apiClient.post('/recommendations/events', {
+        event_type: payload.eventType,
+        placement: payload.placement,
+        product_id: payload.productId,
+        query_text: payload.queryText ?? '',
+        metadata: payload.metadata ?? {},
+      });
+      return response.data;
+    },
   });
 }
 

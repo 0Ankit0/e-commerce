@@ -49,6 +49,11 @@ export function ProductCard({ product }: ProductCardProps) {
           </div>
         </div>
         <p className="line-clamp-2 text-sm text-[var(--text-secondary)]">{product.short_description || product.description}</p>
+        {product.reason || product.search_reason ? (
+          <p className="mt-3 text-xs font-medium uppercase tracking-[0.18em] text-[var(--accent)]">
+            {product.reason ?? product.search_reason}
+          </p>
+        ) : null}
         <div className="mt-5 flex items-end justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]">Starting at</p>

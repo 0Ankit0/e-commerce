@@ -212,7 +212,7 @@ class Settings(BaseSettings):
 
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str = "password"
+    POSTGRES_PASSWORD: str = "postgres"
     POSTGRES_DB: str = "app"
     DATABASE_URL: str | None = None
     SYNC_DATABASE_URL: str | None = None
@@ -453,8 +453,6 @@ class Settings(BaseSettings):
         if isinstance(value, str) and value:
             return value
         data = info.data
-        if data.get("DEBUG", True):
-            return f"sqlite+aiosqlite:///./{data.get('POSTGRES_DB')}.db"
         return (
             f"postgresql+asyncpg://{data.get('POSTGRES_USER')}:"
             f"{data.get('POSTGRES_PASSWORD')}@{data.get('POSTGRES_SERVER')}/"
@@ -467,10 +465,8 @@ class Settings(BaseSettings):
         if isinstance(value, str) and value:
             return value
         data = info.data
-        if data.get("DEBUG", True):
-            return f"sqlite:///./{data.get('POSTGRES_DB')}.db"
         return (
-            f"postgresql://{data.get('POSTGRES_USER')}:"
+            f"postgresql+psycopg://{data.get('POSTGRES_USER')}:"
             f"{data.get('POSTGRES_PASSWORD')}@{data.get('POSTGRES_SERVER')}/"
             f"{data.get('POSTGRES_DB')}"
         )
