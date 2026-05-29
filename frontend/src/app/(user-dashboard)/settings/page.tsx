@@ -167,9 +167,11 @@ export default function SettingsPage() {
 
   // ── Notifications ──────────────────────────────────────────────────────
   const { data: prefs, isLoading: prefsLoading } = useNotificationPreferences();
-  const { data: devices } = useNotificationDevices();
   const { data: pushConfig } = usePushConfig();
   const { data: capabilities } = useSystemCapabilities();
+  const notificationsEnabled = capabilities?.modules.notifications ?? true;
+  const shouldQueryPushDevices = Boolean(notificationsEnabled && pushConfig?.provider);
+  const { data: devices } = useNotificationDevices({ enabled: shouldQueryPushDevices });
   const updatePref = useUpdateNotificationPreferences();
   const registerDevice = useRegisterNotificationDevice();
   const removeDevice = useRemoveNotificationDevice();

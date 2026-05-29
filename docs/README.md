@@ -17,6 +17,7 @@ This repository keeps `docs/system-design/*` as the canonical design tree for de
 - [Backend runtime docs](../backend/README.md)
 - [Frontend runtime docs](../frontend/README.md)
 - [Mobile runtime docs](../mobile/README.md)
+- [Role-based user manual](./user-manual/README.md)
 
 ## Validation
 

@@ -1,8 +1,10 @@
 export type OAuthProvider = 'google' | 'github' | 'facebook' | 'apple';
 
+import { getApiBaseUrl } from '@/lib/runtime-urls';
+
 const OAUTH_PROVIDERS: OAuthProvider[] = ['google', 'github', 'facebook', 'apple'];
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000/api/v1';
+const BACKEND_URL = getApiBaseUrl();
 
 /** Starts an OAuth login by redirecting the current browser window to the backend. */
 export function startOAuthLogin(provider: OAuthProvider) {

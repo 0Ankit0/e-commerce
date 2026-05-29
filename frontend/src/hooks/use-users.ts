@@ -7,7 +7,7 @@ import { analytics } from '@/lib/analytics';
 import { UserEvents } from '@/lib/analytics/events';
 import type { User, UserUpdate, PaginatedResponse } from '@/types';
 
-export function useCurrentUser() {
+export function useCurrentUser(options?: { enabled?: boolean }) {
   const { setUser } = useAuthStore();
 
   return useQuery({
@@ -17,6 +17,7 @@ export function useCurrentUser() {
       setUser(response.data);
       return response.data;
     },
+    enabled: options?.enabled,
   });
 }
 

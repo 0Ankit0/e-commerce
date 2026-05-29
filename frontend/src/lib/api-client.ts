@@ -2,8 +2,9 @@ import axios from 'axios';
 import type { AxiosError } from 'axios';
 import type { PrivilegedActionChallengeDetail, StepUpVerificationResponse } from '@/types';
 import { requestStepUpChallenge } from '@/lib/step-up-challenge';
+import { getApiBaseUrl } from '@/lib/runtime-urls';
 
-const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+const baseURL = getApiBaseUrl();
 
 export const apiClient = axios.create({
   baseURL,

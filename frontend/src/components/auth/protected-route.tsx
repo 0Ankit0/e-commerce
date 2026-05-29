@@ -5,12 +5,13 @@ import { useRouter } from 'next/navigation';
 import axios from 'axios';
 import { useAuthStore } from '@/store/auth-store';
 import { apiClient } from '@/lib/api-client';
+import { getApiBaseUrl } from '@/lib/runtime-urls';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
 }
 
-const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+const baseURL = getApiBaseUrl();
 
 export function ProtectedRoute({ children }: ProtectedRouteProps) {
   const router = useRouter();
