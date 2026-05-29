@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta, datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlmodel import select
@@ -24,6 +25,7 @@ from src.apps.observability.service import record_token_event
 
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
+logger = logging.getLogger(__name__)
 
 
 @router.post("/signup/")
@@ -151,6 +153,7 @@ async def signup(
     except HTTPException:
         raise
     except Exception:
+        logger.exception("Signup failed for username=%s", login_data.username)
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

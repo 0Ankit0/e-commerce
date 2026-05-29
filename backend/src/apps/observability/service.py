@@ -167,9 +167,23 @@ async def prune_old_log_entries(db: AsyncSession) -> int:
             select(ObservabilityLogEntry).where(ObservabilityLogEntry.timestamp < cutoff)
         )
     ).scalars().all()
+    protected_log_ids = {
+        log_id
+        for log_id in (
+            await db.execute(
+                select(SecurityIncident.related_log_id).where(SecurityIncident.related_log_id.is_not(None))
+            )
+        ).scalars().all()
+        if log_id is not None
+    }
+
+    deleted_count = 0
     for entry in stale_logs:
+        if entry.id in protected_log_ids:
+            continue
         await db.delete(entry)
-    return len(stale_logs)
+        deleted_count += 1
+    return deleted_count
 
 
 async def create_or_update_incident(

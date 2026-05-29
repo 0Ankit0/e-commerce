@@ -144,7 +144,6 @@ async def delete_notification_device(
 
 @router.get("/push/config/")
 async def get_push_config() -> dict:
-    _require_push_enabled()
     return get_communications_service().get_push_public_config()
 
 

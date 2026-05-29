@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Dict, List
@@ -7,6 +6,7 @@ from celery import shared_task
 
 from src.apps.communications import get_communications_service
 from src.apps.communications.delivery_observability import create_queued_message, record_send_attempt
+from src.apps.core.async_tools import run_async_compatible
 from src.apps.core.celery_app import celery_app  # noqa: F401
 from src.apps.core.config import settings
 from src.apps.core.time import utc_now
@@ -38,7 +38,7 @@ def send_email_task(
     inline_template: bool = False,
     tracked_message_id: int | None = None,
 ) -> bool:
-    return asyncio.run(
+    return run_async_compatible(
         _send_email_task(
             subject=subject,
             recipients=recipients,
@@ -47,7 +47,8 @@ def send_email_task(
             template_dir=template_dir,
             inline_template=inline_template,
             tracked_message_id=tracked_message_id,
-        )
+        ),
+        background_result=True,
     )
 
 

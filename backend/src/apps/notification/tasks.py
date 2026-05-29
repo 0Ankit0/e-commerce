@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from celery import shared_task
 from sqlalchemy import select
 
+from src.apps.core.async_tools import run_async_compatible
 from src.apps.core.celery_app import celery_app  # noqa: F401 — bind tasks to configured app
 from src.apps.core.time import utc_now
 from src.apps.notification.models.notification_delivery import (
@@ -78,7 +79,10 @@ def send_push_notification_task(payload: Dict[str, Any]) -> bool:
 
 @shared_task(name="send_sms_notification_task")
 def send_sms_notification_task(to_number: str, body: str) -> bool:
-    return asyncio.run(_send_transactional_sms_with_quota(to_number=to_number, body=body))
+    return run_async_compatible(
+        _send_transactional_sms_with_quota(to_number=to_number, body=body),
+        background_result=True,
+    )
 
 
 async def _send_transactional_sms_with_quota(to_number: str, body: str) -> bool:
@@ -111,7 +115,10 @@ async def _send_transactional_sms_with_quota(to_number: str, body: str) -> bool:
 
 @shared_task(bind=True, name="dispatch_notification_delivery_task")
 def dispatch_notification_delivery_task(self, delivery_id: int) -> bool:
-    return asyncio.run(_dispatch_notification_delivery(delivery_id))
+    return run_async_compatible(
+        _dispatch_notification_delivery(delivery_id),
+        background_result=True,
+    )
 
 
 async def _dispatch_notification_delivery(delivery_id: int) -> bool:

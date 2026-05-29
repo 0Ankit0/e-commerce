@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 from pathlib import Path
@@ -8,6 +7,7 @@ import httpx
 from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType, NameEmail
 from jinja2 import Environment, FileSystemLoader
 
+from src.apps.core.async_tools import run_async_compatible
 from src.apps.core.config import settings
 from src.apps.core.http import default_timeout, retry_sync
 
@@ -61,7 +61,7 @@ class SmtpEmailProvider(EmailProviderBase):
             body=html_body,
             subtype=MessageType.html,
         )
-        asyncio.run(FastMail(conf).send_message(message))
+        run_async_compatible(FastMail(conf).send_message(message), background_result=None)
         return DeliveryResult(channel="email", provider=self.name, success=True)
 
 

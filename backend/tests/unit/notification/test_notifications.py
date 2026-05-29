@@ -434,20 +434,18 @@ class TestNotificationAPI:
         assert resp.json()["subscription_id"] == "onesignal-subscription-id"
 
     @pytest.mark.asyncio
-    async def test_push_endpoints_return_503_when_push_disabled(
+    async def test_push_config_returns_disabled_state_when_push_disabled(
         self, client: AsyncClient, db_session: AsyncSession
     ):
         settings.PUSH_ENABLED = False
-        await _make_user(db_session, username="apiuser12", email="api12@example.com")
-        token = await _login(client, "apiuser12")
 
-        resp = await client.get(
-            "/api/v1/notifications/push/config/",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        resp = await client.get("/api/v1/notifications/push/config/")
 
-        assert resp.status_code == 503
-        assert "disabled" in resp.json()["detail"].lower()
+        assert resp.status_code == 200
+        assert resp.json()["provider"] is None
+        assert resp.json()["providers"]["webpush"]["enabled"] is False
+        assert resp.json()["providers"]["fcm"]["enabled"] is False
+        assert resp.json()["providers"]["onesignal"]["enabled"] is False
 
     @pytest.mark.asyncio
     async def test_register_device_rejects_unconfigured_provider(
